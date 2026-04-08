@@ -22,7 +22,7 @@ Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sen
 - Kullanıcıya gösterirken yerel saate çevir.
 
 ### Dosya kısıtlamaları
-- `.env` dosyasına ASLA dokunma. Sadece `.env.example` düzenlenebilir.
+- `.env` dosyasının içeriğini ASLA değiştirme veya silme. Sadece `.env.example` düzenlenebilir. Eğer `.env` dosyası mevcut değilse, `.env.example`'dan birebir kopya oluşturmana izin verilir (yalnızca kopyalama, içerik değiştirmek yasak).
 - `docker-compose.yml` değişiklikleri için kullanıcıdan ONAY al.
 - `pyproject.toml` bağımlılık eklemek için kullanıcıdan ONAY al.
 - `CLAUDE.md` dosyası SADECE kullanıcı tarafından düzenlenir.

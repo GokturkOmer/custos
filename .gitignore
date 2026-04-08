@@ -13,5 +13,11 @@ build/
 .DS_Store
 *.log
 
+# Alembic
+alembic/versions/__pycache__/
+
+# Docker volumes
+postgres-data/
+
 # Claude Code oturum ayarlari
 .claude/

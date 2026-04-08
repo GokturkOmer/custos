@@ -7,7 +7,12 @@ name = "custos"
 version = "0.1.0"
 description = "Endüstriyel edge izleme sistemi"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "asyncpg",
+    "alembic",
+    "pydantic-settings",
+    "structlog",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -37,6 +42,10 @@ indent-style = "space"
 strict = true
 python_version = "3.11"
 mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = "asyncpg.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

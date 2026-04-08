@@ -10,7 +10,10 @@ repos:
     rev: v1.20.0
     hooks:
       - id: mypy
-        additional_dependencies: []
+        additional_dependencies:
+          - pydantic-settings
+          - structlog
+          - asyncpg
         args: [--config-file=pyproject.toml]
         pass_filenames: false
         entry: mypy src/

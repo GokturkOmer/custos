@@ -11,6 +11,26 @@ pip install -e ".[dev]"
 pre-commit install
 ```
 
+## Veritabanı
+
+Custos lokal bir TimescaleDB instance'ına bağlanır. Geliştirme için Docker üzerinden çalıştırılır.
+
+### İlk kurulum
+
+1. `.env.example`'ı kopyala: `cp .env.example .env`
+2. `.env` içindeki şifreyi değiştir
+3. Veritabanını başlat: `docker compose up -d`
+4. Migration'ları çalıştır: `python -m alembic upgrade head`
+5. Sağlık kontrolü: `python scripts/healthcheck.py` → `OK` görmelisin
+
+### Veritabanını durdurma
+
+`docker compose down` (veri kaybolmaz, volume'da kalır)
+
+### Veritabanını sıfırlama (DİKKAT — tüm veriyi siler)
+
+`docker compose down -v && docker compose up -d && python -m alembic upgrade head`
+
 ## Yapı
 
 ```
@@ -26,4 +46,4 @@ src/custos/
 
 ## Durum
 
-Aşama 1 — Proje İskeleti (devam ediyor)
+Aşama 2 — Veri katmanı (devam ediyor)
