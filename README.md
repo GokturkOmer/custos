@@ -44,6 +44,39 @@ src/custos/
 - `docs/` — Proje dokümanları
 - `scripts/` — Yardımcı scriptler
 
+## Walking Skeleton'ı Çalıştırma
+
+Aşama 3'ten itibaren uçtan uca veri akışı manuel olarak test edilebilir.
+
+### 3 terminalli yöntem
+
+Terminal 1 — Veritabanı:
+```
+docker compose up -d
+```
+
+Terminal 2 — Modbus simülatörü:
+```
+.venv\Scripts\activate
+python -m custos.simulator
+```
+
+Terminal 3 — Collector:
+```
+.venv\Scripts\activate
+python -m custos.critical
+```
+
+10-30 saniye çalıştır, sonra her ikisini de Ctrl+C ile durdur.
+
+### Veriyi görüntüleme
+
+```
+python scripts/query_last_readings.py
+```
+
+5 sensör için son 60 saniyedeki okumaların özet tablosunu gösterir.
+
 ## Durum
 
-Aşama 2 — Veri katmanı (devam ediyor)
+Aşama 3 — Walking skeleton (tamamlandı)

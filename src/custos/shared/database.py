@@ -8,8 +8,8 @@ yapılmaz.
 from __future__ import annotations
 
 import abc
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 import asyncpg
 import structlog
@@ -17,6 +17,19 @@ import structlog
 from custos.shared.config import Settings
 
 logger = structlog.get_logger(logger_name="database")
+
+
+@dataclass(frozen=True)
+class RawReading:
+    """Tek bir ham sensör okuması.
+
+    Collector'dan veritabanına aktarılan temel veri birimi.
+    """
+
+    timestamp: datetime
+    sensor_id: str
+    value: float
+    quality_flag: int = 0
 
 
 class DatabaseInterface(abc.ABC):
@@ -50,12 +63,19 @@ class DatabaseInterface(abc.ABC):
         """Ham sensör okumasını kaydeder."""
 
     @abc.abstractmethod
+    async def insert_raw_readings_batch(
+        self,
+        readings: list[RawReading],
+    ) -> None:
+        """Çoklu ham sensör okumasını tek batch halinde veritabanına yazar."""
+
+    @abc.abstractmethod
     async def query_raw_readings(
         self,
         sensor_id: str,
         start: datetime,
         end: datetime,
-    ) -> list[dict[str, Any]]:
+    ) -> list[RawReading]:
         """Belirli bir sensörün zaman aralığındaki okumalarını sorgular."""
 
     @abc.abstractmethod
@@ -92,6 +112,13 @@ class TimescaleDBDatabase(DatabaseInterface):
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._pool: asyncpg.Pool[asyncpg.Record] | None = None
+
+    def _get_pool(self) -> asyncpg.Pool[asyncpg.Record]:
+        """Bağlantı havuzunu döndürür, yoksa hata fırlatır."""
+        if self._pool is None:
+            msg = "Veritabanı bağlantı havuzu oluşturulmamış. connect() çağrıldı mı?"
+            raise RuntimeError(msg)
+        return self._pool
 
     async def connect(self) -> None:
         """asyncpg bağlantı havuzu oluşturur."""
@@ -130,17 +157,56 @@ class TimescaleDBDatabase(DatabaseInterface):
         value: float,
         quality_flag: int,
     ) -> None:
-        """Ham sensör okumasını kaydeder."""
-        raise NotImplementedError("Aşama 3'te eklenecek")
+        """Ham sensör okumasını kaydeder (batch'e delege eder)."""
+        reading = RawReading(
+            timestamp=timestamp,
+            sensor_id=sensor_id,
+            value=value,
+            quality_flag=quality_flag,
+        )
+        await self.insert_raw_readings_batch([reading])
+
+    async def insert_raw_readings_batch(
+        self,
+        readings: list[RawReading],
+    ) -> None:
+        """Çoklu ham sensör okumasını tek batch halinde veritabanına yazar."""
+        pool = self._get_pool()
+        args = [(r.timestamp, r.sensor_id, r.value, r.quality_flag) for r in readings]
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                "INSERT INTO raw_readings (timestamp, sensor_id, value, quality_flag) "
+                "VALUES ($1, $2, $3, $4)",
+                args,
+            )
 
     async def query_raw_readings(
         self,
         sensor_id: str,
         start: datetime,
         end: datetime,
-    ) -> list[dict[str, Any]]:
+    ) -> list[RawReading]:
         """Belirli bir sensörün zaman aralığındaki okumalarını sorgular."""
-        raise NotImplementedError("Aşama 3'te eklenecek")
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT timestamp, sensor_id, value, quality_flag "
+                "FROM raw_readings "
+                "WHERE sensor_id = $1 AND timestamp >= $2 AND timestamp <= $3 "
+                "ORDER BY timestamp ASC",
+                sensor_id,
+                start,
+                end,
+            )
+        return [
+            RawReading(
+                timestamp=row["timestamp"],
+                sensor_id=row["sensor_id"],
+                value=float(row["value"]),
+                quality_flag=int(row["quality_flag"]),
+            )
+            for row in rows
+        ]
 
     async def insert_feature(
         self,
@@ -151,7 +217,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         window_size_seconds: int,
     ) -> None:
         """Hesaplanmış bir özelliği kaydeder."""
-        raise NotImplementedError("Aşama 3'te eklenecek")
+        raise NotImplementedError("Aşama 5'te eklenecek")
 
     async def insert_label(
         self,
@@ -163,7 +229,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         notes: str | None,
     ) -> None:
         """Etiket kaydı oluşturur."""
-        raise NotImplementedError("Aşama 3'te eklenecek")
+        raise NotImplementedError("Aşama 5'te eklenecek")
 
 
 def create_database(settings: Settings) -> DatabaseInterface:

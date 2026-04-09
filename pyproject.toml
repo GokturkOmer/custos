@@ -11,6 +11,7 @@ dependencies = [
     "asyncpg",
     "alembic",
     "pydantic-settings",
+    "pymodbus>=3.6.0",
     "structlog",
 ]
 
@@ -45,6 +46,10 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 module = "asyncpg.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pymodbus.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

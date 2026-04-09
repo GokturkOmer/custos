@@ -34,6 +34,8 @@ Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sen
 - Critical loop'un bağımlılığı minimum tutulacak.
 - Veritabanı erişimi `shared/database.py` üzerindeki abstract arayüz ile yapılır. Modüllerden doğrudan SQL/ORM çağrısı ASLA yapılmaz.
 - "Sadece okur, asla yazmaz" — Modbus client kodunda yazma fonksiyonları implement edilmeyecek.
+- Collector modülü (critical/collector.py) SADECE `pymodbus` ve abstract DB arayüzünü kullanır. `asyncpg`, SQL string'leri, veya ORM kodu Collector içinde YAZILMAZ.
+- Modbus client kodunda `write_register`, `write_coil`, `write_registers`, `write_coils` çağrıları ASLA yapılmaz. Sadece read fonksiyonları.
 
 ### ML kuralları
 - Derin öğrenme yok. Sadece scikit-learn ailesi.
@@ -62,3 +64,11 @@ Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sen
 4. Test et
 5. `ruff check .` ve `mypy src/` temiz mi kontrol et
 6. Kullanıcıya sun: ne yaptın, nelerden emin değildin
+
+## Walking skeleton doğrulaması
+Aşama 3'ten itibaren, veri akışı değiştiren bir commit'ten önce şu manuel test yapılır:
+1. `docker compose up -d`
+2. Ayrı bir terminalde: `python -m custos.simulator`
+3. Başka bir terminalde: `python -m custos.critical`
+4. 10 saniye çalıştır, Ctrl+C
+5. `python scripts/query_last_readings.py` (Aşama 3'te oluşturuldu)
