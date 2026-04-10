@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+{% from 'components/kpi_card.html' import kpi_card %}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/data_table.html' import data_table %}
+{% from 'components/chart_panel.html' import chart_panel %}
+
+{% block title %}Custos — Component Showcase{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+  {# Başlık #}
+  <div>
+    <h1 class="text-xl font-semibold text-text-primary">Component Showcase</h1>
+    <p class="text-body text-text-secondary mt-1">Tüm dashboard component'lerinin varyantları</p>
+  </div>
+
+  {# KPI Cards #}
+  <section>
+    <h2 class="text-panel-title text-text-primary mb-3">KPI Cards</h2>
+    <div class="grid grid-cols-4 gap-4">
+      {{ kpi_card('Active Alarms', '2', status='warn') }}
+      {{ kpi_card('Total Sensors', '24', status='neutral') }}
+      {{ kpi_card('Data Points / sec', '24', status='ok', delta='+2.1') }}
+      {{ kpi_card('System Uptime', '12d 4h', status='ok') }}
+    </div>
+    <div class="grid grid-cols-4 gap-4 mt-4">
+      {{ kpi_card('Critical', '1', status='crit', delta='-3') }}
+      {{ kpi_card('Normal', '22', status='ok') }}
+      {{ kpi_card('Warnings', '3', status='warn', delta='+1') }}
+      {{ kpi_card('Offline', '0', status='neutral') }}
+    </div>
+  </section>
+
+  {# Status Badges #}
+  <section>
+    <h2 class="text-panel-title text-text-primary mb-3">Status Badges</h2>
+    <div class="flex items-center gap-3">
+      {{ status_badge('Normal', 'ok') }}
+      {{ status_badge('Warning', 'warn') }}
+      {{ status_badge('Critical', 'crit') }}
+      {{ status_badge('Info', 'info') }}
+      {{ status_badge('Offline', 'neutral') }}
+    </div>
+  </section>
+
+  {# Data Table #}
+  <section>
+    <h2 class="text-panel-title text-text-primary mb-3">Data Table — dolu</h2>
+    {{ data_table(
+      columns=[
+        {'key': 'time', 'label': 'Time'},
+        {'key': 'sensor', 'label': 'Sensor'},
+        {'key': 'type', 'label': 'Type'},
+        {'key': 'status', 'label': 'Status'},
+      ],
+      rows=[
+        {'time': '14:32:01', 'sensor': 'T001', 'type': 'High Temp', 'status': status_badge('Critical', 'crit')},
+        {'time': '14:28:15', 'sensor': 'P001', 'type': 'Low Pressure', 'status': status_badge('Warning', 'warn')},
+        {'time': '14:15:42', 'sensor': 'V001', 'type': 'High Vibration', 'status': status_badge('Normal', 'ok')},
+      ]
+    ) }}
+  </section>
+
+  <section>
+    <h2 class="text-panel-title text-text-primary mb-3">Data Table — boş</h2>
+    {{ data_table(
+      columns=[
+        {'key': 'time', 'label': 'Time'},
+        {'key': 'sensor', 'label': 'Sensor'},
+      ],
+      rows=[]
+    ) }}
+  </section>
+
+  {# Chart Panel #}
+  <section>
+    <h2 class="text-panel-title text-text-primary mb-3">Chart Panel</h2>
+    {{ chart_panel('Örnek Grafik — Sıcaklık', 'showcase_chart', height=250) }}
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/charts.js"></script>
+<script>
+  // Showcase için sahte grafik verisi
+  (function() {
+    const now = Math.floor(Date.now() / 1000);
+    const points = 180;
+    const step = 10;
+    const timestamps = [];
+    const s1 = [], s2 = [];
+
+    for (let i = 0; i < points; i++) {
+      timestamps.push(now - (points - i) * step);
+      s1.push(45 + 10 * Math.sin(i * 0.05) + (Math.random() - 0.5) * 2);
+      s2.push(55 + 8 * Math.sin(i * 0.03 + 1) + (Math.random() - 0.5) * 3);
+    }
+
+    window.custos = window.custos || {};
+    window.custos.chartData = window.custos.chartData || {};
+    window.custos.chartData['showcase_chart'] = {
+      timestamps: timestamps,
+      series: [s1, s2],
+      labels: ['T001 — Kazan Çıkış', 'T002 — Dönüş'],
+    };
+  })();
+</script>
+{% endblock %}

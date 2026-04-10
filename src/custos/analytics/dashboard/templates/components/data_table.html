@@ -1,0 +1,36 @@
+{# Veri tablosu macro'su #}
+{% macro data_table(columns, rows, empty_message='Veri bulunamadı') %}
+<div class="overflow-x-auto">
+  <table class="w-full">
+    <thead>
+      <tr class="bg-bg-elevated">
+        {% for col in columns %}
+        <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide
+                   {{ 'w-' + col.width if col.width else '' }}">
+          {{ col.label }}
+        </th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-border-weak">
+      {% if rows %}
+        {% for row in rows %}
+        <tr class="hover:bg-bg-elevated transition-colors">
+          {% for col in columns %}
+          <td class="px-3 py-2 text-cell text-text-primary">
+            {{ row[col.key] if row[col.key] is defined else '' }}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="{{ columns | length }}" class="px-3 py-6 text-center text-cell text-text-disabled">
+            {{ empty_message }}
+          </td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}

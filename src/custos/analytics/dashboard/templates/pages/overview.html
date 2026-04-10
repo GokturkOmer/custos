@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{% from 'components/kpi_card.html' import kpi_card %}
+{% from 'components/chart_panel.html' import chart_panel %}
+{% from 'components/data_table.html' import data_table %}
+{% from 'components/status_badge.html' import status_badge %}
+
+{% block title %}Custos — Overview{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Satır 1: KPI Kutuları #}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    {% for kpi in kpis %}
+      {{ kpi_card(kpi.label, kpi.value, status=kpi.status, delta=kpi.delta) }}
+    {% endfor %}
+  </div>
+
+  {# Satır 2: Sıcaklık ve Basınç Grafikleri #}
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    {{ chart_panel('Temperature Trends (Last 30 min)', 'temp_chart', height=220) }}
+    {{ chart_panel('Pressure Trends (Last 30 min)', 'pressure_chart', height=220) }}
+  </div>
+
+  {# Satır 3: Debi/Titreşim grafiği + Alarm tablosu #}
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div class="lg:col-span-2">
+      {{ chart_panel('Flow & Vibration (Last 1 hour)', 'flow_vibration_chart', height=220) }}
+    </div>
+    <div class="bg-bg-surface rounded-sm border border-border-weak p-4 overflow-hidden">
+      <h3 class="text-panel-title text-text-primary mb-3">Recent Alarms</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="bg-bg-elevated">
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Time</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Sensor</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Type</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Status</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border-weak">
+            {% for alarm in alarms %}
+            <tr class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.time }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.sensor }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.type }}</td>
+              <td class="px-3 py-2 text-cell">{{ status_badge(alarm.status_label, alarm.status) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# Satır 4: RPM grafiği (tam genişlik) #}
+  <div>
+    {{ chart_panel('RPM Trends (Last 1 hour)', 'rpm_chart', height=180) }}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/charts.js"></script>
+<script>
+  // Sunucudan gelen grafik verileri
+  window.custos = window.custos || {};
+  window.custos.chartData = {{ charts | tojson }};
+</script>
+{% endblock %}

@@ -21,3 +21,6 @@ postgres-data/
 
 # Claude Code oturum ayarlari
 .claude/
+
+# Tailwind standalone binary
+tools/tailwindcss

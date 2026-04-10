@@ -1,0 +1,15 @@
+{# uPlot grafik container macro'su #}
+{% macro chart_panel(title, chart_id, height=200) %}
+<div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+  <div class="flex items-center justify-between mb-3">
+    <h3 class="text-panel-title text-text-primary">{{ title }}</h3>
+    <span class="text-small text-text-disabled">Last 30 min</span>
+  </div>
+  <div id="{{ chart_id }}"
+       x-data="chartPanel('{{ chart_id }}')"
+       x-init="init()"
+       data-chart-height="{{ height }}"
+       class="w-full">
+  </div>
+</div>
+{% endmacro %}

@@ -13,6 +13,9 @@ dependencies = [
     "pydantic-settings",
     "pymodbus>=3.6.0",
     "structlog",
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +25,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "httpx",
     "pre-commit",
 ]
 

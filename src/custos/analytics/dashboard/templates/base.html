@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Custos{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/dist.css">
+  <link rel="stylesheet" href="/static/css/uplot.min.css">
+</head>
+<body class="h-full bg-bg-base text-text-primary font-sans antialiased">
+  {% from 'components/sidebar_item.html' import sidebar_item %}
+
+  <div class="flex h-full">
+    {# Sol Sidebar #}
+    <aside class="w-56 flex-shrink-0 bg-bg-surface border-r border-border-weak flex flex-col h-full">
+      {# Logo / Wordmark #}
+      <div class="h-14 flex items-center px-5 border-b border-border-weak">
+        <span class="text-lg font-semibold tracking-wider text-accent-primary">CUSTOS</span>
+      </div>
+
+      {# Navigasyon #}
+      <nav class="flex-1 py-2 overflow-y-auto">
+        {% for item in nav_items %}
+          {{ sidebar_item(item.href, item.icon, item.label, active=(item.href == active_nav)) }}
+        {% endfor %}
+      </nav>
+
+      {# Alt bilgi #}
+      <div class="px-4 py-3 border-t border-border-weak">
+        <div class="flex items-center gap-2 text-small text-text-disabled">
+          <span class="w-2 h-2 rounded-full bg-status-ok"></span>
+          <span>System: OK</span>
+        </div>
+        <div class="text-small text-text-disabled mt-1">{{ version }}</div>
+      </div>
+    </aside>
+
+    {# Ana icerik alani #}
+    <div class="flex-1 flex flex-col min-w-0">
+      {# Ust Header #}
+      <header class="h-14 flex-shrink-0 bg-bg-surface border-b border-border-weak flex items-center justify-between px-5">
+        {# Breadcrumb #}
+        <div class="text-body text-text-secondary">
+          <span>Dashboard</span>
+          <span class="mx-2 text-text-disabled">/</span>
+          <span class="text-text-primary">{{ page_title | default('Overview') }}</span>
+        </div>
+
+        {# Sag taraf: zaman secici + butonlar #}
+        <div class="flex items-center gap-3">
+          <button class="flex items-center gap-1.5 px-3 py-1.5 text-small text-text-secondary
+                         bg-bg-elevated border border-border-weak rounded-md
+                         hover:text-text-primary hover:border-border-medium transition-colors">
+            {% from 'components/icon.html' import icon_inline %}
+            <span>Last 30 min</span>
+            {{ icon_inline('chevron-down', class='w-3.5 h-3.5') }}
+          </button>
+
+          <button class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+                  title="Refresh">
+            {{ icon_inline('refresh-cw', class='w-4 h-4') }}
+          </button>
+
+          <button class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+                  title="Fullscreen">
+            {{ icon_inline('maximize-2', class='w-4 h-4') }}
+          </button>
+        </div>
+      </header>
+
+      {# Sayfa icerigi #}
+      <main class="flex-1 overflow-y-auto p-4">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+
+  {# JS kutuphaneleri #}
+  <script src="/static/js/htmx.min.js"></script>
+  <script src="/static/js/alpine.min.js" defer></script>
+  <script src="/static/js/uplot.iife.min.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,18 @@
+{# KPI kutusu macro'su — büyük sayı + etiket + durum rengi #}
+{% macro kpi_card(label, value, status='neutral', delta='') %}
+{% set border_colors = {
+  'ok': 'border-l-status-ok',
+  'warn': 'border-l-status-warn',
+  'crit': 'border-l-status-crit',
+  'neutral': 'border-l-transparent'
+} %}
+<div class="bg-bg-surface rounded-sm border border-border-weak {{ border_colors.get(status, 'border-l-transparent') }} border-l-[3px] p-4">
+  <div class="text-kpi-label text-text-secondary uppercase tracking-wide mb-2">{{ label }}</div>
+  <div class="text-kpi text-text-primary">{{ value }}</div>
+  {% if delta %}
+  <div class="text-small mt-1 {{ 'text-status-ok' if delta.startswith('+') else 'text-status-crit' if delta.startswith('-') else 'text-text-secondary' }}">
+    {{ delta }}
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}
