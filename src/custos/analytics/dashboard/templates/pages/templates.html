@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Templates — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Başlık #}
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">Template Kütüphanesi</h1>
+  </div>
+
+  {# Template kart grid #}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% for tmpl in templates_list %}
+    <div class="bg-bg-surface border border-border-weak rounded-lg p-4 space-y-3
+                hover:border-border-medium transition-colors">
+      <div class="flex items-center gap-3">
+        <div class="p-2 bg-bg-elevated rounded-md">
+          {{ icon_inline(tmpl.icon, class='w-5 h-5 text-accent-primary') }}
+        </div>
+        <div>
+          <h3 class="text-body font-semibold text-text-primary">{{ tmpl.name }}</h3>
+          <p class="text-small text-text-secondary">{{ tmpl.slug }}</p>
+        </div>
+      </div>
+
+      {% if tmpl.description %}
+      <p class="text-small text-text-secondary">{{ tmpl.description }}</p>
+      {% endif %}
+
+      <div class="flex items-center gap-4 text-small text-text-secondary">
+        <span>{{ tmpl.roles | length }} rol</span>
+        <span>{{ tmpl.kpi_definitions | length }} KPI</span>
+      </div>
+
+      <a href="/dashboard/templates/{{ tmpl.id }}"
+         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                text-accent-primary bg-accent-primary/10 rounded-md
+                hover:bg-accent-primary/20 transition-colors">
+        {{ icon_inline('eye', class='w-4 h-4') }}
+        Detay
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if not templates_list %}
+  <div class="bg-bg-surface border border-border-weak rounded-lg p-8 text-center">
+    <p class="text-text-disabled">Henüz template tanımlanmamış.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

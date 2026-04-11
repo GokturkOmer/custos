@@ -74,6 +74,70 @@ class TagRecord:
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+@dataclass
+class AssetTemplate:
+    """Asset template kaydı — endüstriyel ekipman tipi tanımı."""
+
+    slug: str
+    name: str
+    description: str = ""
+    icon: str = "cpu"
+    id: int | None = None
+    created_at: datetime | None = None
+    roles: list[TemplateRole] = field(default_factory=list)
+    kpi_definitions: list[KpiDefinition] = field(default_factory=list)
+
+
+@dataclass
+class TemplateRole:
+    """Template role kaydı — bir template'in beklediği tag yuvası."""
+
+    template_id: int
+    role_key: str
+    label: str
+    unit_hint: str = ""
+    required: bool = True
+    sort_order: int = 0
+    id: int | None = None
+
+
+@dataclass
+class KpiDefinition:
+    """KPI tanımı — template bazında hesaplanacak formül."""
+
+    template_id: int
+    name: str
+    formula: str
+    unit: str = ""
+    description: str = ""
+    id: int | None = None
+
+
+@dataclass
+class AssetInstance:
+    """Asset instance kaydı — bir template'in somut kurulumu."""
+
+    template_id: int
+    name: str
+    description: str = ""
+    location: str = ""
+    status: str = "active"
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
+class TagBinding:
+    """Tag binding kaydı — instance role'üne bağlı tag."""
+
+    instance_id: int
+    role_id: int
+    tag_id: str
+    id: int | None = None
+    created_at: datetime | None = None
+
+
 class DatabaseInterface(abc.ABC):
     """Veritabanı erişim arayüzü.
 
@@ -207,6 +271,68 @@ class DatabaseInterface(abc.ABC):
     ) -> None:
         """Etiket kaydı oluşturur."""
 
+    # --- Asset Template (read-only) ---
+
+    @abc.abstractmethod
+    async def list_asset_templates(self) -> list[AssetTemplate]:
+        """Template'leri roles ve kpi_definitions ile birlikte döndürür."""
+
+    @abc.abstractmethod
+    async def get_asset_template(self, template_id: int) -> AssetTemplate | None:
+        """Tekil template (roles + kpi dahil). Bulunamazsa None döndürür."""
+
+    # --- Asset Instance CRUD ---
+
+    @abc.abstractmethod
+    async def insert_asset_instance(self, instance: AssetInstance) -> AssetInstance:
+        """Yeni asset instance kaydı oluşturur."""
+
+    @abc.abstractmethod
+    async def update_asset_instance(
+        self,
+        instance_id: int,
+        updates: dict[str, object],
+    ) -> AssetInstance | None:
+        """Asset instance kaydını günceller. Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def delete_asset_instance(self, instance_id: int) -> bool:
+        """Asset instance kaydını siler. Başarılıysa True döndürür."""
+
+    @abc.abstractmethod
+    async def get_asset_instance(self, instance_id: int) -> AssetInstance | None:
+        """Tek bir asset instance kaydını getirir. Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def list_asset_instances(
+        self,
+        template_id: int | None = None,
+        status: str | None = None,
+    ) -> list[AssetInstance]:
+        """Asset instance listesini döndürür. Opsiyonel filtreler."""
+
+    # --- Tag Binding CRUD ---
+
+    @abc.abstractmethod
+    async def insert_tag_binding(self, binding: TagBinding) -> TagBinding:
+        """Yeni tag binding kaydı oluşturur."""
+
+    @abc.abstractmethod
+    async def delete_tag_binding(self, binding_id: int) -> bool:
+        """Tag binding kaydını siler. Başarılıysa True döndürür."""
+
+    @abc.abstractmethod
+    async def list_tag_bindings(self, instance_id: int) -> list[TagBinding]:
+        """Bir instance'ın tüm tag binding'lerini döndürür."""
+
+    @abc.abstractmethod
+    async def replace_tag_bindings(
+        self,
+        instance_id: int,
+        bindings: list[TagBinding],
+    ) -> list[TagBinding]:
+        """Mevcut binding'leri silip yenileriyle değiştirir."""
+
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
 _ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset({
@@ -276,6 +402,74 @@ def _row_to_tag_record(row: asyncpg.Record) -> TagRecord:
         status=row["status"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+# İzin verilen güncelleme alanları — Asset Instance (SQL injection önlemi)
+_ALLOWED_INSTANCE_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "name", "description", "location", "status",
+})
+
+
+def _row_to_template_role(row: asyncpg.Record) -> TemplateRole:
+    """asyncpg satırını TemplateRole'e dönüştürür."""
+    return TemplateRole(
+        id=row["id"],
+        template_id=row["template_id"],
+        role_key=row["role_key"],
+        label=row["label"],
+        unit_hint=row["unit_hint"],
+        required=row["required"],
+        sort_order=row["sort_order"],
+    )
+
+
+def _row_to_kpi_definition(row: asyncpg.Record) -> KpiDefinition:
+    """asyncpg satırını KpiDefinition'a dönüştürür."""
+    return KpiDefinition(
+        id=row["id"],
+        template_id=row["template_id"],
+        name=row["name"],
+        formula=row["formula"],
+        unit=row["unit"],
+        description=row["description"],
+    )
+
+
+def _row_to_asset_template(row: asyncpg.Record) -> AssetTemplate:
+    """asyncpg satırını AssetTemplate'e dönüştürür (roles/kpi boş)."""
+    return AssetTemplate(
+        id=row["id"],
+        slug=row["slug"],
+        name=row["name"],
+        description=row["description"],
+        icon=row["icon"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_asset_instance(row: asyncpg.Record) -> AssetInstance:
+    """asyncpg satırını AssetInstance'a dönüştürür."""
+    return AssetInstance(
+        id=row["id"],
+        template_id=row["template_id"],
+        name=row["name"],
+        description=row["description"],
+        location=row["location"],
+        status=row["status"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_tag_binding(row: asyncpg.Record) -> TagBinding:
+    """asyncpg satırını TagBinding'e dönüştürür."""
+    return TagBinding(
+        id=row["id"],
+        instance_id=row["instance_id"],
+        role_id=row["role_id"],
+        tag_id=row["tag_id"],
+        created_at=row["created_at"],
     )
 
 
@@ -630,6 +824,237 @@ class TimescaleDBDatabase(DatabaseInterface):
     ) -> None:
         """Etiket kaydı oluşturur."""
         raise NotImplementedError("Aşama 5'te eklenecek")
+
+    # --- Asset Template implementasyonları ---
+
+    async def list_asset_templates(self) -> list[AssetTemplate]:
+        """Template'leri roles ve kpi_definitions ile birlikte döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            tmpl_rows = await conn.fetch(
+                "SELECT * FROM asset_templates ORDER BY id",
+            )
+            role_rows = await conn.fetch(
+                "SELECT * FROM template_roles ORDER BY template_id, sort_order",
+            )
+            kpi_rows = await conn.fetch(
+                "SELECT * FROM kpi_definitions ORDER BY template_id, id",
+            )
+
+        # Role ve KPI'ları template_id bazında grupla
+        roles_by_tmpl: dict[int, list[TemplateRole]] = {}
+        for row in role_rows:
+            tid = row["template_id"]
+            roles_by_tmpl.setdefault(tid, []).append(_row_to_template_role(row))
+
+        kpis_by_tmpl: dict[int, list[KpiDefinition]] = {}
+        for row in kpi_rows:
+            tid = row["template_id"]
+            kpis_by_tmpl.setdefault(tid, []).append(_row_to_kpi_definition(row))
+
+        templates: list[AssetTemplate] = []
+        for row in tmpl_rows:
+            tmpl = _row_to_asset_template(row)
+            assert tmpl.id is not None
+            tmpl.roles = roles_by_tmpl.get(tmpl.id, [])
+            tmpl.kpi_definitions = kpis_by_tmpl.get(tmpl.id, [])
+            templates.append(tmpl)
+
+        return templates
+
+    async def get_asset_template(self, template_id: int) -> AssetTemplate | None:
+        """Tekil template (roles + kpi dahil)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            tmpl_row = await conn.fetchrow(
+                "SELECT * FROM asset_templates WHERE id = $1",
+                template_id,
+            )
+            if tmpl_row is None:
+                return None
+
+            role_rows = await conn.fetch(
+                "SELECT * FROM template_roles WHERE template_id = $1 ORDER BY sort_order",
+                template_id,
+            )
+            kpi_rows = await conn.fetch(
+                "SELECT * FROM kpi_definitions WHERE template_id = $1 ORDER BY id",
+                template_id,
+            )
+
+        tmpl = _row_to_asset_template(tmpl_row)
+        tmpl.roles = [_row_to_template_role(r) for r in role_rows]
+        tmpl.kpi_definitions = [_row_to_kpi_definition(r) for r in kpi_rows]
+        return tmpl
+
+    # --- Asset Instance CRUD implementasyonları ---
+
+    async def insert_asset_instance(self, instance: AssetInstance) -> AssetInstance:
+        """Yeni asset instance kaydı oluşturur ve döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO asset_instances "
+                "(template_id, name, description, location, status) "
+                "VALUES ($1, $2, $3, $4, $5) "
+                "RETURNING *",
+                instance.template_id, instance.name, instance.description,
+                instance.location, instance.status,
+            )
+        assert row is not None  # INSERT RETURNING her zaman satır döndürür
+        return _row_to_asset_instance(row)
+
+    async def update_asset_instance(
+        self,
+        instance_id: int,
+        updates: dict[str, object],
+    ) -> AssetInstance | None:
+        """Asset instance kaydını günceller."""
+        invalid = set(updates.keys()) - _ALLOWED_INSTANCE_UPDATE_FIELDS
+        if invalid:
+            msg = f"Güncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+
+        if not updates:
+            return await self.get_asset_instance(instance_id)
+
+        # Dinamik SET cümlesi oluştur (alan adları whitelist'ten geldiği için güvenli)
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+
+        # updated_at'i de güncelle
+        idx = len(values) + 1
+        set_parts.append(f"updated_at = ${idx}")
+        values.append(datetime.now(UTC))
+
+        # WHERE koşulu
+        idx_where = len(values) + 1
+        values.append(instance_id)
+
+        sql = (
+            f"UPDATE asset_instances SET {', '.join(set_parts)} "
+            f"WHERE id = ${idx_where} RETURNING *"
+        )
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(sql, *values)
+
+        if row is None:
+            return None
+        return _row_to_asset_instance(row)
+
+    async def delete_asset_instance(self, instance_id: int) -> bool:
+        """Asset instance kaydını siler (binding'ler CASCADE ile silinir)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM asset_instances WHERE id = $1",
+                instance_id,
+            )
+        return str(result) == "DELETE 1"
+
+    async def get_asset_instance(self, instance_id: int) -> AssetInstance | None:
+        """Tek bir asset instance kaydını getirir."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM asset_instances WHERE id = $1",
+                instance_id,
+            )
+        if row is None:
+            return None
+        return _row_to_asset_instance(row)
+
+    async def list_asset_instances(
+        self,
+        template_id: int | None = None,
+        status: str | None = None,
+    ) -> list[AssetInstance]:
+        """Asset instance listesini döndürür."""
+        pool = self._get_pool()
+        conditions: list[str] = []
+        params: list[object] = []
+        idx = 1
+
+        if template_id is not None:
+            conditions.append(f"template_id = ${idx}")
+            params.append(template_id)
+            idx += 1
+
+        if status is not None:
+            conditions.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+
+        where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM asset_instances{where_clause} ORDER BY id"
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [_row_to_asset_instance(row) for row in rows]
+
+    # --- Tag Binding CRUD implementasyonları ---
+
+    async def insert_tag_binding(self, binding: TagBinding) -> TagBinding:
+        """Yeni tag binding kaydı oluşturur ve döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO tag_bindings (instance_id, role_id, tag_id) "
+                "VALUES ($1, $2, $3) "
+                "RETURNING *",
+                binding.instance_id, binding.role_id, binding.tag_id,
+            )
+        assert row is not None  # INSERT RETURNING her zaman satır döndürür
+        return _row_to_tag_binding(row)
+
+    async def delete_tag_binding(self, binding_id: int) -> bool:
+        """Tag binding kaydını siler."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM tag_bindings WHERE id = $1",
+                binding_id,
+            )
+        return str(result) == "DELETE 1"
+
+    async def list_tag_bindings(self, instance_id: int) -> list[TagBinding]:
+        """Bir instance'ın tüm tag binding'lerini döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM tag_bindings WHERE instance_id = $1 ORDER BY id",
+                instance_id,
+            )
+        return [_row_to_tag_binding(row) for row in rows]
+
+    async def replace_tag_bindings(
+        self,
+        instance_id: int,
+        bindings: list[TagBinding],
+    ) -> list[TagBinding]:
+        """Mevcut binding'leri silip yenileriyle değiştirir (tek transaction)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM tag_bindings WHERE instance_id = $1",
+                    instance_id,
+                )
+                result: list[TagBinding] = []
+                for b in bindings:
+                    row = await conn.fetchrow(
+                        "INSERT INTO tag_bindings (instance_id, role_id, tag_id) "
+                        "VALUES ($1, $2, $3) RETURNING *",
+                        instance_id, b.role_id, b.tag_id,
+                    )
+                    assert row is not None
+                    result.append(_row_to_tag_binding(row))
+                return result
 
 
 def create_database(settings: Settings) -> DatabaseInterface:

@@ -23,7 +23,13 @@ from custos.analytics.dashboard.fake_data import (
     get_recent_alarms,
 )
 from custos.analytics.scanner import ModbusScanner
-from custos.shared.database import ConnectionProfile, DatabaseInterface, TagRecord
+from custos.shared.database import (
+    AssetInstance,
+    ConnectionProfile,
+    DatabaseInterface,
+    TagBinding,
+    TagRecord,
+)
 
 logger = structlog.get_logger(logger_name="dashboard")
 
@@ -69,8 +75,9 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
             {"href": "/dashboard/overview", "icon": "home", "label": "Overview"},
             {"href": "/dashboard/sensors", "icon": "activity", "label": "Sensors"},
             {"href": "/dashboard/connections", "icon": "cpu", "label": "Connections"},
+            {"href": "/dashboard/templates", "icon": "layers", "label": "Templates"},
+            {"href": "/dashboard/processes", "icon": "package", "label": "Processes"},
             {"href": "#", "icon": "alert-triangle", "label": "Alarms"},
-            {"href": "#", "icon": "sliders", "label": "Thresholds"},
             {"href": "#", "icon": "file-text", "label": "Logs"},
             {"href": "#", "icon": "settings", "label": "Settings"},
         ],
@@ -552,3 +559,298 @@ async def connection_ignore_tags(
         url=f"/dashboard/connections/{profile_id}/results",
         status_code=303,
     )
+
+
+# --- Asset Templates (read-only) ---
+
+
+@router.get("/templates", response_class=HTMLResponse)
+async def templates_list(request: Request) -> HTMLResponse:
+    """Template kütüphanesi — read-only liste."""
+    db = _get_db(request)
+    tmpl_list = await db.list_asset_templates()
+    ctx = _base_context(
+        page_title="Templates",
+        active_nav="/dashboard/templates",
+        templates_list=tmpl_list,
+    )
+    return templates.TemplateResponse(request, "pages/templates.html", ctx)
+
+
+@router.get("/templates/{template_id:int}", response_class=HTMLResponse)
+async def template_detail(request: Request, template_id: int) -> HTMLResponse:
+    """Template detayı — roller ve KPI tanımları."""
+    db = _get_db(request)
+    tmpl = await db.get_asset_template(template_id)
+    if tmpl is None:
+        raise HTTPException(status_code=404, detail="Template bulunamadı")
+
+    ctx = _base_context(
+        page_title=f"Template: {tmpl.name}",
+        active_nav="/dashboard/templates",
+        tmpl=tmpl,
+    )
+    return templates.TemplateResponse(request, "pages/template_detail.html", ctx)
+
+
+# --- Processes (Asset Instance CRUD) ---
+
+
+@router.get("/processes", response_class=HTMLResponse)
+async def processes_list(request: Request) -> HTMLResponse:
+    """Asset instance listesi."""
+    db = _get_db(request)
+    instances = await db.list_asset_instances()
+    tmpl_list = await db.list_asset_templates()
+    tmpl_map = {t.id: t for t in tmpl_list}
+
+    # Her instance için bağlı tag sayısını hesapla
+    binding_counts: dict[int, int] = {}
+    for inst in instances:
+        assert inst.id is not None
+        bindings = await db.list_tag_bindings(inst.id)
+        binding_counts[inst.id] = len(bindings)
+
+    ctx = _base_context(
+        page_title="Processes",
+        active_nav="/dashboard/processes",
+        instances=instances,
+        tmpl_map=tmpl_map,
+        binding_counts=binding_counts,
+    )
+    return templates.TemplateResponse(request, "pages/processes.html", ctx)
+
+
+@router.get("/processes/new", response_class=HTMLResponse)
+async def process_new_form(request: Request) -> HTMLResponse:
+    """Yeni asset instance formu."""
+    db = _get_db(request)
+    tmpl_list = await db.list_asset_templates()
+    active_tags = await db.list_tags(status="active")
+
+    ctx = _base_context(
+        page_title="Yeni Asset Ekle",
+        active_nav="/dashboard/processes",
+        templates_list=tmpl_list,
+        active_tags=active_tags,
+        instance=None,
+        edit_mode=False,
+        existing_bindings={},
+    )
+    return templates.TemplateResponse(request, "pages/process_form.html", ctx)
+
+
+@router.post("/processes", response_class=HTMLResponse)
+async def process_create(request: Request) -> RedirectResponse:
+    """Yeni asset instance + binding'ler oluşturur."""
+    db = _get_db(request)
+    form = await request.form()
+
+    template_id = int(str(form.get("template_id", "0")))
+    name = str(form.get("name", "")).strip()
+    description = str(form.get("description", "")).strip()
+    location = str(form.get("location", "")).strip()
+
+    if not name or not template_id:
+        raise HTTPException(status_code=400, detail="İsim ve template zorunlu")
+
+    instance = AssetInstance(
+        template_id=template_id,
+        name=name,
+        description=description,
+        location=location,
+    )
+
+    try:
+        created = await db.insert_asset_instance(instance)
+    except Exception:
+        await logger.aerror("Asset instance oluşturma hatası", name=name, exc_info=True)
+        raise HTTPException(status_code=400, detail="Asset oluşturulamadı") from None
+
+    # Binding'leri kaydet — form'da role_{role_id} = tag_id formatında
+    assert created.id is not None
+    tmpl = await db.get_asset_template(template_id)
+    if tmpl is not None:
+        bindings: list[TagBinding] = []
+        for role in tmpl.roles:
+            assert role.id is not None
+            tag_id = str(form.get(f"role_{role.id}", "")).strip()
+            if tag_id:
+                bindings.append(TagBinding(
+                    instance_id=created.id,
+                    role_id=role.id,
+                    tag_id=tag_id,
+                ))
+        if bindings:
+            await db.replace_tag_bindings(created.id, bindings)
+
+    return RedirectResponse(url=f"/dashboard/processes/{created.id}", status_code=303)
+
+
+@router.get("/processes/{instance_id:int}", response_class=HTMLResponse)
+async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
+    """Asset instance detay sayfası — canlı değerler."""
+    db = _get_db(request)
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    tmpl = await db.get_asset_template(instance.template_id)
+    bindings = await db.list_tag_bindings(instance_id)
+
+    # Role ve tag eşleştirmesi
+    role_map = {r.id: r for r in (tmpl.roles if tmpl else [])}
+    binding_data: list[dict[str, Any]] = []
+    tag_ids: list[str] = []
+    for b in bindings:
+        role = role_map.get(b.role_id)
+        binding_data.append({
+            "role_label": role.label if role else "?",
+            "unit_hint": role.unit_hint if role else "",
+            "tag_id": b.tag_id,
+        })
+        tag_ids.append(b.tag_id)
+
+    readings = await db.get_latest_tag_readings(tag_ids) if tag_ids else {}
+
+    ctx = _base_context(
+        page_title=f"Asset: {instance.name}",
+        active_nav="/dashboard/processes",
+        instance=instance,
+        tmpl=tmpl,
+        binding_data=binding_data,
+        readings=readings,
+    )
+    return templates.TemplateResponse(request, "pages/process_detail.html", ctx)
+
+
+@router.get("/processes/{instance_id:int}/live-values", response_class=HTMLResponse)
+async def process_live_values(request: Request, instance_id: int) -> HTMLResponse:
+    """HTMX partial — process detay canlı değer güncellemesi."""
+    db = _get_db(request)
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    tmpl = await db.get_asset_template(instance.template_id)
+    bindings = await db.list_tag_bindings(instance_id)
+
+    role_map = {r.id: r for r in (tmpl.roles if tmpl else [])}
+    binding_data: list[dict[str, Any]] = []
+    tag_ids: list[str] = []
+    for b in bindings:
+        role = role_map.get(b.role_id)
+        binding_data.append({
+            "role_label": role.label if role else "?",
+            "unit_hint": role.unit_hint if role else "",
+            "tag_id": b.tag_id,
+        })
+        tag_ids.append(b.tag_id)
+
+    readings = await db.get_latest_tag_readings(tag_ids) if tag_ids else {}
+
+    return templates.TemplateResponse(
+        request, "partials/process_live_values.html",
+        {"binding_data": binding_data, "readings": readings},
+    )
+
+
+@router.get("/processes/{instance_id:int}/edit", response_class=HTMLResponse)
+async def process_edit_form(request: Request, instance_id: int) -> HTMLResponse:
+    """Asset instance düzenleme formu."""
+    db = _get_db(request)
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    tmpl_list = await db.list_asset_templates()
+    active_tags = await db.list_tags(status="active")
+    bindings = await db.list_tag_bindings(instance_id)
+
+    # Mevcut binding'leri role_id → tag_id haritası olarak hazırla
+    existing_bindings = {b.role_id: b.tag_id for b in bindings}
+
+    ctx = _base_context(
+        page_title=f"Düzenle: {instance.name}",
+        active_nav="/dashboard/processes",
+        templates_list=tmpl_list,
+        active_tags=active_tags,
+        instance=instance,
+        edit_mode=True,
+        existing_bindings=existing_bindings,
+    )
+    return templates.TemplateResponse(request, "pages/process_form.html", ctx)
+
+
+@router.post("/processes/{instance_id:int}/edit", response_class=HTMLResponse)
+async def process_update(request: Request, instance_id: int) -> RedirectResponse:
+    """Asset instance günceller."""
+    db = _get_db(request)
+    form = await request.form()
+
+    name = str(form.get("name", "")).strip()
+    description = str(form.get("description", "")).strip()
+    location = str(form.get("location", "")).strip()
+    status = str(form.get("status", "active")).strip()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="İsim zorunlu")
+
+    updates: dict[str, object] = {
+        "name": name,
+        "description": description,
+        "location": location,
+        "status": status,
+    }
+    result = await db.update_asset_instance(instance_id, updates)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    # Binding'leri güncelle
+    instance = await db.get_asset_instance(instance_id)
+    assert instance is not None
+    tmpl = await db.get_asset_template(instance.template_id)
+    if tmpl is not None:
+        bindings: list[TagBinding] = []
+        for role in tmpl.roles:
+            assert role.id is not None
+            tag_id = str(form.get(f"role_{role.id}", "")).strip()
+            if tag_id:
+                bindings.append(TagBinding(
+                    instance_id=instance_id,
+                    role_id=role.id,
+                    tag_id=tag_id,
+                ))
+        await db.replace_tag_bindings(instance_id, bindings)
+
+    return RedirectResponse(url=f"/dashboard/processes/{instance_id}", status_code=303)
+
+
+@router.post("/processes/{instance_id:int}/delete", response_class=HTMLResponse)
+async def process_delete(request: Request, instance_id: int) -> RedirectResponse:
+    """Asset instance siler (binding'ler CASCADE ile silinir)."""
+    db = _get_db(request)
+    deleted = await db.delete_asset_instance(instance_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    return RedirectResponse(url="/dashboard/processes", status_code=303)
+
+
+# --- Tag Reading API (binding formu için) ---
+
+
+@router.get("/api/tag-reading/{tag_id}")
+async def api_tag_reading(request: Request, tag_id: str) -> dict[str, Any]:
+    """Tek bir tag'in son okumasını JSON olarak döndürür."""
+    db = _get_db(request)
+    readings = await db.get_latest_tag_readings([tag_id])
+    reading = readings.get(tag_id)
+    if reading is None:
+        raise HTTPException(status_code=404, detail="Okuma bulunamadı")
+
+    return {
+        "value": reading.value,
+        "timestamp": reading.timestamp.isoformat(),
+        "quality_flag": reading.quality_flag,
+    }

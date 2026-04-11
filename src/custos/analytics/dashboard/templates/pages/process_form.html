@@ -1,0 +1,178 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}{{ 'Düzenle: ' + instance.name if edit_mode else 'Yeni Asset Ekle' }} — Custos{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl space-y-4"
+     x-data="{
+       selectedTemplate: {{ instance.template_id if instance else 0 }},
+       templates: {{ templates_list | map(attribute='__dict__') | list | tojson }},
+       readings: {},
+       async fetchReading(tagId, elId) {
+         if (!tagId) { document.getElementById(elId).textContent = ''; return; }
+         try {
+           const res = await fetch('/dashboard/api/tag-reading/' + tagId);
+           if (res.ok) {
+             const data = await res.json();
+             document.getElementById(elId).textContent = parseFloat(data.value).toFixed(2);
+           } else {
+             document.getElementById(elId).textContent = '—';
+           }
+         } catch(e) {
+           document.getElementById(elId).textContent = '—';
+         }
+       }
+     }">
+
+  {# Başlık + Geri butonu #}
+  <div class="flex items-center gap-3">
+    <a href="/dashboard/processes"
+       class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+       title="Geri">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <h1 class="text-heading text-text-primary font-semibold">
+      {{ 'Düzenle: ' + instance.name if edit_mode else 'Yeni Asset Ekle' }}
+    </h1>
+  </div>
+
+  {# Form #}
+  <form method="post"
+        action="{{ '/dashboard/processes/' ~ instance.id ~ '/edit' if edit_mode else '/dashboard/processes' }}"
+        class="bg-bg-surface border border-border-weak rounded-lg p-5 space-y-5">
+
+    {# Fieldset 1: Template Seçimi #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Template Seçimi</legend>
+      <div>
+        <label for="template_id" class="block text-small font-medium text-text-secondary mb-1">Template</label>
+        <select id="template_id" name="template_id"
+                x-model.number="selectedTemplate"
+                {{ 'disabled' if edit_mode }}
+                class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                       text-text-primary
+                       focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary
+                       {{ 'bg-bg-elevated text-text-disabled cursor-not-allowed' if edit_mode }}"
+                required>
+          <option value="0" disabled>Template seçin...</option>
+          {% for tmpl in templates_list %}
+          <option value="{{ tmpl.id }}"
+                  {{ 'selected' if instance and instance.template_id == tmpl.id }}>
+            {{ tmpl.name }} ({{ tmpl.roles | length }} rol)
+          </option>
+          {% endfor %}
+        </select>
+        {% if edit_mode %}
+        <input type="hidden" name="template_id" value="{{ instance.template_id }}">
+        {% endif %}
+      </div>
+    </fieldset>
+
+    {# Fieldset 2: Asset Bilgileri #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Asset Bilgileri</legend>
+      <div class="grid grid-cols-2 gap-4">
+        <div class="col-span-2 sm:col-span-1">
+          <label for="name" class="block text-small font-medium text-text-secondary mb-1">İsim *</label>
+          <input type="text" id="name" name="name"
+                 value="{{ instance.name if instance else '' }}"
+                 placeholder="Sirkülasyon Pompası #1"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary placeholder-text-disabled
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                 required>
+        </div>
+        <div class="col-span-2 sm:col-span-1">
+          <label for="location" class="block text-small font-medium text-text-secondary mb-1">Konum</label>
+          <input type="text" id="location" name="location"
+                 value="{{ instance.location if instance else '' }}"
+                 placeholder="B Blok Kazan Dairesi"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary placeholder-text-disabled
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+      </div>
+      <div>
+        <label for="description" class="block text-small font-medium text-text-secondary mb-1">Açıklama</label>
+        <input type="text" id="description" name="description"
+               value="{{ instance.description if instance else '' }}"
+               placeholder="Opsiyonel açıklama"
+               class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                      text-text-primary placeholder-text-disabled
+                      focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+      </div>
+      {% if edit_mode %}
+      <div>
+        <label for="status" class="block text-small font-medium text-text-secondary mb-1">Durum</label>
+        <select id="status" name="status"
+                class="w-full max-w-xs px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                       text-text-primary
+                       focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+          <option value="active" {{ 'selected' if instance.status == 'active' }}>Active</option>
+          <option value="inactive" {{ 'selected' if instance.status == 'inactive' }}>Inactive</option>
+        </select>
+      </div>
+      {% endif %}
+    </fieldset>
+
+    {# Fieldset 3: Tag Bağlama — her template için ayrı bölüm #}
+    {% for tmpl in templates_list %}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3"
+              x-show="selectedTemplate === {{ tmpl.id }}" x-transition>
+      <legend class="px-2 text-small font-semibold text-text-secondary">
+        Tag Bağlama — {{ tmpl.name }}
+      </legend>
+
+      {% for role in tmpl.roles %}
+      <div class="grid grid-cols-12 gap-3 items-end">
+        <div class="col-span-4">
+          <label class="block text-small font-medium text-text-secondary mb-1">
+            {{ role.label }}
+            {% if role.required %}<span class="text-status-crit">*</span>{% endif %}
+            {% if role.unit_hint %}
+            <span class="text-text-disabled">({{ role.unit_hint }})</span>
+            {% endif %}
+          </label>
+        </div>
+        <div class="col-span-6">
+          <select name="role_{{ role.id }}"
+                  @change="fetchReading($event.target.value, 'reading_{{ role.id }}')"
+                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                         text-text-primary
+                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+            <option value="">— Seçiniz —</option>
+            {% for tag in active_tags %}
+            <option value="{{ tag.tag_id }}"
+                    {{ 'selected' if existing_bindings.get(role.id) == tag.tag_id }}>
+              {{ tag.tag_id }} — {{ tag.name }}{% if tag.unit %} ({{ tag.unit }}){% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-span-2 text-right">
+          <span id="reading_{{ role.id }}"
+                class="text-small font-mono text-accent-primary"></span>
+        </div>
+      </div>
+      {% endfor %}
+    </fieldset>
+    {% endfor %}
+
+    {# Submit #}
+    <div class="flex items-center gap-3 pt-2">
+      <button type="submit"
+              class="px-4 py-2 text-body font-medium bg-accent-primary text-white rounded-md
+                     hover:bg-accent-primary/90 transition-colors">
+        {{ 'Güncelle' if edit_mode else 'Kaydet' }}
+      </button>
+      <a href="/dashboard/processes"
+         class="px-4 py-2 text-body font-medium text-text-secondary
+                bg-bg-elevated border border-border-weak rounded-md
+                hover:text-text-primary hover:border-border-medium transition-colors">
+        İptal
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

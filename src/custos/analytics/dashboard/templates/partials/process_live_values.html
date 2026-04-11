@@ -1,0 +1,25 @@
+{% from 'components/icon.html' import icon_inline %}
+
+{# HTMX partial — process detay canlı değer tablosu #}
+{% if binding_data %}
+  {% for bd in binding_data %}
+  <tr class="hover:bg-bg-elevated transition-colors">
+    <td class="px-3 py-2 text-cell text-text-primary">{{ bd.role_label }}</td>
+    <td class="px-3 py-2 text-cell text-text-secondary font-mono text-small">{{ bd.tag_id }}</td>
+    <td class="px-3 py-2 text-cell text-text-primary font-mono text-small">
+      {% if readings and bd.tag_id in readings %}
+        {{ '%.2f' | format(readings[bd.tag_id].value) }}
+      {% else %}
+        <span class="text-text-disabled">—</span>
+      {% endif %}
+    </td>
+    <td class="px-3 py-2 text-cell text-text-secondary">{{ bd.unit_hint or '—' }}</td>
+  </tr>
+  {% endfor %}
+{% else %}
+  <tr>
+    <td colspan="4" class="px-3 py-6 text-center text-cell text-text-disabled">
+      Tag bağlantısı yok.
+    </td>
+  </tr>
+{% endif %}

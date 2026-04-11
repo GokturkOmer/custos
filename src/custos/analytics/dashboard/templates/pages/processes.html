@@ -1,0 +1,97 @@
+{% extends 'base.html' %}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Processes — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Başlık + Yeni Asset Ekle butonu #}
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">Processes</h1>
+    <a href="/dashboard/processes/new"
+       class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+              bg-accent-primary text-white rounded-md
+              hover:bg-accent-primary/90 transition-colors">
+      {{ icon_inline('plus', class='w-4 h-4') }}
+      Yeni Asset Ekle
+    </a>
+  </div>
+
+  {# Instance tablosu #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">İsim</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Template</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Konum</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Bağlı Tag</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aksiyonlar</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% if instances %}
+            {% for inst in instances %}
+            <tr class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2 text-cell text-text-primary font-medium">
+                <a href="/dashboard/processes/{{ inst.id }}" class="hover:text-accent-primary transition-colors">
+                  {{ inst.name }}
+                </a>
+              </td>
+              <td class="px-3 py-2 text-cell text-text-secondary">
+                {% if tmpl_map.get(inst.template_id) %}
+                  {{ tmpl_map[inst.template_id].name }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-secondary">{{ inst.location or '—' }}</td>
+              <td class="px-3 py-2 text-cell text-text-secondary">{{ binding_counts.get(inst.id, 0) }}</td>
+              <td class="px-3 py-2 text-cell">
+                {% if inst.status == 'active' %}
+                  {{ status_badge('Active', 'ok') }}
+                {% else %}
+                  {{ status_badge('Inactive', 'neutral') }}
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell">
+                <div class="flex items-center gap-1">
+                  <a href="/dashboard/processes/{{ inst.id }}"
+                     class="p-1 text-text-secondary hover:text-text-primary transition-colors"
+                     title="Detay">
+                    {{ icon_inline('eye', class='w-4 h-4') }}
+                  </a>
+                  <a href="/dashboard/processes/{{ inst.id }}/edit"
+                     class="p-1 text-text-secondary hover:text-text-primary transition-colors"
+                     title="Düzenle">
+                    {{ icon_inline('edit', class='w-4 h-4') }}
+                  </a>
+                  <form method="post" action="/dashboard/processes/{{ inst.id }}/delete"
+                        onsubmit="return confirm('Bu asset silinecek. Emin misiniz?');"
+                        class="inline">
+                    <button type="submit"
+                            class="p-1 text-text-secondary hover:text-status-crit transition-colors"
+                            title="Sil">
+                      {{ icon_inline('trash-2', class='w-4 h-4') }}
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="6" class="px-3 py-6 text-center text-cell text-text-disabled">
+                Henüz asset tanımlanmamış. Yukarıdaki butona tıklayarak yeni asset ekleyebilirsiniz.
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

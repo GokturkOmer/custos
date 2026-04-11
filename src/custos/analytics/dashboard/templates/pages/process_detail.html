@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+{% from 'components/status_badge.html' import status_badge %}
+
+{% block title %}Asset: {{ instance.name }} — Custos{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl space-y-4">
+  {# Başlık + Geri butonu #}
+  <div class="flex items-center gap-3">
+    <a href="/dashboard/processes"
+       class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+       title="Geri">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <div>
+      <h1 class="text-heading text-text-primary font-semibold">{{ instance.name }}</h1>
+      <p class="text-small text-text-secondary">
+        {{ tmpl.name if tmpl else '?' }}
+        {% if instance.location %} · {{ instance.location }}{% endif %}
+      </p>
+    </div>
+    <div class="ml-auto">
+      {% if instance.status == 'active' %}
+        {{ status_badge('Active', 'ok') }}
+      {% else %}
+        {{ status_badge('Inactive', 'neutral') }}
+      {% endif %}
+    </div>
+  </div>
+
+  {% if instance.description %}
+  <p class="text-body text-text-secondary">{{ instance.description }}</p>
+  {% endif %}
+
+  {# Aksiyon butonları #}
+  <div class="flex items-center gap-2">
+    <a href="/dashboard/processes/{{ instance.id }}/edit"
+       class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+              text-text-secondary bg-bg-elevated border border-border-weak rounded-md
+              hover:text-text-primary hover:border-border-medium transition-colors">
+      {{ icon_inline('edit', class='w-4 h-4') }}
+      Düzenle
+    </a>
+    <form method="post" action="/dashboard/processes/{{ instance.id }}/delete"
+          onsubmit="return confirm('Bu asset silinecek. Emin misiniz?');"
+          class="inline">
+      <button type="submit"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                     text-status-crit bg-status-crit/10 rounded-md
+                     hover:bg-status-crit/20 transition-colors">
+        {{ icon_inline('trash-2', class='w-4 h-4') }}
+        Sil
+      </button>
+    </form>
+  </div>
+
+  {# Bağlı tag'ler tablosu — HTMX ile canlı güncelleme #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-body font-semibold text-text-primary">Canlı Tag Değerleri</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Rol</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tag</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Son Değer</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Birim</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak"
+               hx-get="/dashboard/processes/{{ instance.id }}/live-values"
+               hx-trigger="every 5s"
+               hx-swap="innerHTML">
+          {% include 'partials/process_live_values.html' %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if not binding_data %}
+  <div class="bg-bg-surface border border-border-weak rounded-lg p-4">
+    <p class="text-small text-text-disabled">Bu asset'e henüz tag bağlanmamış.
+      <a href="/dashboard/processes/{{ instance.id }}/edit"
+         class="text-accent-primary hover:underline">Düzenle</a> ile tag bağlayabilirsiniz.
+    </p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
