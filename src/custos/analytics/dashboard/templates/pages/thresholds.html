@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Thresholds — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Başlık + Yeni Threshold butonu #}
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <a href="/dashboard/alarms"
+         class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+         title="Alarmlara Dön">
+        {{ icon_inline('arrow-left', class='w-5 h-5') }}
+      </a>
+      <h1 class="text-heading text-text-primary font-semibold">Threshold Tanımları</h1>
+    </div>
+    <a href="/dashboard/thresholds/new"
+       class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+              bg-accent-primary text-white rounded-md
+              hover:bg-accent-primary/90 transition-colors">
+      {{ icon_inline('plus', class='w-4 h-4') }}
+      Yeni Threshold
+    </a>
+  </div>
+
+  {# Threshold tablosu #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tag</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">İsim</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Yön</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Set Point</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Severity</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Debounce</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Hysteresis</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aksiyonlar</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% if thresholds %}
+            {% for t in thresholds %}
+            <tr class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2 text-cell text-text-primary">{{ t.tag_id }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ t.name }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">
+                {% if t.direction == 'high' %}
+                  <span class="text-status-crit">↑ High</span>
+                {% else %}
+                  <span class="text-accent-info">↓ Low</span>
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ t.set_point }}</td>
+              <td class="px-3 py-2 text-cell">
+                {{ status_badge('Critical' if t.severity == 'crit' else 'Warning', t.severity) }}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ t.debounce_seconds }}s</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ t.hysteresis }}</td>
+              <td class="px-3 py-2 text-cell">
+                <form method="post" action="/dashboard/thresholds/{{ t.id }}/toggle" class="inline">
+                  <button type="submit"
+                          class="text-small font-medium px-2 py-0.5 rounded
+                                 {{ 'bg-status-ok/20 text-status-ok' if t.enabled else 'bg-bg-elevated text-text-disabled' }}
+                                 hover:opacity-80 transition-opacity">
+                    {{ 'Aktif' if t.enabled else 'Pasif' }}
+                  </button>
+                </form>
+              </td>
+              <td class="px-3 py-2 text-cell">
+                <div class="flex items-center gap-2">
+                  <a href="/dashboard/thresholds/{{ t.id }}/edit"
+                     class="text-text-secondary hover:text-accent-primary transition-colors"
+                     title="Düzenle">
+                    {{ icon_inline('edit', class='w-4 h-4') }}
+                  </a>
+                  <form method="post" action="/dashboard/thresholds/{{ t.id }}/delete"
+                        class="inline"
+                        onsubmit="return confirm('Bu threshold silinecek. Emin misiniz?')">
+                    <button type="submit"
+                            class="text-text-secondary hover:text-status-crit transition-colors"
+                            title="Sil">
+                      {{ icon_inline('trash-2', class='w-4 h-4') }}
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="9" class="px-3 py-8 text-center text-text-disabled text-body">
+                Henüz threshold tanımı yok. Yeni bir threshold ekleyin.
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,98 @@
+{% extends 'base.html' %}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Alarms — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Başlık + Threshold Tanımları bağlantısı #}
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">Alarms</h1>
+    <a href="/dashboard/thresholds"
+       class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+              bg-bg-elevated text-text-secondary border border-border-weak rounded-md
+              hover:text-text-primary hover:border-border-medium transition-colors">
+      {{ icon_inline('sliders', class='w-4 h-4') }}
+      Threshold Tanımları
+    </a>
+  </div>
+
+  {# Aktif Alarmlar #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Aktif Alarmlar</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Zaman</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tag</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Threshold</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tetik Değer</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Severity</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aksiyonlar</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak"
+               id="active-alarms-body"
+               hx-get="/dashboard/alarms/active"
+               hx-trigger="every 5s"
+               hx-swap="innerHTML">
+          {% include 'partials/alarm_active_rows.html' %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# Alarm Geçmişi #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Alarm Geçmişi</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tetiklenme</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Onay</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Temizlenme</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tag</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Threshold</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tetik Değer</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Temiz Değer</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Severity</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% if cleared_alarms %}
+            {% for a in cleared_alarms %}
+            <tr class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2 text-cell text-text-primary">{{ a.triggered_at.strftime('%d/%m %H:%M:%S') if a.triggered_at else '-' }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ a.acknowledged_at.strftime('%d/%m %H:%M:%S') if a.acknowledged_at else '-' }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ a.cleared_at.strftime('%d/%m %H:%M:%S') if a.cleared_at else '-' }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ a.tag_id }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ threshold_names.get(a.threshold_id, '-') }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(a.trigger_value) }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(a.clear_value) if a.clear_value is not none else '-' }}</td>
+              <td class="px-3 py-2 text-cell">
+                {% set sev = threshold_severities.get(a.threshold_id, 'warn') %}
+                {{ status_badge('Critical' if sev == 'crit' else 'Warning', sev) }}
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="8" class="px-3 py-8 text-center text-text-disabled text-body">
+                Alarm geçmişi boş.
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

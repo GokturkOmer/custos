@@ -1,0 +1,46 @@
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% if active_alarms %}
+  {% for a in active_alarms %}
+  <tr class="hover:bg-bg-elevated transition-colors">
+    <td class="px-3 py-2 text-cell text-text-primary">{{ a.triggered_at.strftime('%d/%m %H:%M:%S') if a.triggered_at else '-' }}</td>
+    <td class="px-3 py-2 text-cell text-text-primary">{{ a.tag_id }}</td>
+    <td class="px-3 py-2 text-cell text-text-primary">{{ threshold_names.get(a.threshold_id, '-') }}</td>
+    <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(a.trigger_value) }}</td>
+    <td class="px-3 py-2 text-cell">
+      {% set sev = threshold_severities.get(a.threshold_id, 'warn') %}
+      {{ status_badge('Critical' if sev == 'crit' else 'Warning', sev) }}
+    </td>
+    <td class="px-3 py-2 text-cell">
+      {% if a.state == 'triggered' %}
+        {{ status_badge('Triggered', 'crit') }}
+      {% else %}
+        {{ status_badge('Acknowledged', 'warn') }}
+      {% endif %}
+    </td>
+    <td class="px-3 py-2 text-cell">
+      {% if a.state == 'triggered' %}
+        <form method="post" action="/dashboard/alarms/{{ a.id }}/acknowledge" class="inline">
+          <button type="submit"
+                  class="inline-flex items-center gap-1 px-2 py-1 text-small font-medium
+                         bg-accent-primary/20 text-accent-primary rounded
+                         hover:bg-accent-primary/30 transition-colors"
+                  title="Acknowledge">
+            {{ icon_inline('check-circle', class='w-3.5 h-3.5') }}
+            Onayla
+          </button>
+        </form>
+      {% else %}
+        <span class="text-text-disabled text-small">Onaylandı</span>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+{% else %}
+  <tr>
+    <td colspan="7" class="px-3 py-8 text-center text-text-disabled text-body">
+      Aktif alarm yok.
+    </td>
+  </tr>
+{% endif %}

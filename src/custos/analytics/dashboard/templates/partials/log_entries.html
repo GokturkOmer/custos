@@ -1,0 +1,28 @@
+{% if entries %}
+  {% for entry in entries %}
+  <tr class="hover:bg-bg-elevated transition-colors">
+    <td class="px-3 py-2 text-cell text-text-primary whitespace-nowrap">{{ entry.timestamp.strftime('%d/%m/%Y %H:%M:%S') if entry.timestamp else '-' }}</td>
+    <td class="px-3 py-2 text-cell">
+      {% if entry.category == 'alarm' %}
+        <span class="inline-block px-1.5 py-0.5 text-xs font-medium rounded bg-status-crit/20 text-status-crit">alarm</span>
+      {% elif entry.category == 'tag' %}
+        <span class="inline-block px-1.5 py-0.5 text-xs font-medium rounded bg-accent-info/20 text-accent-info">tag</span>
+      {% elif entry.category == 'asset' %}
+        <span class="inline-block px-1.5 py-0.5 text-xs font-medium rounded bg-status-ok/20 text-status-ok">asset</span>
+      {% elif entry.category == 'scan' %}
+        <span class="inline-block px-1.5 py-0.5 text-xs font-medium rounded bg-accent-primary/20 text-accent-primary">scan</span>
+      {% else %}
+        <span class="inline-block px-1.5 py-0.5 text-xs font-medium rounded bg-bg-elevated text-text-secondary">{{ entry.category }}</span>
+      {% endif %}
+    </td>
+    <td class="px-3 py-2 text-cell text-text-primary">{{ entry.action }}</td>
+    <td class="px-3 py-2 text-cell text-text-secondary text-small">{{ entry.detail }}</td>
+  </tr>
+  {% endfor %}
+{% else %}
+  <tr>
+    <td colspan="4" class="px-3 py-8 text-center text-text-disabled text-body">
+      Log kaydı bulunamadı.
+    </td>
+  </tr>
+{% endif %}

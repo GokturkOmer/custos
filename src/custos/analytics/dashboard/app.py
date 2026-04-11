@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,15 +21,16 @@ from fastapi.templating import Jinja2Templates
 from custos.analytics.dashboard.fake_data import (
     get_overview_charts,
     get_overview_kpis,
-    get_recent_alarms,
 )
 from custos.analytics.scanner import ModbusScanner
 from custos.shared.database import (
     AssetInstance,
+    AuditLogEntry,
     ConnectionProfile,
     DatabaseInterface,
     TagBinding,
     TagRecord,
+    Threshold,
 )
 
 logger = structlog.get_logger(logger_name="dashboard")
@@ -77,8 +79,8 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
             {"href": "/dashboard/connections", "icon": "cpu", "label": "Connections"},
             {"href": "/dashboard/templates", "icon": "layers", "label": "Templates"},
             {"href": "/dashboard/processes", "icon": "package", "label": "Processes"},
-            {"href": "#", "icon": "alert-triangle", "label": "Alarms"},
-            {"href": "#", "icon": "file-text", "label": "Logs"},
+            {"href": "/dashboard/alarms", "icon": "alert-triangle", "label": "Alarms"},
+            {"href": "/dashboard/logs", "icon": "file-text", "label": "Logs"},
             {"href": "#", "icon": "settings", "label": "Settings"},
         ],
         **kwargs,
@@ -97,12 +99,67 @@ async def dashboard_root() -> RedirectResponse:
 @router.get("/overview", response_class=HTMLResponse)
 async def overview(request: Request) -> HTMLResponse:
     """Overview sayfası — ana kontrol paneli."""
+    # KPI ve grafik verileri (hâlâ sahte — F6'da gerçekle değişecek)
+    kpis = get_overview_kpis()
+    charts = get_overview_charts()
+
+    # Gerçek alarm event'lerini çek
+    alarms: list[dict[str, Any]] = []
+    active_alarm_count = 0
+    db_instance: DatabaseInterface | None = getattr(request.app.state, "db", None)
+    if db_instance is not None:
+        recent_events = await db_instance.list_alarm_events(limit=10)
+        # Aktif alarm sayısı
+        triggered = await db_instance.list_alarm_events(state="triggered", limit=1000)
+        acked = await db_instance.list_alarm_events(state="acknowledged", limit=1000)
+        active_alarm_count = len(triggered) + len(acked)
+
+        # Threshold adlarını çek
+        thr_ids = {e.threshold_id for e in recent_events}
+        thr_map: dict[int, Threshold] = {}
+        for tid in thr_ids:
+            t = await db_instance.get_threshold(tid)
+            if t is not None:
+                thr_map[tid] = t
+
+        for event in recent_events:
+            t = thr_map.get(event.threshold_id)
+            state_label = {
+                "triggered": "Critical",
+                "acknowledged": "Warning",
+                "cleared": "OK",
+            }.get(event.state, event.state)
+            state_status = {
+                "triggered": "crit",
+                "acknowledged": "warn",
+                "cleared": "ok",
+            }.get(event.state, "neutral")
+            alarms.append({
+                "time": (
+                    event.triggered_at.strftime("%H:%M:%S")
+                    if event.triggered_at else "-"
+                ),
+                "sensor": event.tag_id,
+                "type": t.name if t else f"Threshold #{event.threshold_id}",
+                "status": state_status,
+                "status_label": state_label,
+            })
+
+    # KPI'lardan ilkini aktif alarm sayısıyla güncelle
+    if kpis:
+        kpis[0] = {
+            "label": "Active Alarms",
+            "value": str(active_alarm_count),
+            "status": "crit" if active_alarm_count > 0 else "ok",
+            "delta": "",
+        }
+
     ctx = _base_context(
         page_title="Overview",
         active_nav="/dashboard/overview",
-        kpis=get_overview_kpis(),
-        charts=get_overview_charts(),
-        alarms=get_recent_alarms(),
+        kpis=kpis,
+        charts=charts,
+        alarms=alarms,
     )
     return templates.TemplateResponse(request, "pages/overview.html", ctx)
 
@@ -854,3 +911,318 @@ async def api_tag_reading(request: Request, tag_id: str) -> dict[str, Any]:
         "timestamp": reading.timestamp.isoformat(),
         "quality_flag": reading.quality_flag,
     }
+
+
+# --- Threshold CRUD ---
+
+
+@router.get("/thresholds", response_class=HTMLResponse)
+async def thresholds_list(request: Request) -> HTMLResponse:
+    """Threshold listesi sayfası."""
+    db = _get_db(request)
+    thresholds = await db.list_thresholds()
+    ctx = _base_context(
+        page_title="Thresholds",
+        active_nav="/dashboard/alarms",
+        thresholds=thresholds,
+    )
+    return templates.TemplateResponse(request, "pages/thresholds.html", ctx)
+
+
+@router.get("/thresholds/new", response_class=HTMLResponse)
+async def threshold_new(request: Request) -> HTMLResponse:
+    """Yeni threshold formu."""
+    db = _get_db(request)
+    tags = await db.list_tags(status="active")
+    ctx = _base_context(
+        page_title="Yeni Threshold",
+        active_nav="/dashboard/alarms",
+        tags=tags,
+        edit_mode=False,
+    )
+    return templates.TemplateResponse(request, "pages/threshold_form.html", ctx)
+
+
+@router.post("/thresholds", response_class=HTMLResponse)
+async def threshold_create(
+    request: Request,
+    tag_id: str = Form(...),
+    name: str = Form(...),
+    direction: str = Form("high"),
+    set_point: float = Form(...),
+    severity: str = Form("warn"),
+    debounce_seconds: int = Form(5),
+    hysteresis: float = Form(0.0),
+) -> RedirectResponse:
+    """Yeni threshold kaydı oluşturur."""
+    db = _get_db(request)
+    threshold = Threshold(
+        tag_id=tag_id,
+        name=name,
+        direction=direction,
+        set_point=set_point,
+        severity=severity,
+        debounce_seconds=debounce_seconds,
+        hysteresis=hysteresis,
+    )
+    created = await db.insert_threshold(threshold)
+
+    # Audit log
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="alarm",
+            action="threshold_created",
+            entity_type="threshold",
+            entity_id=str(created.id),
+            detail=f"Threshold oluşturuldu: {name} (tag={tag_id}, set_point={set_point})",
+        ),
+    )
+
+    return RedirectResponse(url="/dashboard/thresholds", status_code=303)
+
+
+@router.get("/thresholds/{threshold_id:int}/edit", response_class=HTMLResponse)
+async def threshold_edit(request: Request, threshold_id: int) -> HTMLResponse:
+    """Threshold düzenleme formu."""
+    db = _get_db(request)
+    threshold = await db.get_threshold(threshold_id)
+    if threshold is None:
+        raise HTTPException(status_code=404, detail="Threshold bulunamadı")
+
+    tags = await db.list_tags(status="active")
+    ctx = _base_context(
+        page_title=f"Düzenle: {threshold.name}",
+        active_nav="/dashboard/alarms",
+        threshold=threshold,
+        tags=tags,
+        edit_mode=True,
+    )
+    return templates.TemplateResponse(request, "pages/threshold_form.html", ctx)
+
+
+@router.post("/thresholds/{threshold_id:int}/edit", response_class=HTMLResponse)
+async def threshold_update(
+    request: Request,
+    threshold_id: int,
+    name: str = Form(...),
+    direction: str = Form("high"),
+    set_point: float = Form(...),
+    severity: str = Form("warn"),
+    debounce_seconds: int = Form(5),
+    hysteresis: float = Form(0.0),
+) -> RedirectResponse:
+    """Threshold kaydını günceller."""
+    db = _get_db(request)
+    updates: dict[str, object] = {
+        "name": name,
+        "direction": direction,
+        "set_point": set_point,
+        "severity": severity,
+        "debounce_seconds": debounce_seconds,
+        "hysteresis": hysteresis,
+    }
+    result = await db.update_threshold(threshold_id, updates)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Threshold bulunamadı")
+
+    return RedirectResponse(url="/dashboard/thresholds", status_code=303)
+
+
+@router.post("/thresholds/{threshold_id:int}/delete", response_class=HTMLResponse)
+async def threshold_delete(
+    request: Request,
+    threshold_id: int,
+) -> RedirectResponse:
+    """Threshold kaydını siler."""
+    db = _get_db(request)
+
+    # Silmeden önce adını al (audit log için)
+    threshold = await db.get_threshold(threshold_id)
+    deleted = await db.delete_threshold(threshold_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Threshold bulunamadı")
+
+    # Audit log
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="alarm",
+            action="threshold_deleted",
+            entity_type="threshold",
+            entity_id=str(threshold_id),
+            detail=f"Threshold silindi: {threshold.name if threshold else threshold_id}",
+        ),
+    )
+
+    return RedirectResponse(url="/dashboard/thresholds", status_code=303)
+
+
+@router.post("/thresholds/{threshold_id:int}/toggle", response_class=HTMLResponse)
+async def threshold_toggle(
+    request: Request,
+    threshold_id: int,
+) -> RedirectResponse:
+    """Threshold enable/disable toggle."""
+    db = _get_db(request)
+    threshold = await db.get_threshold(threshold_id)
+    if threshold is None:
+        raise HTTPException(status_code=404, detail="Threshold bulunamadı")
+
+    new_state = not threshold.enabled
+    await db.update_threshold(threshold_id, {"enabled": new_state})
+
+    return RedirectResponse(url="/dashboard/thresholds", status_code=303)
+
+
+# --- Alarms ---
+
+
+@router.get("/alarms", response_class=HTMLResponse)
+async def alarms_page(request: Request) -> HTMLResponse:
+    """Alarm sayfası — aktif alarmlar ve geçmiş."""
+    db = _get_db(request)
+
+    # Aktif alarmlar (triggered + acknowledged)
+    triggered = await db.list_alarm_events(state="triggered", limit=100)
+    acknowledged = await db.list_alarm_events(state="acknowledged", limit=100)
+    active_alarms = triggered + acknowledged
+    # Tetiklenme zamanına göre sırala (en yeni üstte)
+    active_alarms.sort(
+        key=lambda a: a.triggered_at or datetime.min.replace(tzinfo=None),
+        reverse=True,
+    )
+
+    # Geçmiş (cleared)
+    cleared_alarms = await db.list_alarm_events(state="cleared", limit=50)
+
+    # Threshold adları ve severity'leri çek (denormalize bilgi için)
+    threshold_ids = {
+        a.threshold_id for a in active_alarms + cleared_alarms
+    }
+    threshold_names: dict[int, str] = {}
+    threshold_severities: dict[int, str] = {}
+    for tid in threshold_ids:
+        t = await db.get_threshold(tid)
+        if t is not None:
+            threshold_names[tid] = t.name
+            threshold_severities[tid] = t.severity
+
+    ctx = _base_context(
+        page_title="Alarms",
+        active_nav="/dashboard/alarms",
+        active_alarms=active_alarms,
+        cleared_alarms=cleared_alarms,
+        threshold_names=threshold_names,
+        threshold_severities=threshold_severities,
+    )
+    return templates.TemplateResponse(request, "pages/alarms.html", ctx)
+
+
+@router.get("/alarms/active", response_class=HTMLResponse)
+async def alarms_active_partial(request: Request) -> HTMLResponse:
+    """HTMX partial — aktif alarm satırları."""
+    db = _get_db(request)
+
+    triggered = await db.list_alarm_events(state="triggered", limit=100)
+    acknowledged = await db.list_alarm_events(state="acknowledged", limit=100)
+    active_alarms = triggered + acknowledged
+    active_alarms.sort(
+        key=lambda a: a.triggered_at or datetime.min.replace(tzinfo=None),
+        reverse=True,
+    )
+
+    threshold_ids = {a.threshold_id for a in active_alarms}
+    threshold_names: dict[int, str] = {}
+    threshold_severities: dict[int, str] = {}
+    for tid in threshold_ids:
+        t = await db.get_threshold(tid)
+        if t is not None:
+            threshold_names[tid] = t.name
+            threshold_severities[tid] = t.severity
+
+    ctx = {
+        "active_alarms": active_alarms,
+        "threshold_names": threshold_names,
+        "threshold_severities": threshold_severities,
+    }
+    return templates.TemplateResponse(
+        request, "partials/alarm_active_rows.html", ctx,
+    )
+
+
+@router.post("/alarms/{event_id:int}/acknowledge", response_class=HTMLResponse)
+async def alarm_acknowledge(
+    request: Request,
+    event_id: int,
+) -> RedirectResponse:
+    """Alarm acknowledge — triggered → acknowledged."""
+    db = _get_db(request)
+    event = await db.get_alarm_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Alarm bulunamadı")
+
+    if event.state != "triggered":
+        raise HTTPException(
+            status_code=400,
+            detail="Sadece 'triggered' durumundaki alarmlar onaylanabilir",
+        )
+
+    now = datetime.now(UTC)
+    await db.update_alarm_event(
+        event_id,
+        {"state": "acknowledged", "acknowledged_at": now},
+    )
+
+    # Audit log
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="alarm",
+            action="acknowledged",
+            entity_type="alarm_event",
+            entity_id=str(event_id),
+            detail=(
+                f"Alarm onaylandı: threshold_id={event.threshold_id}, "
+                f"tag={event.tag_id}"
+            ),
+        ),
+    )
+
+    return RedirectResponse(url="/dashboard/alarms", status_code=303)
+
+
+# --- Logs ---
+
+
+@router.get("/logs", response_class=HTMLResponse)
+async def logs_page(request: Request) -> HTMLResponse:
+    """Audit log sayfası."""
+    db = _get_db(request)
+    category = request.query_params.get("category") or None
+
+    entries = await db.list_audit_log(category=category, limit=50, offset=0)
+    total = await db.count_audit_log(category=category)
+    has_more = total > 50
+
+    ctx = _base_context(
+        page_title="Logs",
+        active_nav="/dashboard/logs",
+        entries=entries,
+        active_category=category or "",
+        has_more=has_more,
+        next_offset=50,
+    )
+    return templates.TemplateResponse(request, "pages/logs.html", ctx)
+
+
+@router.get("/logs/entries", response_class=HTMLResponse)
+async def logs_entries_partial(request: Request) -> HTMLResponse:
+    """HTMX partial — log girişleri (sayfalama için)."""
+    db = _get_db(request)
+    category = request.query_params.get("category") or None
+    offset = int(request.query_params.get("offset", "0"))
+
+    entries = await db.list_audit_log(category=category, limit=50, offset=offset)
+
+    ctx = {"entries": entries}
+    return templates.TemplateResponse(
+        request, "partials/log_entries.html", ctx,
+    )

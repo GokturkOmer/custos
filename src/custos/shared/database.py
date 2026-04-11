@@ -138,6 +138,53 @@ class TagBinding:
     created_at: datetime | None = None
 
 
+@dataclass
+class Threshold:
+    """Alarm eşik tanımı — ISA-18.2 uyumlu threshold kaydı."""
+
+    tag_id: str
+    name: str
+    direction: str = "high"  # 'high' / 'low'
+    set_point: float = 0.0
+    severity: str = "warn"  # 'warn' / 'crit'
+    debounce_seconds: int = 5
+    hysteresis: float = 0.0
+    enabled: bool = True
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
+class AlarmEvent:
+    """Alarm event kaydı — ISA-18.2 state machine durumu."""
+
+    threshold_id: int
+    tag_id: str
+    state: str = "triggered"  # 'triggered' / 'acknowledged' / 'cleared'
+    triggered_at: datetime | None = None
+    acknowledged_at: datetime | None = None
+    cleared_at: datetime | None = None
+    trigger_value: float = 0.0
+    clear_value: float | None = None
+    notes: str = ""
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
+class AuditLogEntry:
+    """Audit log kaydı — sistem olaylarının kronolojik kaydı."""
+
+    category: str
+    action: str
+    entity_type: str = ""
+    entity_id: str = ""
+    detail: str = ""
+    id: int | None = None
+    timestamp: datetime | None = None
+
+
 class DatabaseInterface(abc.ABC):
     """Veritabanı erişim arayüzü.
 
@@ -333,6 +380,89 @@ class DatabaseInterface(abc.ABC):
     ) -> list[TagBinding]:
         """Mevcut binding'leri silip yenileriyle değiştirir."""
 
+    # --- Threshold CRUD ---
+
+    @abc.abstractmethod
+    async def insert_threshold(self, threshold: Threshold) -> Threshold:
+        """Yeni threshold kaydı oluşturur."""
+
+    @abc.abstractmethod
+    async def update_threshold(
+        self,
+        threshold_id: int,
+        updates: dict[str, object],
+    ) -> Threshold | None:
+        """Threshold kaydını günceller. Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def delete_threshold(self, threshold_id: int) -> bool:
+        """Threshold kaydını siler. Başarılıysa True döndürür."""
+
+    @abc.abstractmethod
+    async def get_threshold(self, threshold_id: int) -> Threshold | None:
+        """Tek bir threshold kaydını getirir. Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def list_thresholds(
+        self,
+        tag_id: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[Threshold]:
+        """Threshold listesini döndürür. Opsiyonel filtreler."""
+
+    # --- Alarm Event CRUD ---
+
+    @abc.abstractmethod
+    async def insert_alarm_event(self, event: AlarmEvent) -> AlarmEvent:
+        """Yeni alarm event kaydı oluşturur."""
+
+    @abc.abstractmethod
+    async def update_alarm_event(
+        self,
+        event_id: int,
+        updates: dict[str, object],
+    ) -> AlarmEvent | None:
+        """Alarm event kaydını günceller. Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def get_alarm_event(self, event_id: int) -> AlarmEvent | None:
+        """Tek bir alarm event kaydını getirir. Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def list_alarm_events(
+        self,
+        state: str | None = None,
+        tag_id: str | None = None,
+        limit: int = 100,
+    ) -> list[AlarmEvent]:
+        """Alarm event listesini döndürür. Opsiyonel filtreler."""
+
+    @abc.abstractmethod
+    async def get_active_alarm_for_threshold(
+        self,
+        threshold_id: int,
+    ) -> AlarmEvent | None:
+        """Threshold için aktif (cleared olmayan) alarm döndürür."""
+
+    # --- Audit Log ---
+
+    @abc.abstractmethod
+    async def insert_audit_log(self, entry: AuditLogEntry) -> AuditLogEntry:
+        """Yeni audit log kaydı oluşturur."""
+
+    @abc.abstractmethod
+    async def list_audit_log(
+        self,
+        category: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AuditLogEntry]:
+        """Audit log listesini döndürür. Opsiyonel filtreler."""
+
+    @abc.abstractmethod
+    async def count_audit_log(self, category: str | None = None) -> int:
+        """Audit log kayıt sayısını döndürür."""
+
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
 _ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset({
@@ -470,6 +600,65 @@ def _row_to_tag_binding(row: asyncpg.Record) -> TagBinding:
         role_id=row["role_id"],
         tag_id=row["tag_id"],
         created_at=row["created_at"],
+    )
+
+
+# İzin verilen güncelleme alanları — Threshold (SQL injection önlemi)
+_ALLOWED_THRESHOLD_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "name", "direction", "set_point", "severity",
+    "debounce_seconds", "hysteresis", "enabled",
+})
+
+# İzin verilen güncelleme alanları — Alarm Event (SQL injection önlemi)
+_ALLOWED_ALARM_EVENT_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "state", "acknowledged_at", "cleared_at", "clear_value", "notes",
+})
+
+
+def _row_to_threshold(row: asyncpg.Record) -> Threshold:
+    """asyncpg satırını Threshold'a dönüştürür."""
+    return Threshold(
+        id=row["id"],
+        tag_id=row["tag_id"],
+        name=row["name"],
+        direction=row["direction"],
+        set_point=float(row["set_point"]),
+        severity=row["severity"],
+        debounce_seconds=row["debounce_seconds"],
+        hysteresis=float(row["hysteresis"]),
+        enabled=row["enabled"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_alarm_event(row: asyncpg.Record) -> AlarmEvent:
+    """asyncpg satırını AlarmEvent'e dönüştürür."""
+    return AlarmEvent(
+        id=row["id"],
+        threshold_id=row["threshold_id"],
+        tag_id=row["tag_id"],
+        state=row["state"],
+        triggered_at=row["triggered_at"],
+        acknowledged_at=row["acknowledged_at"],
+        cleared_at=row["cleared_at"],
+        trigger_value=float(row["trigger_value"]),
+        clear_value=float(row["clear_value"]) if row["clear_value"] is not None else None,
+        notes=row["notes"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_audit_log_entry(row: asyncpg.Record) -> AuditLogEntry:
+    """asyncpg satırını AuditLogEntry'ye dönüştürür."""
+    return AuditLogEntry(
+        id=row["id"],
+        timestamp=row["timestamp"],
+        category=row["category"],
+        action=row["action"],
+        entity_type=row["entity_type"],
+        entity_id=row["entity_id"],
+        detail=row["detail"],
     )
 
 
@@ -1055,6 +1244,297 @@ class TimescaleDBDatabase(DatabaseInterface):
                     assert row is not None
                     result.append(_row_to_tag_binding(row))
                 return result
+
+    # --- Threshold CRUD implementasyonları ---
+
+    async def insert_threshold(self, threshold: Threshold) -> Threshold:
+        """Yeni threshold kaydı oluşturur ve döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO thresholds "
+                "(tag_id, name, direction, set_point, severity, "
+                "debounce_seconds, hysteresis, enabled) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
+                "RETURNING *",
+                threshold.tag_id, threshold.name, threshold.direction,
+                threshold.set_point, threshold.severity,
+                threshold.debounce_seconds, threshold.hysteresis,
+                threshold.enabled,
+            )
+        assert row is not None
+        return _row_to_threshold(row)
+
+    async def update_threshold(
+        self,
+        threshold_id: int,
+        updates: dict[str, object],
+    ) -> Threshold | None:
+        """Threshold kaydını günceller."""
+        invalid = set(updates.keys()) - _ALLOWED_THRESHOLD_UPDATE_FIELDS
+        if invalid:
+            msg = f"Güncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+
+        if not updates:
+            return await self.get_threshold(threshold_id)
+
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+
+        # updated_at'i de güncelle
+        idx = len(values) + 1
+        set_parts.append(f"updated_at = ${idx}")
+        values.append(datetime.now(UTC))
+
+        idx_where = len(values) + 1
+        values.append(threshold_id)
+
+        sql = (
+            f"UPDATE thresholds SET {', '.join(set_parts)} "
+            f"WHERE id = ${idx_where} RETURNING *"
+        )
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(sql, *values)
+
+        if row is None:
+            return None
+        return _row_to_threshold(row)
+
+    async def delete_threshold(self, threshold_id: int) -> bool:
+        """Threshold kaydını siler (alarm_events CASCADE ile silinir)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM thresholds WHERE id = $1",
+                threshold_id,
+            )
+        return str(result) == "DELETE 1"
+
+    async def get_threshold(self, threshold_id: int) -> Threshold | None:
+        """Tek bir threshold kaydını getirir."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM thresholds WHERE id = $1",
+                threshold_id,
+            )
+        if row is None:
+            return None
+        return _row_to_threshold(row)
+
+    async def list_thresholds(
+        self,
+        tag_id: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[Threshold]:
+        """Threshold listesini döndürür."""
+        pool = self._get_pool()
+        conditions: list[str] = []
+        params: list[object] = []
+        idx = 1
+
+        if tag_id is not None:
+            conditions.append(f"tag_id = ${idx}")
+            params.append(tag_id)
+            idx += 1
+
+        if enabled is not None:
+            conditions.append(f"enabled = ${idx}")
+            params.append(enabled)
+            idx += 1
+
+        where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM thresholds{where_clause} ORDER BY id"
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [_row_to_threshold(row) for row in rows]
+
+    # --- Alarm Event CRUD implementasyonları ---
+
+    async def insert_alarm_event(self, event: AlarmEvent) -> AlarmEvent:
+        """Yeni alarm event kaydı oluşturur ve döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO alarm_events "
+                "(threshold_id, tag_id, state, triggered_at, "
+                "acknowledged_at, cleared_at, trigger_value, clear_value, notes) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) "
+                "RETURNING *",
+                event.threshold_id, event.tag_id, event.state,
+                event.triggered_at, event.acknowledged_at, event.cleared_at,
+                event.trigger_value, event.clear_value, event.notes,
+            )
+        assert row is not None
+        return _row_to_alarm_event(row)
+
+    async def update_alarm_event(
+        self,
+        event_id: int,
+        updates: dict[str, object],
+    ) -> AlarmEvent | None:
+        """Alarm event kaydını günceller."""
+        invalid = set(updates.keys()) - _ALLOWED_ALARM_EVENT_UPDATE_FIELDS
+        if invalid:
+            msg = f"Güncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+
+        if not updates:
+            return await self.get_alarm_event(event_id)
+
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+
+        idx_where = len(values) + 1
+        values.append(event_id)
+
+        sql = (
+            f"UPDATE alarm_events SET {', '.join(set_parts)} "
+            f"WHERE id = ${idx_where} RETURNING *"
+        )
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(sql, *values)
+
+        if row is None:
+            return None
+        return _row_to_alarm_event(row)
+
+    async def get_alarm_event(self, event_id: int) -> AlarmEvent | None:
+        """Tek bir alarm event kaydını getirir."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM alarm_events WHERE id = $1",
+                event_id,
+            )
+        if row is None:
+            return None
+        return _row_to_alarm_event(row)
+
+    async def list_alarm_events(
+        self,
+        state: str | None = None,
+        tag_id: str | None = None,
+        limit: int = 100,
+    ) -> list[AlarmEvent]:
+        """Alarm event listesini döndürür."""
+        pool = self._get_pool()
+        conditions: list[str] = []
+        params: list[object] = []
+        idx = 1
+
+        if state is not None:
+            conditions.append(f"state = ${idx}")
+            params.append(state)
+            idx += 1
+
+        if tag_id is not None:
+            conditions.append(f"tag_id = ${idx}")
+            params.append(tag_id)
+            idx += 1
+
+        where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+        sql = (
+            f"SELECT * FROM alarm_events{where_clause} "
+            f"ORDER BY triggered_at DESC LIMIT ${idx}"
+        )
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [_row_to_alarm_event(row) for row in rows]
+
+    async def get_active_alarm_for_threshold(
+        self,
+        threshold_id: int,
+    ) -> AlarmEvent | None:
+        """Threshold için aktif (cleared olmayan) en son alarm döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM alarm_events "
+                "WHERE threshold_id = $1 AND state != 'cleared' "
+                "ORDER BY triggered_at DESC LIMIT 1",
+                threshold_id,
+            )
+        if row is None:
+            return None
+        return _row_to_alarm_event(row)
+
+    # --- Audit Log implementasyonları ---
+
+    async def insert_audit_log(self, entry: AuditLogEntry) -> AuditLogEntry:
+        """Yeni audit log kaydı oluşturur ve döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO audit_log "
+                "(category, action, entity_type, entity_id, detail) "
+                "VALUES ($1, $2, $3, $4, $5) "
+                "RETURNING *",
+                entry.category, entry.action,
+                entry.entity_type, entry.entity_id, entry.detail,
+            )
+        assert row is not None
+        return _row_to_audit_log_entry(row)
+
+    async def list_audit_log(
+        self,
+        category: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AuditLogEntry]:
+        """Audit log listesini döndürür."""
+        pool = self._get_pool()
+        params: list[object] = []
+        idx = 1
+
+        if category is not None:
+            where_clause = f" WHERE category = ${idx}"
+            params.append(category)
+            idx += 1
+        else:
+            where_clause = ""
+
+        params.append(limit)
+        limit_idx = idx
+        idx += 1
+        params.append(offset)
+        offset_idx = idx
+
+        sql = (
+            f"SELECT * FROM audit_log{where_clause} "
+            f"ORDER BY timestamp DESC LIMIT ${limit_idx} OFFSET ${offset_idx}"
+        )
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [_row_to_audit_log_entry(row) for row in rows]
+
+    async def count_audit_log(self, category: str | None = None) -> int:
+        """Audit log kayıt sayısını döndürür."""
+        pool = self._get_pool()
+        if category is not None:
+            sql = "SELECT COUNT(*) FROM audit_log WHERE category = $1"
+            async with pool.acquire() as conn:
+                count = await conn.fetchval(sql, category)
+        else:
+            sql = "SELECT COUNT(*) FROM audit_log"
+            async with pool.acquire() as conn:
+                count = await conn.fetchval(sql)
+        return int(count or 0)
 
 
 def create_database(settings: Settings) -> DatabaseInterface:

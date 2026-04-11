@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Logs — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Başlık + Filtre #}
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">Audit Logs</h1>
+    <form method="get" action="/dashboard/logs" class="flex items-center gap-2">
+      <select name="category"
+              onchange="this.form.submit()"
+              class="px-3 py-1.5 text-small bg-bg-base border border-border-weak rounded-md
+                     text-text-primary
+                     focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        <option value="" {{ 'selected' if not active_category }}>Tümü</option>
+        <option value="alarm" {{ 'selected' if active_category == 'alarm' }}>Alarm</option>
+        <option value="tag" {{ 'selected' if active_category == 'tag' }}>Tag</option>
+        <option value="asset" {{ 'selected' if active_category == 'asset' }}>Asset</option>
+        <option value="scan" {{ 'selected' if active_category == 'scan' }}>Scan</option>
+        <option value="system" {{ 'selected' if active_category == 'system' }}>System</option>
+      </select>
+    </form>
+  </div>
+
+  {# Log tablosu #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Zaman</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Kategori</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aksiyon</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Detay</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak" id="log-entries-body">
+          {% include 'partials/log_entries.html' %}
+        </tbody>
+      </table>
+    </div>
+
+    {# Daha fazla yükle #}
+    {% if has_more %}
+    <div class="px-4 py-3 border-t border-border-weak text-center">
+      <button hx-get="/dashboard/logs/entries?offset={{ next_offset }}{% if active_category %}&category={{ active_category }}{% endif %}"
+              hx-target="#log-entries-body"
+              hx-swap="beforeend"
+              hx-swap-oob="true"
+              class="px-4 py-1.5 text-small font-medium text-text-secondary
+                     bg-bg-elevated border border-border-weak rounded-md
+                     hover:text-text-primary hover:border-border-medium transition-colors">
+        Daha Fazla Yükle
+      </button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
