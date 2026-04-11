@@ -26,32 +26,38 @@ TAG_RANGES: dict[str, tuple[float, float]] = {
     "R001": (0.0, 3000.0),
 }
 
-# Test tag'leri — sensors.toml'daki konfigürasyona karşılık gelir
+# Test tag'leri — simülatörün register adresleri (0-4) ile eşleşir
+# polling_interval_ms=1000 ile 5 saniyede ~5 okuma beklenir
 TEST_TAGS: list[TagRecord] = [
     TagRecord(
         tag_id="T001", name="Temperature", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=40001,
+        modbus_port=5020, unit_id=1, register_address=0,
         register_type="uint16", gain=1.0, offset=0.0, unit="°C",
+        polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
         tag_id="P001", name="Pressure", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=40002,
+        modbus_port=5020, unit_id=1, register_address=1,
         register_type="uint16", gain=0.1, offset=0.0, unit="bar",
+        polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
         tag_id="F001", name="Flow", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=40003,
+        modbus_port=5020, unit_id=1, register_address=2,
         register_type="uint16", gain=1.0, offset=0.0, unit="m³/h",
+        polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
         tag_id="V001", name="Vibration", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=40004,
+        modbus_port=5020, unit_id=1, register_address=3,
         register_type="uint16", gain=0.1, offset=0.0, unit="mm/s",
+        polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
         tag_id="R001", name="RPM", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=40005,
+        modbus_port=5020, unit_id=1, register_address=4,
         register_type="uint16", gain=1.0, offset=0.0, unit="RPM",
+        polling_interval_ms=1000, polling_preset="normal",
     ),
 ]
 

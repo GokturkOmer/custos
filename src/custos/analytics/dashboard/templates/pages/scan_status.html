@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Scan: {{ profile.name }} — Custos{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl space-y-4">
+  {# Başlık + Geri butonu #}
+  <div class="flex items-center gap-3">
+    <a href="/dashboard/connections"
+       class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+       title="Geri">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <h1 class="text-heading text-text-primary font-semibold">
+      Scan: {{ profile.name }}
+    </h1>
+  </div>
+
+  {# Scan durumu kartı — partial'dan include edilir, HTMX ile güncellenir #}
+  {% include 'partials/scan_status_card.html' %}
+</div>
+{% endblock %}

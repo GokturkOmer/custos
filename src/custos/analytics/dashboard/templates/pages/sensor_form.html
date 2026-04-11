@@ -86,10 +86,10 @@
       <legend class="px-2 text-small font-semibold text-text-secondary">Register</legend>
       <div class="grid grid-cols-3 gap-4">
         <div>
-          <label for="register_address" class="block text-small font-medium text-text-secondary mb-1">Adres</label>
+          <label for="register_address" class="block text-small font-medium text-text-secondary mb-1">Adres (Modbus 40001+)</label>
           <input type="number" id="register_address" name="register_address"
-                 value="{{ tag.register_address if tag else '' }}"
-                 placeholder="40001"
+                 value="{{ (40001 + tag.register_address) if tag else '' }}"
+                 placeholder="40001" min="40001" max="49999"
                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
                         text-text-primary placeholder-text-disabled
                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"

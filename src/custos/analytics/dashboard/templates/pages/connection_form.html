@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}{{ 'Düzenle: ' + profile.name if edit_mode else 'Yeni Connection Profili' }} — Custos{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl space-y-4">
+  {# Başlık + Geri butonu #}
+  <div class="flex items-center gap-3">
+    <a href="/dashboard/connections"
+       class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+       title="Geri">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <h1 class="text-heading text-text-primary font-semibold">
+      {{ 'Düzenle: ' + profile.name if edit_mode else 'Yeni Connection Profili' }}
+    </h1>
+  </div>
+
+  {# Form #}
+  <form method="post"
+        action="{{ '/dashboard/connections/' ~ profile.id ~ '/edit' if edit_mode else '/dashboard/connections' }}"
+        class="bg-bg-surface border border-border-weak rounded-lg p-5 space-y-5">
+
+    {# Profil İsmi #}
+    <div>
+      <label for="name" class="block text-small font-medium text-text-secondary mb-1">Profil İsmi</label>
+      <input type="text" id="name" name="name"
+             value="{{ profile.name if profile else '' }}"
+             placeholder="PLC-1 Ana Hat"
+             class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                    text-text-primary placeholder-text-disabled
+                    focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+             required>
+    </div>
+
+    {# Modbus Bağlantı #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Modbus TCP Bağlantı</legend>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label for="host" class="block text-small font-medium text-text-secondary mb-1">Host</label>
+          <input type="text" id="host" name="host"
+                 value="{{ profile.host if profile else '' }}"
+                 placeholder="192.168.1.10"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary placeholder-text-disabled
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                 required>
+        </div>
+        <div>
+          <label for="port" class="block text-small font-medium text-text-secondary mb-1">Port</label>
+          <input type="number" id="port" name="port"
+                 value="{{ profile.port if profile else 502 }}"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+      </div>
+    </fieldset>
+
+    {# Unit ID Aralığı #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Unit ID Aralığı</legend>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label for="unit_id_start" class="block text-small font-medium text-text-secondary mb-1">Başlangıç</label>
+          <input type="number" id="unit_id_start" name="unit_id_start"
+                 value="{{ profile.unit_id_start if profile else 1 }}"
+                 min="1" max="247"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+        <div>
+          <label for="unit_id_end" class="block text-small font-medium text-text-secondary mb-1">Bitiş</label>
+          <input type="number" id="unit_id_end" name="unit_id_end"
+                 value="{{ profile.unit_id_end if profile else 1 }}"
+                 min="1" max="247"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+      </div>
+    </fieldset>
+
+    {# Submit #}
+    <div class="flex items-center gap-3 pt-2">
+      <button type="submit"
+              class="px-4 py-2 text-body font-medium bg-accent-primary text-white rounded-md
+                     hover:bg-accent-primary/90 transition-colors">
+        {{ 'Güncelle' if edit_mode else 'Kaydet' }}
+      </button>
+      <a href="/dashboard/connections"
+         class="px-4 py-2 text-body font-medium text-text-secondary
+                bg-bg-elevated border border-border-weak rounded-md
+                hover:text-text-primary hover:border-border-medium transition-colors">
+        İptal
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

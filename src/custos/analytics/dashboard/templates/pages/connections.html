@@ -1,0 +1,117 @@
+{% extends 'base.html' %}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Connections — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Başlık + Yeni Profil Ekle butonu #}
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">Connections</h1>
+    <a href="/dashboard/connections/new"
+       class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+              bg-accent-primary text-white rounded-md
+              hover:bg-accent-primary/90 transition-colors">
+      {{ icon_inline('plus', class='w-4 h-4') }}
+      Yeni Profil Ekle
+    </a>
+  </div>
+
+  {# Profil tablosu #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">İsim</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Host:Port</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Unit ID Aralığı</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Son Scan</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Latency (avg)</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Status</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aksiyonlar</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% if profiles %}
+            {% for p in profiles %}
+            <tr class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2 text-cell text-text-primary font-medium">{{ p.name }}</td>
+              <td class="px-3 py-2 text-cell text-text-secondary text-small font-mono">{{ p.host }}:{{ p.port }}</td>
+              <td class="px-3 py-2 text-cell text-text-secondary text-small">{{ p.unit_id_start }}–{{ p.unit_id_end }}</td>
+              <td class="px-3 py-2 text-cell text-text-secondary text-small">
+                {{ p.last_scan_at.strftime('%d.%m.%Y %H:%M') if p.last_scan_at else '—' }}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-secondary text-small">
+                {% if p.slave_latency_avg_ms is not none %}
+                  {{ '%.1f' | format(p.slave_latency_avg_ms) }} ms
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell">
+                {% if p.status == 'idle' %}
+                  {{ status_badge('Idle', 'neutral') }}
+                {% elif p.status == 'scanning' %}
+                  {{ status_badge('Scanning...', 'info') }}
+                {% elif p.status == 'completed' %}
+                  {{ status_badge('Completed', 'ok') }}
+                {% elif p.status == 'error' %}
+                  {{ status_badge('Error', 'crit') }}
+                {% else %}
+                  {{ status_badge(p.status, 'neutral') }}
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell">
+                <div class="flex items-center gap-1">
+                  {# Scan Başlat #}
+                  <form method="post" action="/dashboard/connections/{{ p.id }}/scan" class="inline">
+                    <button type="submit"
+                            class="p-1 text-text-secondary hover:text-accent-primary transition-colors"
+                            title="Scan Başlat"
+                            {{ 'disabled' if p.status == 'scanning' }}>
+                      {{ icon_inline('search', class='w-4 h-4') }}
+                    </button>
+                  </form>
+                  {# Sonuçlar #}
+                  {% if p.status == 'completed' %}
+                  <a href="/dashboard/connections/{{ p.id }}/results"
+                     class="p-1 text-text-secondary hover:text-accent-primary transition-colors"
+                     title="Scan Sonuçları">
+                    {{ icon_inline('check-circle', class='w-4 h-4') }}
+                  </a>
+                  {% endif %}
+                  {# Düzenle #}
+                  <a href="/dashboard/connections/{{ p.id }}/edit"
+                     class="p-1 text-text-secondary hover:text-text-primary transition-colors"
+                     title="Düzenle">
+                    {{ icon_inline('edit', class='w-4 h-4') }}
+                  </a>
+                  {# Sil #}
+                  <form method="post" action="/dashboard/connections/{{ p.id }}/delete"
+                        onsubmit="return confirm('Bu profil silinecek. Emin misiniz?');"
+                        class="inline">
+                    <button type="submit"
+                            class="p-1 text-text-secondary hover:text-status-crit transition-colors"
+                            title="Sil">
+                      {{ icon_inline('trash-2', class='w-4 h-4') }}
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="7" class="px-3 py-6 text-center text-cell text-text-disabled">
+                Henüz connection profili tanımlanmamış. Yukarıdaki butona tıklayarak yeni profil ekleyebilirsiniz.
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

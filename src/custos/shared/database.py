@@ -33,6 +33,25 @@ class TagReading:
 
 
 @dataclass
+class ConnectionProfile:
+    """Connection profile kaydı — connection_profiles tablosunun Python temsili."""
+
+    name: str
+    host: str
+    port: int = 502
+    unit_id_start: int = 1
+    unit_id_end: int = 1
+    status: str = "idle"
+    last_scan_at: datetime | None = None
+    slave_latency_min_ms: float | None = None
+    slave_latency_avg_ms: float | None = None
+    slave_latency_max_ms: float | None = None
+    id: int | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
 class TagRecord:
     """Tag tanım kaydı — tags tablosunun Python temsili."""
 
@@ -125,6 +144,44 @@ class DatabaseInterface(abc.ABC):
     async def list_tags(self, status: str | None = None) -> list[TagRecord]:
         """Tag listesini döndürür. Opsiyonel status filtresi."""
 
+    # --- Connection Profile CRUD ---
+
+    @abc.abstractmethod
+    async def insert_connection_profile(
+        self,
+        profile: ConnectionProfile,
+    ) -> ConnectionProfile:
+        """Yeni connection profile kaydı oluşturur."""
+
+    @abc.abstractmethod
+    async def update_connection_profile(
+        self,
+        profile_id: int,
+        updates: dict[str, object],
+    ) -> ConnectionProfile | None:
+        """Connection profile kaydını günceller. Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def delete_connection_profile(self, profile_id: int) -> bool:
+        """Connection profile kaydını siler. Başarılıysa True döndürür."""
+
+    @abc.abstractmethod
+    async def get_connection_profile(self, profile_id: int) -> ConnectionProfile | None:
+        """Tek bir connection profile kaydını getirir. Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def list_connection_profiles(self) -> list[ConnectionProfile]:
+        """Tüm connection profile'ları döndürür."""
+
+    # --- Live Readings ---
+
+    @abc.abstractmethod
+    async def get_latest_tag_readings(
+        self,
+        tag_ids: list[str],
+    ) -> dict[str, TagReading]:
+        """Her tag için en son okumayı döndürür."""
+
     # --- Feature & Label (stub) ---
 
     @abc.abstractmethod
@@ -151,7 +208,46 @@ class DatabaseInterface(abc.ABC):
         """Etiket kaydı oluşturur."""
 
 
-# İzin verilen güncelleme alanları (SQL injection önlemi)
+# İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
+_ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "name", "host", "port", "unit_id_start", "unit_id_end",
+    "status", "last_scan_at",
+    "slave_latency_min_ms", "slave_latency_avg_ms", "slave_latency_max_ms",
+})
+
+
+def _row_to_connection_profile(row: asyncpg.Record) -> ConnectionProfile:
+    """asyncpg satırını ConnectionProfile'a dönüştürür."""
+    return ConnectionProfile(
+        id=row["id"],
+        name=row["name"],
+        host=row["host"],
+        port=row["port"],
+        unit_id_start=row["unit_id_start"],
+        unit_id_end=row["unit_id_end"],
+        status=row["status"],
+        last_scan_at=row["last_scan_at"],
+        slave_latency_min_ms=(
+            float(row["slave_latency_min_ms"])
+            if row["slave_latency_min_ms"] is not None
+            else None
+        ),
+        slave_latency_avg_ms=(
+            float(row["slave_latency_avg_ms"])
+            if row["slave_latency_avg_ms"] is not None
+            else None
+        ),
+        slave_latency_max_ms=(
+            float(row["slave_latency_max_ms"])
+            if row["slave_latency_max_ms"] is not None
+            else None
+        ),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+# İzin verilen güncelleme alanları — Tag (SQL injection önlemi)
 _ALLOWED_TAG_UPDATE_FIELDS: frozenset[str] = frozenset({
     "name", "modbus_host", "modbus_port", "unit_id",
     "register_address", "register_type", "byte_order",
@@ -384,6 +480,131 @@ class TimescaleDBDatabase(DatabaseInterface):
             else:
                 rows = await conn.fetch("SELECT * FROM tags ORDER BY tag_id")
         return [_row_to_tag_record(row) for row in rows]
+
+    # --- Connection Profile CRUD implementasyonları ---
+
+    async def insert_connection_profile(
+        self,
+        profile: ConnectionProfile,
+    ) -> ConnectionProfile:
+        """Yeni connection profile kaydı oluşturur ve döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO connection_profiles "
+                "(name, host, port, unit_id_start, unit_id_end, status) "
+                "VALUES ($1, $2, $3, $4, $5, $6) "
+                "RETURNING *",
+                profile.name, profile.host, profile.port,
+                profile.unit_id_start, profile.unit_id_end, profile.status,
+            )
+        assert row is not None  # INSERT RETURNING her zaman satır döndürür
+        return _row_to_connection_profile(row)
+
+    async def update_connection_profile(
+        self,
+        profile_id: int,
+        updates: dict[str, object],
+    ) -> ConnectionProfile | None:
+        """Connection profile kaydını günceller."""
+        invalid = set(updates.keys()) - _ALLOWED_PROFILE_UPDATE_FIELDS
+        if invalid:
+            msg = f"Güncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+
+        if not updates:
+            return await self.get_connection_profile(profile_id)
+
+        # Dinamik SET cümlesi oluştur (alan adları whitelist'ten geldiği için güvenli)
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+
+        # updated_at'i de güncelle
+        idx = len(values) + 1
+        set_parts.append(f"updated_at = ${idx}")
+        values.append(datetime.now(UTC))
+
+        # WHERE koşulu
+        idx_where = len(values) + 1
+        values.append(profile_id)
+
+        sql = (
+            f"UPDATE connection_profiles SET {', '.join(set_parts)} "
+            f"WHERE id = ${idx_where} RETURNING *"
+        )
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(sql, *values)
+
+        if row is None:
+            return None
+        return _row_to_connection_profile(row)
+
+    async def delete_connection_profile(self, profile_id: int) -> bool:
+        """Connection profile kaydını siler."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM connection_profiles WHERE id = $1",
+                profile_id,
+            )
+        return str(result) == "DELETE 1"
+
+    async def get_connection_profile(self, profile_id: int) -> ConnectionProfile | None:
+        """Tek bir connection profile kaydını getirir."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM connection_profiles WHERE id = $1",
+                profile_id,
+            )
+        if row is None:
+            return None
+        return _row_to_connection_profile(row)
+
+    async def list_connection_profiles(self) -> list[ConnectionProfile]:
+        """Tüm connection profile'ları döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM connection_profiles ORDER BY name",
+            )
+        return [_row_to_connection_profile(row) for row in rows]
+
+    # --- Live Readings implementasyonu ---
+
+    async def get_latest_tag_readings(
+        self,
+        tag_ids: list[str],
+    ) -> dict[str, TagReading]:
+        """Her tag için en son okumayı döndürür."""
+        if not tag_ids:
+            return {}
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT ON (tag_id) "
+                "timestamp, tag_id, value, quality_flag "
+                "FROM tag_readings "
+                "WHERE tag_id = ANY($1) "
+                "ORDER BY tag_id, timestamp DESC",
+                tag_ids,
+            )
+
+        return {
+            row["tag_id"]: TagReading(
+                timestamp=row["timestamp"],
+                tag_id=row["tag_id"],
+                value=float(row["value"]),
+                quality_flag=int(row["quality_flag"]),
+            )
+            for row in rows
+        }
 
     # --- Feature & Label (stub) ---
 

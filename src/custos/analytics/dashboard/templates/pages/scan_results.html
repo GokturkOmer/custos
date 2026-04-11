@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Scan Sonuçları: {{ profile.name }} — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Başlık + Geri butonu #}
+  <div class="flex items-center gap-3">
+    <a href="/dashboard/connections"
+       class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+       title="Geri">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <h1 class="text-heading text-text-primary font-semibold">
+      Scan Sonuçları: {{ profile.name }}
+    </h1>
+    <span class="text-small text-text-disabled">
+      {{ discovered_tags | length }} aday tag
+    </span>
+  </div>
+
+  {% if discovered_tags %}
+  {# Toplu aksiyon formu #}
+  <form id="results-form" method="post" x-data="{ selectedCount: 0 }">
+    {# Üst aksiyon çubuğu #}
+    <div class="flex items-center justify-between bg-bg-surface border border-border-weak rounded-t-lg px-4 py-2">
+      <span class="text-small text-text-secondary" x-text="selectedCount + ' tag seçili'"></span>
+      <div class="flex items-center gap-2">
+        <button type="submit"
+                formaction="/dashboard/connections/{{ profile.id }}/results/activate"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                       bg-accent-primary text-white rounded-md
+                       hover:bg-accent-primary/90 transition-colors
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="selectedCount === 0">
+          {{ icon_inline('check-circle', class='w-4 h-4') }}
+          Seçilenleri Onayla ve Aktifleştir
+        </button>
+        <button type="submit"
+                formaction="/dashboard/connections/{{ profile.id }}/results/ignore"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                       text-text-secondary bg-bg-elevated border border-border-weak rounded-md
+                       hover:text-text-primary hover:border-border-medium transition-colors
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="selectedCount === 0">
+          {{ icon_inline('eye-off', class='w-4 h-4') }}
+          Seçilenleri Yok Say
+        </button>
+      </div>
+    </div>
+
+    {# Sonuç tablosu #}
+    <div class="bg-bg-surface border border-t-0 border-border-weak rounded-b-lg overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="bg-bg-elevated">
+              <th class="px-3 py-2 text-left">
+                <input type="checkbox"
+                       class="rounded border-border-weak bg-bg-base"
+                       x-ref="selectAll"
+                       @change="
+                         document.querySelectorAll('input[name=tag_ids]').forEach(cb => {
+                           cb.checked = $el.checked;
+                         });
+                         selectedCount = $el.checked ? {{ discovered_tags | length }} : 0;
+                       ">
+              </th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Adres</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Veri Tipi</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Son Değer</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Birim</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Stabilite</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tag ID</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border-weak">
+            {% for tag in discovered_tags %}
+            <tr class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2">
+                <input type="checkbox" name="tag_ids" value="{{ tag.tag_id }}"
+                       class="rounded border-border-weak bg-bg-base"
+                       @change="
+                         selectedCount = document.querySelectorAll('input[name=tag_ids]:checked').length;
+                         $refs.selectAll.checked = selectedCount === {{ discovered_tags | length }};
+                       ">
+              </td>
+              <td class="px-3 py-2 text-cell text-text-primary font-mono text-small">
+                {{ 40001 + tag.register_address }}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-secondary text-small">
+                {{ tag.register_type }}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-primary font-mono text-small">
+                {% if readings and tag.tag_id in readings %}
+                  {{ '%.2f' | format(readings[tag.tag_id].value) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-secondary">{{ tag.unit or '—' }}</td>
+              <td class="px-3 py-2 text-cell">
+                {# stability_note tag'in name alanındaki parantez içinden veya byte_order'dan çıkarılabilir #}
+                {{ status_badge('Discovered', 'info') }}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-disabled text-small font-mono">
+                {{ tag.tag_id }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </form>
+
+  {% else %}
+    <div class="bg-bg-surface border border-border-weak rounded-lg px-3 py-6 text-center text-cell text-text-disabled">
+      Bu profil için keşfedilmiş tag bulunmuyor. Önce bir scan çalıştırın.
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -4,7 +4,7 @@ Bu dosyayı her oturumun başında oku ve içindeki kurallara uy. Bu kurallar ta
 
 ## Proje hakkında
 
-Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sensör verisi okur, ML ile anomali tespit eder, alarm üretir. Lokal çalışır, sadece okur (asla yazmaz). Detaylı bilgi için `docs/brief_v1.2.md` dosyasını oku.
+Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sensör verisi okur, ML ile anomali tespit eder, alarm üretir. Lokal çalışır, sadece okur (asla yazmaz). Detaylı bilgi için `docs/brief_v1.4.md` dosyasını oku.
 
 ## Değişmez kurallar
 

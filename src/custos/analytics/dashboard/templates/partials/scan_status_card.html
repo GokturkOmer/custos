@@ -1,0 +1,73 @@
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{# HTMX partial — scan durumu kartı. outerHTML ile kendini yeniler. #}
+<div id="scan-status-card"
+     hx-get="/dashboard/connections/{{ profile.id }}/scan-status"
+     hx-trigger="{{ 'every 2s' if profile.status == 'scanning' else 'none' }}"
+     hx-swap="outerHTML">
+  <div class="bg-bg-surface border border-border-weak rounded-lg p-5 space-y-4">
+    {# Profil bilgileri #}
+    <div class="grid grid-cols-2 gap-4 text-small">
+      <div>
+        <span class="text-text-secondary">Host:</span>
+        <span class="text-text-primary font-mono ml-1">{{ profile.host }}:{{ profile.port }}</span>
+      </div>
+      <div>
+        <span class="text-text-secondary">Unit ID Aralığı:</span>
+        <span class="text-text-primary ml-1">{{ profile.unit_id_start }}–{{ profile.unit_id_end }}</span>
+      </div>
+    </div>
+
+    {# Status #}
+    <div class="flex items-center gap-3">
+      <span class="text-small text-text-secondary">Durum:</span>
+      {% if profile.status == 'scanning' %}
+        {{ status_badge('Scanning...', 'info') }}
+        <span class="text-small text-text-disabled animate-pulse">Tarama devam ediyor...</span>
+      {% elif profile.status == 'completed' %}
+        {{ status_badge('Completed', 'ok') }}
+        <span class="text-small text-text-secondary">Tarama tamamlandı.</span>
+      {% elif profile.status == 'error' %}
+        {{ status_badge('Error', 'crit') }}
+        <span class="text-small text-text-secondary">Tarama sırasında hata oluştu.</span>
+      {% else %}
+        {{ status_badge('Idle', 'neutral') }}
+        <span class="text-small text-text-secondary">Henüz tarama yapılmadı.</span>
+      {% endif %}
+    </div>
+
+    {# Latency bilgisi #}
+    {% if profile.slave_latency_avg_ms is not none %}
+    <div class="text-small text-text-secondary">
+      Latency:
+      <span class="text-text-primary">
+        min {{ '%.1f' | format(profile.slave_latency_min_ms) }}ms /
+        avg {{ '%.1f' | format(profile.slave_latency_avg_ms) }}ms /
+        max {{ '%.1f' | format(profile.slave_latency_max_ms) }}ms
+      </span>
+    </div>
+    {% endif %}
+
+    {# Aksiyonlar #}
+    <div class="flex items-center gap-3 pt-2">
+      {% if profile.status == 'completed' %}
+        <a href="/dashboard/connections/{{ profile.id }}/results"
+           class="px-4 py-2 text-body font-medium bg-accent-primary text-white rounded-md
+                  hover:bg-accent-primary/90 transition-colors">
+          Sonuçları Görüntüle
+        </a>
+      {% endif %}
+      {% if profile.status != 'scanning' %}
+        <form method="post" action="/dashboard/connections/{{ profile.id }}/scan" class="inline">
+          <button type="submit"
+                  class="px-4 py-2 text-body font-medium text-text-secondary
+                         bg-bg-elevated border border-border-weak rounded-md
+                         hover:text-text-primary hover:border-border-medium transition-colors">
+            {{ 'Yeniden Tara' if profile.status == 'completed' else 'Scan Başlat' }}
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>

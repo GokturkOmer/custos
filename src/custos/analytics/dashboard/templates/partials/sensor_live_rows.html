@@ -1,0 +1,65 @@
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{# HTMX partial — sensors tablosunun tbody içeriği #}
+{% if tags %}
+  {% for tag in tags %}
+  <tr class="hover:bg-bg-elevated transition-colors">
+    <td class="px-3 py-2 text-cell text-text-primary font-mono text-small">{{ tag.tag_id }}</td>
+    <td class="px-3 py-2 text-cell text-text-primary">{{ tag.name }}</td>
+    <td class="px-3 py-2 text-cell text-text-secondary text-small">
+      {{ tag.modbus_host }}:{{ tag.modbus_port }} / {{ 40001 + tag.register_address }}
+    </td>
+    <td class="px-3 py-2 text-cell text-text-secondary">{{ tag.unit or '—' }}</td>
+    <td class="px-3 py-2 text-cell text-text-secondary text-small">
+      {% if tag.polling_preset == 'custom' %}
+        {{ tag.polling_interval_ms }}ms
+      {% else %}
+        {{ tag.polling_preset | capitalize }}
+      {% endif %}
+    </td>
+    <td class="px-3 py-2 text-cell">
+      {% if tag.status == 'active' %}
+        {{ status_badge('Active', 'ok') }}
+      {% elif tag.status == 'ignored' %}
+        {{ status_badge('Ignored', 'neutral') }}
+      {% elif tag.status == 'discovered' %}
+        {{ status_badge('Discovered', 'info') }}
+      {% else %}
+        {{ status_badge(tag.status, 'neutral') }}
+      {% endif %}
+    </td>
+    <td class="px-3 py-2 text-cell text-text-primary font-mono text-small">
+      {% if readings and tag.tag_id in readings %}
+        {{ '%.2f' | format(readings[tag.tag_id].value) }}
+      {% else %}
+        <span class="text-text-disabled">—</span>
+      {% endif %}
+    </td>
+    <td class="px-3 py-2 text-cell">
+      <div class="flex items-center gap-1">
+        <a href="/dashboard/sensors/{{ tag.tag_id }}/edit"
+           class="p-1 text-text-secondary hover:text-text-primary transition-colors"
+           title="Düzenle">
+          {{ icon_inline('edit', class='w-4 h-4') }}
+        </a>
+        <form method="post" action="/dashboard/sensors/{{ tag.tag_id }}/delete"
+              onsubmit="return confirm('Bu tag silinecek. Emin misiniz?');"
+              class="inline">
+          <button type="submit"
+                  class="p-1 text-text-secondary hover:text-status-crit transition-colors"
+                  title="Sil">
+            {{ icon_inline('trash-2', class='w-4 h-4') }}
+          </button>
+        </form>
+      </div>
+    </td>
+  </tr>
+  {% endfor %}
+{% else %}
+  <tr>
+    <td colspan="8" class="px-3 py-6 text-center text-cell text-text-disabled">
+      Henüz tag tanımlanmamış. Yukarıdaki butona tıklayarak yeni tag ekleyebilirsiniz.
+    </td>
+  </tr>
+{% endif %}
