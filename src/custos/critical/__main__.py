@@ -2,36 +2,44 @@
 
 Kullanım: python -m custos.critical
 
-Collector'ı başlatır: sensör konfigürasyonunu yükler,
-veritabanına bağlanır ve Modbus okuma döngüsünü çalıştırır.
+Collector'ı başlatır: veritabanından aktif tag'leri yükler
+ve Modbus okuma döngüsünü çalıştırır.
 """
 
 from __future__ import annotations
 
 import asyncio
 import signal
-from pathlib import Path
+
+import structlog
 
 from custos.critical.collector import ModbusCollector
 from custos.shared.config import settings
 from custos.shared.database import create_database
 from custos.shared.logging import configure_logging
-from custos.shared.sensor_config import load_sensor_configs
+
+logger = structlog.get_logger(logger_name="critical")
 
 
 async def main() -> None:
     """Critical loop ana fonksiyonu."""
     configure_logging(settings.log_level)
 
-    # Sensör konfigürasyonunu yükle
-    sensors = load_sensor_configs(Path("config/sensors.toml"))
-
     # Veritabanı bağlantısı
     database = create_database(settings)
     await database.connect()
 
+    # Aktif tag'leri DB'den yükle
+    tags = await database.list_tags(status="active")
+    if not tags:
+        await logger.awarning("Aktif tag bulunamadı — collector başlatılmıyor")
+        await database.close()
+        return
+
+    await logger.ainfo("Tag'ler yüklendi", tag_sayısı=len(tags))
+
     # Collector oluştur
-    collector = ModbusCollector(sensors=sensors, database=database)
+    collector = ModbusCollector(tags=tags, database=database)
 
     # Signal handler kur
     loop = asyncio.get_running_loop()

@@ -1,6 +1,6 @@
 """Modbus Collector modülü.
 
-Sensörlerden Modbus TCP üzerinden veri okur ve veritabanına
+Tag'lerden Modbus TCP üzerinden veri okur ve veritabanına
 batch halinde yazar. Critical loop'un ana bileşeni.
 
 Mimari kural: Bu modül SADECE pymodbus ve abstract DB arayüzünü
@@ -17,25 +17,24 @@ from typing import Any
 import structlog
 from pymodbus.client import AsyncModbusTcpClient
 
-from custos.shared.database import DatabaseInterface, RawReading
-from custos.shared.sensor_config import SensorConfig
+from custos.shared.database import DatabaseInterface, TagReading, TagRecord
 
 logger = structlog.get_logger(logger_name="collector")
 
 
 class ModbusCollector:
-    """Modbus üzerinden sensör verisi okuyan ve DB'ye yazan collector.
+    """Modbus üzerinden tag verisi okuyan ve DB'ye yazan collector.
 
-    Her okuma döngüsünde tüm sensörleri okur, RawReading listesi oluşturur
+    Her okuma döngüsünde tüm tag'leri okur, TagReading listesi oluşturur
     ve tek batch halinde veritabanına yazar.
     """
 
     def __init__(
         self,
-        sensors: list[SensorConfig],
+        tags: list[TagRecord],
         database: DatabaseInterface,
     ) -> None:
-        self._sensors = sensors
+        self._tags = tags
         self._database = database
         self._clients: dict[tuple[str, int], AsyncModbusTcpClient] = {}
         self._shutdown_event = asyncio.Event()
@@ -73,78 +72,78 @@ class ModbusCollector:
             )
         return connected
 
-    async def _read_sensor(self, sensor: SensorConfig) -> RawReading:
-        """Tek bir sensörü okur ve RawReading döndürür.
+    async def _read_tag(self, tag: TagRecord) -> TagReading:
+        """Tek bir tag'i okur ve TagReading döndürür.
 
         Okuma hatası durumunda quality_flag=1 ile değer 0.0 döndürür.
         """
         now = datetime.now(UTC)
-        client = await self._get_or_create_client(sensor.modbus_host, sensor.modbus_port)
+        client = await self._get_or_create_client(tag.modbus_host, tag.modbus_port)
 
-        if not await self._ensure_connected(client, sensor.modbus_host, sensor.modbus_port):
+        if not await self._ensure_connected(client, tag.modbus_host, tag.modbus_port):
             await logger.awarning(
-                "Sensör okunamadı: bağlantı yok",
-                sensor_id=sensor.id,
+                "Tag okunamadı: bağlantı yok",
+                tag_id=tag.tag_id,
             )
-            return RawReading(
+            return TagReading(
                 timestamp=now,
-                sensor_id=sensor.id,
+                tag_id=tag.tag_id,
                 value=0.0,
                 quality_flag=1,
             )
 
         try:
             response: Any = await client.read_holding_registers(
-                sensor.register_address,
+                tag.register_address,
                 count=1,
-                device_id=sensor.unit_id,
+                device_id=tag.unit_id,
             )
             if response.isError():
                 await logger.awarning(
-                    "Sensör okuma hatası",
-                    sensor_id=sensor.id,
+                    "Tag okuma hatası",
+                    tag_id=tag.tag_id,
                     hata=str(response),
                 )
-                return RawReading(
+                return TagReading(
                     timestamp=now,
-                    sensor_id=sensor.id,
+                    tag_id=tag.tag_id,
                     value=0.0,
                     quality_flag=1,
                 )
 
             raw_value: int = response.registers[0]
-            scaled_value = raw_value * sensor.scale_factor
+            scaled_value = raw_value * tag.gain + tag.offset
 
-            return RawReading(
+            return TagReading(
                 timestamp=now,
-                sensor_id=sensor.id,
+                tag_id=tag.tag_id,
                 value=scaled_value,
                 quality_flag=0,
             )
 
         except Exception:
             await logger.aerror(
-                "Sensör okuma exception",
-                sensor_id=sensor.id,
+                "Tag okuma exception",
+                tag_id=tag.tag_id,
                 exc_info=True,
             )
-            return RawReading(
+            return TagReading(
                 timestamp=now,
-                sensor_id=sensor.id,
+                tag_id=tag.tag_id,
                 value=0.0,
                 quality_flag=1,
             )
 
     async def _run_cycle(self) -> None:
-        """Tek bir okuma döngüsü: tüm sensörleri oku, batch yaz."""
-        readings: list[RawReading] = []
-        for sensor in self._sensors:
-            reading = await self._read_sensor(sensor)
+        """Tek bir okuma döngüsü: tüm tag'leri oku, batch yaz."""
+        readings: list[TagReading] = []
+        for tag in self._tags:
+            reading = await self._read_tag(tag)
             readings.append(reading)
 
         # Batch yazma
         try:
-            await self._database.insert_raw_readings_batch(readings)
+            await self._database.insert_tag_readings_batch(readings)
             ok_count = sum(1 for r in readings if r.quality_flag == 0)
             fail_count = len(readings) - ok_count
             await logger.ainfo(
@@ -163,7 +162,7 @@ class ModbusCollector:
         """Collector'ı başlatır. Sonsuz döngüde çalışır, shutdown ile durur."""
         await logger.ainfo(
             "Collector başlatılıyor",
-            sensör_sayısı=len(self._sensors),
+            tag_sayısı=len(self._tags),
         )
 
         while not self._shutdown_event.is_set():

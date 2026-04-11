@@ -1,0 +1,221 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}{{ 'Düzenle: ' + tag.name if edit_mode else 'Yeni Tag Ekle' }} — Custos{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl space-y-4">
+  {# Başlık + Geri butonu #}
+  <div class="flex items-center gap-3">
+    <a href="/dashboard/sensors"
+       class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+       title="Geri">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <h1 class="text-heading text-text-primary font-semibold">
+      {{ 'Düzenle: ' + tag.name if edit_mode else 'Yeni Tag Ekle' }}
+    </h1>
+  </div>
+
+  {# Form #}
+  <form method="post"
+        action="{{ '/dashboard/sensors/' + tag.tag_id + '/edit' if edit_mode else '/dashboard/sensors' }}"
+        class="bg-bg-surface border border-border-weak rounded-lg p-5 space-y-5">
+
+    {# Tag ID + İsim #}
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label for="tag_id" class="block text-small font-medium text-text-secondary mb-1">Tag ID</label>
+        <input type="text" id="tag_id" name="tag_id"
+               value="{{ tag.tag_id if tag else '' }}"
+               placeholder="Tag_40001"
+               {{ 'readonly' if edit_mode }}
+               class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                      text-text-primary placeholder-text-disabled
+                      focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary
+                      {{ 'bg-bg-elevated text-text-disabled cursor-not-allowed' if edit_mode }}"
+               required>
+      </div>
+      <div>
+        <label for="name" class="block text-small font-medium text-text-secondary mb-1">İsim</label>
+        <input type="text" id="name" name="name"
+               value="{{ tag.name if tag else '' }}"
+               placeholder="Kazan Çıkış Sıcaklığı"
+               class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                      text-text-primary placeholder-text-disabled
+                      focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+               required>
+      </div>
+    </div>
+
+    {# Modbus Bağlantı #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Modbus Bağlantı</legend>
+      <div class="grid grid-cols-3 gap-4">
+        <div>
+          <label for="modbus_host" class="block text-small font-medium text-text-secondary mb-1">Host</label>
+          <input type="text" id="modbus_host" name="modbus_host"
+                 value="{{ tag.modbus_host if tag else '' }}"
+                 placeholder="192.168.1.10"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary placeholder-text-disabled
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                 required>
+        </div>
+        <div>
+          <label for="modbus_port" class="block text-small font-medium text-text-secondary mb-1">Port</label>
+          <input type="number" id="modbus_port" name="modbus_port"
+                 value="{{ tag.modbus_port if tag else 502 }}"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+        <div>
+          <label for="unit_id" class="block text-small font-medium text-text-secondary mb-1">Unit ID</label>
+          <input type="number" id="unit_id" name="unit_id"
+                 value="{{ tag.unit_id if tag else 1 }}"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+      </div>
+    </fieldset>
+
+    {# Register Ayarları #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Register</legend>
+      <div class="grid grid-cols-3 gap-4">
+        <div>
+          <label for="register_address" class="block text-small font-medium text-text-secondary mb-1">Adres</label>
+          <input type="number" id="register_address" name="register_address"
+                 value="{{ tag.register_address if tag else '' }}"
+                 placeholder="40001"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary placeholder-text-disabled
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                 required>
+        </div>
+        <div>
+          <label for="register_type" class="block text-small font-medium text-text-secondary mb-1">Tip</label>
+          <select id="register_type" name="register_type"
+                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                         text-text-primary
+                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+            {% set rt = tag.register_type if tag else 'uint16' %}
+            <option value="uint16" {{ 'selected' if rt == 'uint16' }}>uint16</option>
+            <option value="int16" {{ 'selected' if rt == 'int16' }}>int16</option>
+            <option value="uint32" {{ 'selected' if rt == 'uint32' }}>uint32</option>
+            <option value="int32" {{ 'selected' if rt == 'int32' }}>int32</option>
+            <option value="float32" {{ 'selected' if rt == 'float32' }}>float32</option>
+          </select>
+        </div>
+        <div>
+          <label for="byte_order" class="block text-small font-medium text-text-secondary mb-1">Byte Order</label>
+          <select id="byte_order" name="byte_order"
+                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                         text-text-primary
+                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+            {% set bo = tag.byte_order if tag else 'big' %}
+            <option value="big" {{ 'selected' if bo == 'big' }}>Big Endian</option>
+            <option value="little" {{ 'selected' if bo == 'little' }}>Little Endian</option>
+            <option value="big_swap" {{ 'selected' if bo == 'big_swap' }}>Big Swap</option>
+            <option value="little_swap" {{ 'selected' if bo == 'little_swap' }}>Little Swap</option>
+          </select>
+        </div>
+      </div>
+    </fieldset>
+
+    {# Scaling #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Scaling (değer = raw × gain + offset)</legend>
+      <div class="grid grid-cols-3 gap-4">
+        <div>
+          <label for="gain" class="block text-small font-medium text-text-secondary mb-1">Gain</label>
+          <input type="number" id="gain" name="gain" step="any"
+                 value="{{ tag.gain if tag else 1.0 }}"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+        <div>
+          <label for="offset" class="block text-small font-medium text-text-secondary mb-1">Offset</label>
+          <input type="number" id="offset" name="offset" step="any"
+                 value="{{ tag.offset if tag else 0.0 }}"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+        <div>
+          <label for="unit" class="block text-small font-medium text-text-secondary mb-1">Birim</label>
+          <input type="text" id="unit" name="unit"
+                 value="{{ tag.unit if tag else '' }}"
+                 placeholder="°C, bar, RPM..."
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary placeholder-text-disabled
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+      </div>
+    </fieldset>
+
+    {# Polling #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3"
+              x-data="{ preset: '{{ tag.polling_preset if tag else 'slow' }}' }">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Polling</legend>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label for="polling_preset" class="block text-small font-medium text-text-secondary mb-1">Preset</label>
+          <select id="polling_preset" name="polling_preset"
+                  x-model="preset"
+                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                         text-text-primary
+                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+            <option value="slow">Slow (10s)</option>
+            <option value="normal">Normal (1s)</option>
+            <option value="fast">Fast (100ms)</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div x-show="preset === 'custom'" x-transition>
+          <label for="polling_interval_ms" class="block text-small font-medium text-text-secondary mb-1">Interval (ms)</label>
+          <input type="number" id="polling_interval_ms" name="polling_interval_ms"
+                 value="{{ tag.polling_interval_ms if tag else 10000 }}"
+                 min="50"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+      </div>
+    </fieldset>
+
+    {# Status (sadece edit modunda) #}
+    {% if edit_mode %}
+    <div>
+      <label for="status" class="block text-small font-medium text-text-secondary mb-1">Status</label>
+      <select id="status" name="status"
+              class="w-full max-w-xs px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                     text-text-primary
+                     focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        <option value="active" {{ 'selected' if tag.status == 'active' }}>Active</option>
+        <option value="ignored" {{ 'selected' if tag.status == 'ignored' }}>Ignored</option>
+        <option value="discovered" {{ 'selected' if tag.status == 'discovered' }}>Discovered</option>
+      </select>
+    </div>
+    {% endif %}
+
+    {# Submit #}
+    <div class="flex items-center gap-3 pt-2">
+      <button type="submit"
+              class="px-4 py-2 text-body font-medium bg-accent-primary text-white rounded-md
+                     hover:bg-accent-primary/90 transition-colors">
+        {{ 'Güncelle' if edit_mode else 'Kaydet' }}
+      </button>
+      <a href="/dashboard/sensors"
+         class="px-4 py-2 text-body font-medium text-text-secondary
+                bg-bg-elevated border border-border-weak rounded-md
+                hover:text-text-primary hover:border-border-medium transition-colors">
+        İptal
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -1,5 +1,12 @@
 """Sensör konfigürasyon yükleyici.
 
+.. deprecated::
+    Bu modül Aşama 3 (walking skeleton) için yazılmıştır.
+    Aşama 4 F2 ile birlikte Collector artık tag tanımlarını
+    veritabanındaki ``tags`` tablosundan okumaktadır.
+    Yeni kod ``shared.database.TagRecord`` kullanmalıdır.
+    Bu dosya geriye dönük uyumluluk için korunmaktadır.
+
 TOML dosyasından sensör tanımlarını okur ve tip güvenli
 pydantic modelleri ile doğrular.
 """
