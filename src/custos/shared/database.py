@@ -226,6 +226,17 @@ class PushSubscription:
     updated_at: datetime | None = None
 
 
+@dataclass
+class OverviewChartTag:
+    """Overview grafik tag konfigurasyonu — hangi tag hangi grafikte gosterilecek."""
+
+    chart_key: str
+    tag_id: str
+    sort_order: int = 0
+    id: int | None = None
+    created_at: datetime | None = None
+
+
 class DatabaseInterface(abc.ABC):
     """Veritabanı erişim arayüzü.
 
@@ -582,6 +593,23 @@ class DatabaseInterface(abc.ABC):
         updates: dict[str, object],
     ) -> PushSubscription | None:
         """Push subscription ayarlarını günceller. Bulunamazsa None döndürür."""
+
+    # --- Overview Chart Tags ---
+
+    @abc.abstractmethod
+    async def list_overview_chart_tags(
+        self,
+        chart_key: str | None = None,
+    ) -> list[OverviewChartTag]:
+        """Overview grafik tag konfigurasyonunu dondurur. chart_key verilirse filtreler."""
+
+    @abc.abstractmethod
+    async def replace_overview_chart_tags(
+        self,
+        chart_key: str,
+        tag_ids: list[str],
+    ) -> list[OverviewChartTag]:
+        """Bir grafik slotunun tag listesini yenisiyle degistirir (tek transaction)."""
 
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
@@ -1934,6 +1962,63 @@ class TimescaleDBDatabase(DatabaseInterface):
         if row is None:
             return None
         return _row_to_push_subscription(row)
+
+
+    # --- Overview Chart Tags implementasyonlari ---
+
+    async def list_overview_chart_tags(
+        self,
+        chart_key: str | None = None,
+    ) -> list[OverviewChartTag]:
+        """Overview grafik tag konfigurasyonunu dondurur."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            if chart_key is not None:
+                rows = await conn.fetch(
+                    "SELECT * FROM overview_chart_tags "
+                    "WHERE chart_key = $1 ORDER BY sort_order",
+                    chart_key,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM overview_chart_tags ORDER BY chart_key, sort_order",
+                )
+        return [_row_to_overview_chart_tag(row) for row in rows]
+
+    async def replace_overview_chart_tags(
+        self,
+        chart_key: str,
+        tag_ids: list[str],
+    ) -> list[OverviewChartTag]:
+        """Bir grafik slotunun tag listesini yenisiyle degistirir (tek transaction)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM overview_chart_tags WHERE chart_key = $1",
+                    chart_key,
+                )
+                result: list[OverviewChartTag] = []
+                for idx, tid in enumerate(tag_ids):
+                    row = await conn.fetchrow(
+                        "INSERT INTO overview_chart_tags (chart_key, tag_id, sort_order) "
+                        "VALUES ($1, $2, $3) RETURNING *",
+                        chart_key, tid, idx,
+                    )
+                    assert row is not None
+                    result.append(_row_to_overview_chart_tag(row))
+                return result
+
+
+def _row_to_overview_chart_tag(row: asyncpg.Record) -> OverviewChartTag:
+    """asyncpg satirini OverviewChartTag'e donusturur."""
+    return OverviewChartTag(
+        id=row["id"],
+        chart_key=row["chart_key"],
+        tag_id=row["tag_id"],
+        sort_order=row["sort_order"],
+        created_at=row["created_at"],
+    )
 
 
 def create_database(settings: Settings) -> DatabaseInterface:

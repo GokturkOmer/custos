@@ -18,9 +18,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from custos.analytics.dashboard.fake_data import (
-    get_overview_charts,
-)
 from custos.analytics.push_sender import send_push_notifications
 from custos.analytics.scanner import ModbusScanner
 from custos.shared.database import (
@@ -106,10 +103,16 @@ async def dashboard_root() -> RedirectResponse:
 @router.get("/overview", response_class=HTMLResponse)
 async def overview(request: Request) -> HTMLResponse:
     """Overview sayfası — ana kontrol paneli."""
-    # Grafik verileri (hâlâ sahte — F7'de tam gerçekle değişecek)
-    charts = get_overview_charts()
+    # Bos grafik yapisi — tag yoksa veya veri yoksa kullanilir
+    _empty_chart: dict[str, Any] = {"timestamps": [], "series": [], "labels": []}
+    charts: dict[str, Any] = {
+        "temp_chart": _empty_chart,
+        "pressure_chart": _empty_chart,
+        "flow_vibration_chart": _empty_chart,
+        "rpm_chart": _empty_chart,
+    }
 
-    # Gerçek alarm event'lerini çek
+    # Gercek alarm event'lerini cek
     alarms: list[dict[str, Any]] = []
     active_alarm_count = 0
     total_tags = 0
@@ -118,44 +121,76 @@ async def overview(request: Request) -> HTMLResponse:
     db_instance: DatabaseInterface | None = getattr(request.app.state, "db", None)
     if db_instance is not None:
         recent_events = await db_instance.list_alarm_events(limit=10)
-        # Aktif alarm sayısı
+        # Aktif alarm sayisi
         triggered = await db_instance.list_alarm_events(state="triggered", limit=1000)
         acked = await db_instance.list_alarm_events(state="acknowledged", limit=1000)
         active_alarm_count = len(triggered) + len(acked)
 
-        # Gerçek tag ve asset sayıları
+        # Gercek tag ve asset sayilari
         all_tags = await db_instance.list_tags()
         total_tags = len(all_tags)
         all_instances = await db_instance.list_asset_instances()
         total_assets = len(all_instances)
 
-        # Son 24 saatteki anomali sayısı
+        # Son 24 saatteki anomali sayisi
         since_24h = datetime.now(UTC) - _timedelta_24h
         anomaly_count_24h = await db_instance.count_anomalies(since=since_24h)
 
-        # Gerçek tag verisiyle ilk grafik — son 30 dakika
-        if all_tags:
-            real_tag_ids = [t.tag_id for t in all_tags[:3]]
-            real_start = datetime.now(UTC) - _timedelta_30m
-            real_end = datetime.now(UTC)
-            real_series: list[list[float]] = []
-            real_labels: list[str] = []
-            real_timestamps: list[int] = []
-            for tid in real_tag_ids:
-                readings = await db_instance.query_tag_readings(tid, real_start, real_end)
+        # Grafikleri doldur — once DB'den konfigurasyon cek, yoksa otomatik dagit
+        chart_keys = ["temp_chart", "pressure_chart", "flow_vibration_chart", "rpm_chart"]
+        all_chart_tags = await db_instance.list_overview_chart_tags()
+        config_map: dict[str, list[str]] = {k: [] for k in chart_keys}
+        for ct in all_chart_tags:
+            if ct.chart_key in config_map:
+                config_map[ct.chart_key].append(ct.tag_id)
+
+        has_config = any(len(v) > 0 for v in config_map.values())
+
+        # Konfigurasyon yoksa fallback: taglari sirayla dagit
+        if not has_config and all_tags:
+            tag_map = {t.tag_id: t for t in all_tags}
+            slices = [3, 2, 2]
+            idx = 0
+            for ci, key in enumerate(chart_keys):
+                if ci < len(slices):
+                    group = all_tags[idx:idx + slices[ci]]
+                    idx += slices[ci]
+                else:
+                    group = all_tags[idx:]
+                config_map[key] = [t.tag_id for t in group]
+
+        # Her grafik icin gercek verileri cek
+        tag_map = {t.tag_id: t for t in all_tags}
+        now = datetime.now(UTC)
+        real_start = now - _timedelta_30m
+        for key in chart_keys:
+            tag_ids = config_map[key]
+            if not tag_ids:
+                continue
+            series: list[list[float]] = []
+            labels: list[str] = []
+            timestamps: list[int] = []
+            for tid in tag_ids:
+                readings = await db_instance.query_tag_readings(
+                    tid, real_start, now,
+                )
                 if readings:
-                    real_labels.append(f"{tid}")
-                    real_series.append([r.value for r in readings])
-                    if not real_timestamps:
-                        real_timestamps = [int(r.timestamp.timestamp()) for r in readings]
-            if real_timestamps and real_series:
-                charts["temp_chart"] = {
-                    "timestamps": real_timestamps,
-                    "series": real_series,
-                    "labels": real_labels,
+                    tag_rec = tag_map.get(tid)
+                    unit_suffix = f" ({tag_rec.unit})" if tag_rec and tag_rec.unit else ""
+                    labels.append(f"{tid}{unit_suffix}")
+                    series.append([r.value for r in readings])
+                    if not timestamps:
+                        timestamps = [
+                            int(r.timestamp.timestamp()) for r in readings
+                        ]
+            if timestamps and series:
+                charts[key] = {
+                    "timestamps": timestamps,
+                    "series": series,
+                    "labels": labels,
                 }
 
-        # Threshold adlarını çek
+        # Threshold adlarini cek
         thr_ids = {e.threshold_id for e in recent_events}
         thr_map: dict[int, Threshold] = {}
         for thr_id in thr_ids:
@@ -222,6 +257,59 @@ async def overview(request: Request) -> HTMLResponse:
         alarms=alarms,
     )
     return templates.TemplateResponse(request, "pages/overview.html", ctx)
+
+
+# --- Overview Chart Config ---
+
+# Gecerli grafik slotlari
+_CHART_KEYS: frozenset[str] = frozenset({
+    "temp_chart", "pressure_chart", "flow_vibration_chart", "rpm_chart",
+})
+
+
+@router.get("/overview/chart-config/{chart_key}", response_class=HTMLResponse)
+async def chart_config_form(request: Request, chart_key: str) -> HTMLResponse:
+    """Grafik tag secim formunu HTMX partial olarak dondurur."""
+    if chart_key not in _CHART_KEYS:
+        raise HTTPException(status_code=404, detail="Gecersiz grafik slotu")
+
+    db = _get_db(request)
+    all_tags = await db.list_tags(status="active")
+    chart_tags = await db.list_overview_chart_tags(chart_key)
+    selected_ids = {ct.tag_id for ct in chart_tags}
+
+    ctx = {
+        "request": request,
+        "chart_key": chart_key,
+        "all_tags": all_tags,
+        "selected_ids": selected_ids,
+    }
+    return templates.TemplateResponse(
+        request, "partials/chart_tag_selector.html", ctx,
+    )
+
+
+@router.post("/overview/chart-config/{chart_key}", response_class=HTMLResponse)
+async def chart_config_save(request: Request, chart_key: str) -> RedirectResponse:
+    """Grafik tag secimini kaydeder ve overview'a yonlendirir."""
+    if chart_key not in _CHART_KEYS:
+        raise HTTPException(status_code=404, detail="Gecersiz grafik slotu")
+
+    db = _get_db(request)
+    form = await request.form()
+    # Checkbox'lardan secili tag_id'leri al
+    tag_ids = form.getlist("tag_ids")
+
+    await db.replace_overview_chart_tags(chart_key, [str(t) for t in tag_ids])
+
+    # Audit log
+    await db.insert_audit_log(AuditLogEntry(
+        category="chart_config",
+        action="update",
+        detail=f"{chart_key}: {len(tag_ids)} tag secildi",
+    ))
+
+    return RedirectResponse(url="/dashboard/overview", status_code=303)
 
 
 @router.get("/_showcase", response_class=HTMLResponse)

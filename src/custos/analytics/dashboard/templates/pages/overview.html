@@ -17,14 +17,14 @@
 
   {# Satır 2: Sıcaklık ve Basınç Grafikleri #}
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-    {{ chart_panel('Temperature Trends (Last 30 min)', 'temp_chart', height=220) }}
-    {{ chart_panel('Pressure Trends (Last 30 min)', 'pressure_chart', height=220) }}
+    {{ chart_panel('Temperature Trends (Last 30 min)', 'temp_chart', height=220, editable=true) }}
+    {{ chart_panel('Pressure Trends (Last 30 min)', 'pressure_chart', height=220, editable=true) }}
   </div>
 
   {# Satır 3: Debi/Titreşim grafiği + Alarm tablosu #}
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
     <div class="lg:col-span-2">
-      {{ chart_panel('Flow & Vibration (Last 1 hour)', 'flow_vibration_chart', height=220) }}
+      {{ chart_panel('Flow & Vibration (Last 1 hour)', 'flow_vibration_chart', height=220, editable=true) }}
     </div>
     <div class="bg-bg-surface rounded-sm border border-border-weak p-4 overflow-hidden">
       <h3 class="text-panel-title text-text-primary mb-3">Recent Alarms</h3>
@@ -55,7 +55,7 @@
 
   {# Satır 4: RPM grafiği (tam genişlik) #}
   <div>
-    {{ chart_panel('RPM Trends (Last 1 hour)', 'rpm_chart', height=180) }}
+    {{ chart_panel('RPM Trends (Last 1 hour)', 'rpm_chart', height=180, editable=true) }}
   </div>
 </div>
 {% endblock %}

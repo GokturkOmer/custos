@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     custos_vapid_public_key: str = ""
     custos_vapid_mailto: str = "mailto:admin@custos.local"
 
+    # Sessiz saat hesabı için yerel zaman dilimi (IANA formatı)
+    custos_timezone: str = "Europe/Istanbul"
+
     @property
     def database_url(self) -> str:
         """PostgreSQL bağlantı URL'sini döndürür (client_encoding=utf8 dahil)."""

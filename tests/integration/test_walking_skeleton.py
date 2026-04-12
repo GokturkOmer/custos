@@ -31,31 +31,31 @@ TAG_RANGES: dict[str, tuple[float, float]] = {
 TEST_TAGS: list[TagRecord] = [
     TagRecord(
         tag_id="T001", name="Temperature", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=0,
+        modbus_port=5030, unit_id=1, register_address=0,
         register_type="uint16", gain=1.0, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
         tag_id="P001", name="Pressure", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=1,
+        modbus_port=5030, unit_id=1, register_address=1,
         register_type="uint16", gain=0.1, offset=0.0, unit="bar",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
         tag_id="F001", name="Flow", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=2,
+        modbus_port=5030, unit_id=1, register_address=2,
         register_type="uint16", gain=1.0, offset=0.0, unit="m³/h",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
         tag_id="V001", name="Vibration", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=3,
+        modbus_port=5030, unit_id=1, register_address=3,
         register_type="uint16", gain=0.1, offset=0.0, unit="mm/s",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
         tag_id="R001", name="RPM", modbus_host="127.0.0.1",
-        modbus_port=5020, unit_id=1, register_address=4,
+        modbus_port=5030, unit_id=1, register_address=4,
         register_type="uint16", gain=1.0, offset=0.0, unit="RPM",
         polling_interval_ms=1000, polling_preset="normal",
     ),
@@ -108,7 +108,7 @@ async def test_walking_skeleton() -> None:
             await conn.execute("TRUNCATE tag_readings")
 
         # Simülatörü başlat
-        simulator = ModbusSimulator(host="127.0.0.1", port=5020)
+        simulator = ModbusSimulator(host="127.0.0.1", port=5030)
         sim_task = asyncio.create_task(simulator.start())
 
         # Warm-up: simülatörün hazır olmasını bekle

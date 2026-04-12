@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, time
+from zoneinfo import ZoneInfo
 
 import structlog
 from pywebpush import WebPushException, webpush
 
+from custos.shared.config import settings
 from custos.shared.database import DatabaseInterface, PushSubscription
 from custos.shared.vapid import get_vapid_keys, get_vapid_mailto, is_push_enabled
 
@@ -70,7 +72,9 @@ async def send_push_notifications(
     if not subs:
         return 0
 
-    now_time = datetime.now(UTC).time()
+    # Sessiz saat karsilastirmasi kullanicinin yerel saatinde yapilmali
+    local_tz = ZoneInfo(settings.custos_timezone)
+    now_time = datetime.now(UTC).astimezone(local_tz).time()
     payload = json.dumps({
         "title": title,
         "body": body,

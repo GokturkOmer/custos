@@ -41,3 +41,24 @@ def test_showcase_returns_200_with_dev_mode() -> None:
         assert "Component Showcase" in response.text
     finally:
         os.environ.pop("CUSTOS_DEV_MODE", None)
+
+
+def test_chart_config_invalid_key_returns_404() -> None:
+    """Gecersiz chart_key icin 404 donmeli."""
+    response = client.get("/dashboard/overview/chart-config/invalid_chart")
+    assert response.status_code == 404
+
+
+def test_chart_config_post_invalid_key_returns_404() -> None:
+    """Gecersiz chart_key POST icin 404 donmeli."""
+    response = client.post(
+        "/dashboard/overview/chart-config/invalid_chart",
+        data={"tag_ids": []},
+    )
+    assert response.status_code == 404
+
+
+def test_chart_config_returns_503_or_200() -> None:
+    """chart-config formu DB yoksa 503, varsa 200 donmeli."""
+    response = client.get("/dashboard/overview/chart-config/temp_chart")
+    assert response.status_code in {200, 503}

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import time
 
+import pytest
+
 from custos.analytics.push_sender import _is_quiet_hour, _should_notify
 from custos.shared.database import PushSubscription
 
@@ -90,3 +92,30 @@ def test_should_notify_all_enabled() -> None:
     sub = _make_sub()
     assert _should_notify(sub, "warn", time(12, 0)) is True
     assert _should_notify(sub, "crit", time(12, 0)) is True
+
+
+def test_quiet_hour_timezone_conversion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sessiz saat hesabı kullanıcının yerel saatinde yapılmalı.
+
+    Senaryo: Kullanıcı Istanbul'da (UTC+3), sessiz saat 22:00-07:00 lokal.
+    UTC 20:00 = Istanbul 23:00 → sessiz saatte.
+    UTC 10:00 = Istanbul 13:00 → sessiz saatte değil.
+    """
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    sub = _make_sub(
+        quiet_start=time(22, 0),
+        quiet_end=time(7, 0),
+    )
+
+    # UTC 20:00 → Istanbul 23:00 → sessiz saatte
+    utc_time_in_quiet = datetime(2026, 6, 10, 20, 0, tzinfo=UTC)
+    istanbul_tz = ZoneInfo("Europe/Istanbul")
+    local_time = utc_time_in_quiet.astimezone(istanbul_tz).time()
+    assert _is_quiet_hour(sub, local_time) is True
+
+    # UTC 10:00 → Istanbul 13:00 → sessiz saatte değil
+    utc_time_outside_quiet = datetime(2026, 6, 10, 10, 0, tzinfo=UTC)
+    local_time2 = utc_time_outside_quiet.astimezone(istanbul_tz).time()
+    assert _is_quiet_hour(sub, local_time2) is False

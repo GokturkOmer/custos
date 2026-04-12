@@ -26,6 +26,7 @@ MODELS_DIR = Path("data/models")
 
 async def main(instance_id: int | None, lookback_hours: int) -> int:
     """Ana eğitim fonksiyonu."""
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
     db = create_database(settings)
     await db.connect()
 

@@ -64,9 +64,11 @@ echo "  Bagimliklar yuklendi."
 echo "[6/8] Veritabani olusturuluyor..."
 if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw custos; then
     sudo -u postgres createuser --no-superuser --no-createdb --no-createrole custos 2>/dev/null || true
+    # Varsayilan sifre — kurulumdan sonra .env dosyasindan degistirilmeli!
     sudo -u postgres psql -c "ALTER USER custos WITH PASSWORD 'degistir-bu-bir-ornektir';" 2>/dev/null
     sudo -u postgres createdb --owner=custos custos
     echo "  Veritabani 'custos' olusturuldu."
+    echo "  UYARI: Varsayilan DB sifresi kullanildi. .env dosyasindan degistirin!"
 else
     echo "  Veritabani 'custos' zaten mevcut."
 fi

@@ -1,0 +1,44 @@
+{# HTMX partial — grafik tag secim formu. chart_panel icinde gosterilir. #}
+<div class="bg-bg-elevated border border-border-weak rounded-md p-3 mb-3">
+  <form method="post" action="/dashboard/overview/chart-config/{{ chart_key }}">
+    <div class="text-small text-text-secondary mb-2">Bu grafik icin tag secin:</div>
+
+    {% if all_tags %}
+    <div class="max-h-48 overflow-y-auto space-y-1 mb-3">
+      {% for tag in all_tags %}
+      <label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-bg-surface cursor-pointer text-small">
+        <input type="checkbox"
+               name="tag_ids"
+               value="{{ tag.tag_id }}"
+               {% if tag.tag_id in selected_ids %}checked{% endif %}
+               class="rounded border-border-medium text-accent-primary focus:ring-accent-primary">
+        <span class="text-text-primary font-mono">{{ tag.tag_id }}</span>
+        {% if tag.name and tag.name != tag.tag_id %}
+        <span class="text-text-secondary">— {{ tag.name }}</span>
+        {% endif %}
+        {% if tag.unit %}
+        <span class="text-text-disabled">({{ tag.unit }})</span>
+        {% endif %}
+      </label>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-small text-text-disabled py-2">Aktif tag bulunamadi.</div>
+    {% endif %}
+
+    <div class="flex items-center gap-2">
+      <button type="submit"
+              class="px-3 py-1.5 text-small font-medium bg-accent-primary text-white rounded
+                     hover:bg-accent-primary/90 transition-colors">
+        Kaydet
+      </button>
+      <button type="button"
+              onclick="this.closest('.bg-bg-elevated').remove()"
+              class="px-3 py-1.5 text-small font-medium text-text-secondary
+                     bg-bg-surface border border-border-weak rounded
+                     hover:text-text-primary transition-colors">
+        Iptal
+      </button>
+    </div>
+  </form>
+</div>
