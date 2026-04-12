@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     log_level: str = "INFO"
 
+    # VAPID push bildirim ayarları
+    custos_vapid_private_key: str = ""
+    custos_vapid_public_key: str = ""
+    custos_vapid_mailto: str = "mailto:admin@custos.local"
+
     @property
     def database_url(self) -> str:
         """PostgreSQL bağlantı URL'sini döndürür (client_encoding=utf8 dahil)."""

@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 import structlog
 
+from custos.analytics.push_sender import send_push_notifications
 from custos.shared.database import (
     AlarmEvent,
     AuditLogEntry,
@@ -183,6 +184,24 @@ class ThresholdEngine:
             set_point=threshold.set_point,
             alarm_event_id=created.id,
         )
+
+        # Push bildirim gönder
+        try:
+            await send_push_notifications(
+                db=self._db,
+                title=f"Custos Alarm: {threshold.name}",
+                body=(
+                    f"Tag {threshold.tag_id} = {value:.2f} "
+                    f"(eşik: {threshold.set_point:.2f}, yön: {threshold.direction})"
+                ),
+                severity=threshold.severity,
+            )
+        except Exception:
+            await logger.awarning(
+                "Push bildirim gönderilemedi",
+                threshold_id=tid,
+                exc_info=True,
+            )
 
     async def _handle_no_breach_with_alarm(
         self,

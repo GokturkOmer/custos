@@ -1,0 +1,160 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Settings — Custos{% endblock %}
+
+{% block extra_head %}
+<script src="/static/js/push.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <h1 class="text-heading text-text-primary font-semibold">Settings</h1>
+
+  {# A) Sistem Bilgisi #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Sistem Bilgisi</h2>
+    </div>
+    <div class="p-4">
+      <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+        <div>
+          <dt class="text-small text-text-secondary">Versiyon</dt>
+          <dd class="text-body text-text-primary font-medium">{{ version }}</dd>
+        </div>
+        <div>
+          <dt class="text-small text-text-secondary">Veritabanı</dt>
+          <dd class="text-body font-medium {{ 'text-status-ok' if db_healthy else 'text-status-crit' }}">
+            {{ 'Bağlı' if db_healthy else 'Bağlı değil' }}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-small text-text-secondary">Aktif Tag Sayısı</dt>
+          <dd class="text-body text-text-primary font-medium">{{ tag_count }}</dd>
+        </div>
+        <div>
+          <dt class="text-small text-text-secondary">Aktif Asset Sayısı</dt>
+          <dd class="text-body text-text-primary font-medium">{{ asset_count }}</dd>
+        </div>
+        <div>
+          <dt class="text-small text-text-secondary">Uptime</dt>
+          <dd class="text-body text-text-primary font-medium">{{ uptime }}</dd>
+        </div>
+        <div>
+          <dt class="text-small text-text-secondary">Son KPI Hesaplama</dt>
+          <dd class="text-body text-text-primary font-medium">{{ last_kpi_time }}</dd>
+        </div>
+        <div>
+          <dt class="text-small text-text-secondary">Yüklü Anomali Modeli</dt>
+          <dd class="text-body text-text-primary font-medium">{{ model_count }}</dd>
+        </div>
+      </dl>
+    </div>
+  </div>
+
+  {# B) Bildirim Ayarları #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden"
+       x-data="pushManager()">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Bildirim Ayarları</h2>
+    </div>
+    <div class="p-4 space-y-4">
+      {# Push durumu #}
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-body text-text-primary font-medium">Push Bildirimler</p>
+          <p class="text-small text-text-secondary mt-0.5">
+            <template x-if="!supported">
+              <span>Bu tarayıcı push bildirimleri desteklemiyor</span>
+            </template>
+            <template x-if="supported && !subscribed">
+              <span>Bildirim almak için abone olun</span>
+            </template>
+            <template x-if="supported && subscribed">
+              <span class="text-status-ok">Abone — bildirimler aktif</span>
+            </template>
+          </p>
+        </div>
+        <div>
+          <template x-if="supported && !subscribed">
+            <button @click="subscribe()"
+                    :disabled="loading"
+                    class="px-4 py-1.5 text-small font-medium text-white
+                           bg-accent-primary rounded-md hover:bg-accent-hover
+                           disabled:opacity-50 transition-colors">
+              <span x-show="!loading">Abone Ol</span>
+              <span x-show="loading">Kaydediliyor...</span>
+            </button>
+          </template>
+          <template x-if="supported && subscribed">
+            <button @click="unsubscribe()"
+                    :disabled="loading"
+                    class="px-4 py-1.5 text-small font-medium text-text-secondary
+                           bg-bg-elevated border border-border-weak rounded-md
+                           hover:text-text-primary hover:border-border-medium
+                           disabled:opacity-50 transition-colors">
+              <span x-show="!loading">İptal Et</span>
+              <span x-show="loading">İptal ediliyor...</span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      {# VAPID durumu #}
+      {% if not push_enabled %}
+      <div class="p-3 bg-status-warn/10 border border-status-warn/30 rounded-md">
+        <p class="text-small text-status-warn">
+          {{ icon_inline('alert-triangle', class='w-4 h-4 inline-block mr-1') }}
+          VAPID anahtarları yapılandırılmamış. Push bildirimleri devre dışı.
+          <code class="text-xs">scripts/generate_vapid_keys.py</code> ile üretip
+          <code class="text-xs">.env</code> dosyasına ekleyin.
+        </p>
+      </div>
+      {% endif %}
+
+      {# Hata mesajı #}
+      <template x-if="error">
+        <div class="p-3 bg-status-crit/10 border border-status-crit/30 rounded-md">
+          <p class="text-small text-status-crit" x-text="error"></p>
+        </div>
+      </template>
+
+      {# Abonelik sayısı #}
+      {% if subscription_count > 0 %}
+      <div class="text-small text-text-secondary">
+        {{ subscription_count }} cihaz abone
+      </div>
+      {% endif %}
+
+      {# Test bildirimi #}
+      {% if push_enabled %}
+      <div class="pt-2 border-t border-border-weak">
+        <button @click="sendTest()"
+                class="px-4 py-1.5 text-small font-medium text-text-secondary
+                       bg-bg-elevated border border-border-weak rounded-md
+                       hover:text-text-primary hover:border-border-medium transition-colors">
+          {{ icon_inline('bell', class='w-4 h-4 inline-block mr-1') }}
+          Test Bildirimi Gönder
+        </button>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# C) Bağlantı Profilleri (kısa yol) #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Bağlantı Profilleri</h2>
+    </div>
+    <div class="p-4">
+      <a href="/dashboard/connections"
+         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                bg-bg-elevated text-text-secondary border border-border-weak rounded-md
+                hover:text-text-primary hover:border-border-medium transition-colors">
+        {{ icon_inline('cpu', class='w-4 h-4') }}
+        Bağlantı Profillerini Yönet
+      </a>
+    </div>
+  </div>
+</div>
+{% endblock %}

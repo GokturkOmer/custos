@@ -19,6 +19,7 @@ dependencies = [
     "python-multipart",
     "scikit-learn",
     "numpy",
+    "pywebpush",
 ]
 
 [project.optional-dependencies]
@@ -69,6 +70,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "numpy.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pywebpush.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 
 import asyncpg
 import structlog
@@ -208,6 +208,22 @@ class AnomalyScore:
     feature_vector: str = ""
     id: int | None = None
     created_at: datetime | None = None
+
+
+@dataclass
+class PushSubscription:
+    """Web Push bildirim aboneliği — push_subscriptions tablosunun Python temsili."""
+
+    endpoint: str
+    p256dh: str
+    auth: str
+    notify_warn: bool = True
+    notify_crit: bool = True
+    quiet_start: time | None = None
+    quiet_end: time | None = None
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class DatabaseInterface(abc.ABC):
@@ -542,6 +558,31 @@ class DatabaseInterface(abc.ABC):
     ) -> int:
         """Anomali sayısını döndürür. Opsiyonel zaman filtresi."""
 
+    # --- Push Subscriptions ---
+
+    @abc.abstractmethod
+    async def upsert_push_subscription(
+        self,
+        sub: PushSubscription,
+    ) -> PushSubscription:
+        """Push subscription kaydeder veya günceller (endpoint bazlı upsert)."""
+
+    @abc.abstractmethod
+    async def delete_push_subscription(self, endpoint: str) -> bool:
+        """Push subscription siler. Başarılıysa True döndürür."""
+
+    @abc.abstractmethod
+    async def list_push_subscriptions(self) -> list[PushSubscription]:
+        """Tüm push subscription'ları döndürür."""
+
+    @abc.abstractmethod
+    async def update_push_subscription_settings(
+        self,
+        endpoint: str,
+        updates: dict[str, object],
+    ) -> PushSubscription | None:
+        """Push subscription ayarlarını günceller. Bulunamazsa None döndürür."""
+
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
 _ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset({
@@ -763,6 +804,28 @@ def _row_to_anomaly_score(row: asyncpg.Record) -> AnomalyScore:
         is_anomaly=row["is_anomaly"],
         feature_vector=row["feature_vector"],
         created_at=row["created_at"],
+    )
+
+
+# İzin verilen güncelleme alanları — Push Subscription (SQL injection önlemi)
+_ALLOWED_PUSH_SUB_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "notify_warn", "notify_crit", "quiet_start", "quiet_end",
+})
+
+
+def _row_to_push_subscription(row: asyncpg.Record) -> PushSubscription:
+    """asyncpg satırını PushSubscription'a dönüştürür."""
+    return PushSubscription(
+        id=row["id"],
+        endpoint=row["endpoint"],
+        p256dh=row["p256dh"],
+        auth=row["auth"],
+        notify_warn=row["notify_warn"],
+        notify_crit=row["notify_crit"],
+        quiet_start=row["quiet_start"],
+        quiet_end=row["quiet_end"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -1788,6 +1851,89 @@ class TimescaleDBDatabase(DatabaseInterface):
             async with pool.acquire() as conn:
                 count = await conn.fetchval(sql)
         return int(count or 0)
+
+
+    # --- Push Subscriptions implementasyonları ---
+
+    async def upsert_push_subscription(
+        self,
+        sub: PushSubscription,
+    ) -> PushSubscription:
+        """Push subscription kaydeder veya günceller (endpoint bazlı upsert)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO push_subscriptions "
+                "(endpoint, p256dh, auth, notify_warn, notify_crit, "
+                "quiet_start, quiet_end) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7) "
+                "ON CONFLICT (endpoint) DO UPDATE SET "
+                "p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, "
+                "updated_at = NOW() "
+                "RETURNING *",
+                sub.endpoint, sub.p256dh, sub.auth,
+                sub.notify_warn, sub.notify_crit,
+                sub.quiet_start, sub.quiet_end,
+            )
+        assert row is not None
+        return _row_to_push_subscription(row)
+
+    async def delete_push_subscription(self, endpoint: str) -> bool:
+        """Push subscription siler. Başarılıysa True döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM push_subscriptions WHERE endpoint = $1",
+                endpoint,
+            )
+        return str(result) == "DELETE 1"
+
+    async def list_push_subscriptions(self) -> list[PushSubscription]:
+        """Tüm push subscription'ları döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM push_subscriptions ORDER BY created_at DESC"
+            )
+        return [_row_to_push_subscription(row) for row in rows]
+
+    async def update_push_subscription_settings(
+        self,
+        endpoint: str,
+        updates: dict[str, object],
+    ) -> PushSubscription | None:
+        """Push subscription ayarlarını günceller. Bulunamazsa None döndürür."""
+        pool = self._get_pool()
+        filtered = {k: v for k, v in updates.items() if k in _ALLOWED_PUSH_SUB_UPDATE_FIELDS}
+        if not filtered:
+            # Güncelleme yapılacak alan yok — mevcut kaydı döndür
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT * FROM push_subscriptions WHERE endpoint = $1",
+                    endpoint,
+                )
+            if row is None:
+                return None
+            return _row_to_push_subscription(row)
+
+        set_parts: list[str] = []
+        params: list[object] = []
+        for idx, (col, val) in enumerate(filtered.items(), start=1):
+            set_parts.append(f"{col} = ${idx}")
+            params.append(val)
+        idx_endpoint = len(params) + 1
+        set_parts.append("updated_at = NOW()")
+        params.append(endpoint)
+
+        sql = (
+            f"UPDATE push_subscriptions SET {', '.join(set_parts)} "
+            f"WHERE endpoint = ${idx_endpoint} RETURNING *"
+        )
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(sql, *params)
+        if row is None:
+            return None
+        return _row_to_push_subscription(row)
 
 
 def create_database(settings: Settings) -> DatabaseInterface:

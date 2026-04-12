@@ -8,29 +8,32 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from custos.analytics.dashboard.fake_data import (
     get_overview_charts,
 )
+from custos.analytics.push_sender import send_push_notifications
 from custos.analytics.scanner import ModbusScanner
 from custos.shared.database import (
     AssetInstance,
     AuditLogEntry,
     ConnectionProfile,
     DatabaseInterface,
+    PushSubscription,
     TagBinding,
     TagRecord,
     Threshold,
 )
+from custos.shared.vapid import get_vapid_keys, is_push_enabled
 
 logger = structlog.get_logger(logger_name="dashboard")
 
@@ -85,7 +88,7 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
             {"href": "/dashboard/kpi", "icon": "trending-up", "label": "KPI"},
             {"href": "/dashboard/alarms", "icon": "alert-triangle", "label": "Alarms"},
             {"href": "/dashboard/logs", "icon": "file-text", "label": "Logs"},
-            {"href": "#", "icon": "settings", "label": "Settings"},
+            {"href": "/dashboard/settings", "icon": "settings", "label": "Settings"},
         ],
         **kwargs,
     }
@@ -1427,3 +1430,158 @@ async def logs_entries_partial(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "partials/log_entries.html", ctx,
     )
+
+
+# --- Settings ---
+
+
+# Uygulama başlangıç zamanı (uptime hesabı için)
+_APP_START_TIME = datetime.now(UTC)
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request) -> HTMLResponse:
+    """Settings sayfası — sistem bilgisi ve bildirim ayarları."""
+    db = _get_db(request)
+
+    # Sistem bilgisi
+    db_healthy = await db.health_check()
+    tags = await db.list_tags()
+    instances = await db.list_asset_instances()
+
+    uptime_seconds = (datetime.now(UTC) - _APP_START_TIME).total_seconds()
+    uptime_hours = int(uptime_seconds // 3600)
+    uptime_minutes = int((uptime_seconds % 3600) // 60)
+    uptime_str = f"{uptime_hours}s {uptime_minutes}dk"
+
+    # Son KPI hesaplama zamanı
+    last_kpi_time: str = "—"
+    kpi_engine_obj = getattr(request.app.state, "kpi_engine", None)
+    if kpi_engine_obj is not None:
+        last_run = getattr(kpi_engine_obj, "_last_run_at", None)
+        if last_run is not None:
+            last_kpi_time = last_run.strftime("%H:%M:%S")
+
+    # Anomali model sayısı
+    model_count = 0
+    detector_obj = getattr(request.app.state, "anomaly_detector", None)
+    if detector_obj is not None:
+        models = getattr(detector_obj, "_models", {})
+        model_count = len(models)
+
+    # Push bildirim durumu
+    push_enabled = is_push_enabled()
+    subscriptions = await db.list_push_subscriptions()
+
+    ctx = _base_context(
+        page_title="Settings",
+        active_nav="/dashboard/settings",
+        db_healthy=db_healthy,
+        tag_count=len(tags),
+        asset_count=len(instances),
+        uptime=uptime_str,
+        last_kpi_time=last_kpi_time,
+        model_count=model_count,
+        push_enabled=push_enabled,
+        subscription_count=len(subscriptions),
+    )
+    return templates.TemplateResponse(request, "pages/settings.html", ctx)
+
+
+@router.post("/settings/notifications", response_class=HTMLResponse)
+async def update_notification_settings(
+    request: Request,
+    endpoint: str = Form(...),
+    notify_warn: bool = Form(False),
+    notify_crit: bool = Form(False),
+    quiet_start: str = Form(""),
+    quiet_end: str = Form(""),
+) -> RedirectResponse:
+    """Bildirim ayarlarını günceller (HTMX form)."""
+    db = _get_db(request)
+
+    # Sessiz saat parse
+    qs: time | None = None
+    qe: time | None = None
+    if quiet_start:
+        parts = quiet_start.split(":")
+        qs = time(int(parts[0]), int(parts[1]))
+    if quiet_end:
+        parts = quiet_end.split(":")
+        qe = time(int(parts[0]), int(parts[1]))
+
+    await db.update_push_subscription_settings(
+        endpoint=endpoint,
+        updates={
+            "notify_warn": notify_warn,
+            "notify_crit": notify_crit,
+            "quiet_start": qs,
+            "quiet_end": qe,
+        },
+    )
+
+    return RedirectResponse(url="/dashboard/settings", status_code=303)
+
+
+# --- Push API ---
+
+
+@router.get("/api/push/vapid-public-key")
+async def vapid_public_key() -> JSONResponse:
+    """Frontend için VAPID public key döndürür."""
+    public_key, _ = get_vapid_keys()
+    return JSONResponse({"public_key": public_key})
+
+
+@router.post("/api/push/subscribe")
+async def push_subscribe(request: Request) -> JSONResponse:
+    """Push subscription kaydeder."""
+    db = _get_db(request)
+    body = await request.json()
+
+    endpoint = body.get("endpoint", "")
+    p256dh = body.get("p256dh", "")
+    auth = body.get("auth", "")
+
+    if not endpoint or not p256dh or not auth:
+        return JSONResponse(
+            {"detail": "endpoint, p256dh ve auth alanları gerekli"},
+            status_code=400,
+        )
+
+    sub = PushSubscription(endpoint=endpoint, p256dh=p256dh, auth=auth)
+    created = await db.upsert_push_subscription(sub)
+    return JSONResponse({"id": created.id, "endpoint": created.endpoint})
+
+
+@router.delete("/api/push/subscribe")
+async def push_unsubscribe(request: Request) -> JSONResponse:
+    """Push subscription siler."""
+    db = _get_db(request)
+    body = await request.json()
+    endpoint = body.get("endpoint", "")
+
+    if not endpoint:
+        return JSONResponse({"detail": "endpoint alanı gerekli"}, status_code=400)
+
+    deleted = await db.delete_push_subscription(endpoint)
+    return JSONResponse({"deleted": deleted})
+
+
+@router.post("/api/push/test")
+async def push_test(request: Request) -> JSONResponse:
+    """Test bildirimi gönderir."""
+    if not is_push_enabled():
+        return JSONResponse(
+            {"detail": "VAPID anahtarları yapılandırılmamış"},
+            status_code=400,
+        )
+
+    db = _get_db(request)
+    sent = await send_push_notifications(
+        db=db,
+        title="Custos Test Bildirimi",
+        body="Bu bir test bildirimidir. Push bildirimler çalışıyor!",
+        severity="warn",
+    )
+    return JSONResponse({"sent": sent})
