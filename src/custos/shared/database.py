@@ -185,6 +185,31 @@ class AuditLogEntry:
     timestamp: datetime | None = None
 
 
+@dataclass
+class KpiResult:
+    """KPI hesaplama sonucu — kpi_results tablosunun Python temsili."""
+
+    instance_id: int
+    kpi_definition_id: int
+    bucket_start: datetime
+    value: float
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
+class AnomalyScore:
+    """Anomali skoru — anomaly_scores tablosunun Python temsili."""
+
+    instance_id: int
+    timestamp: datetime
+    score: float
+    is_anomaly: bool = False
+    feature_vector: str = ""
+    id: int | None = None
+    created_at: datetime | None = None
+
+
 class DatabaseInterface(abc.ABC):
     """Veritabanı erişim arayüzü.
 
@@ -463,6 +488,60 @@ class DatabaseInterface(abc.ABC):
     async def count_audit_log(self, category: str | None = None) -> int:
         """Audit log kayıt sayısını döndürür."""
 
+    # --- KPI Results ---
+
+    @abc.abstractmethod
+    async def insert_kpi_result(self, result: KpiResult) -> KpiResult:
+        """Yeni KPI sonucu kaydeder."""
+
+    @abc.abstractmethod
+    async def insert_kpi_results_batch(self, results: list[KpiResult]) -> None:
+        """Çoklu KPI sonucunu tek batch halinde yazar."""
+
+    @abc.abstractmethod
+    async def list_kpi_results(
+        self,
+        instance_id: int,
+        kpi_definition_id: int | None = None,
+        limit: int = 100,
+    ) -> list[KpiResult]:
+        """KPI sonuç listesini döndürür."""
+
+    @abc.abstractmethod
+    async def get_latest_kpi_results(
+        self,
+        instance_id: int,
+    ) -> dict[int, KpiResult]:
+        """Her KPI definition için en son hesaplanan değeri döndürür."""
+
+    # --- Anomaly Scores ---
+
+    @abc.abstractmethod
+    async def insert_anomaly_score(self, score: AnomalyScore) -> AnomalyScore:
+        """Yeni anomali skoru kaydeder."""
+
+    @abc.abstractmethod
+    async def list_anomaly_scores(
+        self,
+        instance_id: int,
+        limit: int = 100,
+    ) -> list[AnomalyScore]:
+        """Anomali skor listesini döndürür."""
+
+    @abc.abstractmethod
+    async def get_latest_anomaly_score(
+        self,
+        instance_id: int,
+    ) -> AnomalyScore | None:
+        """En son anomali skorunu döndürür."""
+
+    @abc.abstractmethod
+    async def count_anomalies(
+        self,
+        since: datetime | None = None,
+    ) -> int:
+        """Anomali sayısını döndürür. Opsiyonel zaman filtresi."""
+
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
 _ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset({
@@ -659,6 +738,31 @@ def _row_to_audit_log_entry(row: asyncpg.Record) -> AuditLogEntry:
         entity_type=row["entity_type"],
         entity_id=row["entity_id"],
         detail=row["detail"],
+    )
+
+
+def _row_to_kpi_result(row: asyncpg.Record) -> KpiResult:
+    """asyncpg satırını KpiResult'a dönüştürür."""
+    return KpiResult(
+        id=row["id"],
+        instance_id=row["instance_id"],
+        kpi_definition_id=row["kpi_definition_id"],
+        bucket_start=row["bucket_start"],
+        value=row["value"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_anomaly_score(row: asyncpg.Record) -> AnomalyScore:
+    """asyncpg satırını AnomalyScore'a dönüştürür."""
+    return AnomalyScore(
+        id=row["id"],
+        instance_id=row["instance_id"],
+        timestamp=row["timestamp"],
+        score=row["score"],
+        is_anomaly=row["is_anomaly"],
+        feature_vector=row["feature_vector"],
+        created_at=row["created_at"],
     )
 
 
@@ -1532,6 +1636,155 @@ class TimescaleDBDatabase(DatabaseInterface):
                 count = await conn.fetchval(sql, category)
         else:
             sql = "SELECT COUNT(*) FROM audit_log"
+            async with pool.acquire() as conn:
+                count = await conn.fetchval(sql)
+        return int(count or 0)
+
+    # --- KPI Results implementasyonları ---
+
+    async def insert_kpi_result(self, result: KpiResult) -> KpiResult:
+        """Yeni KPI sonucu kaydeder ve döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO kpi_results "
+                "(instance_id, kpi_definition_id, bucket_start, value) "
+                "VALUES ($1, $2, $3, $4) "
+                "ON CONFLICT (instance_id, kpi_definition_id, bucket_start) "
+                "DO UPDATE SET value = EXCLUDED.value "
+                "RETURNING *",
+                result.instance_id, result.kpi_definition_id,
+                result.bucket_start, result.value,
+            )
+        assert row is not None
+        return _row_to_kpi_result(row)
+
+    async def insert_kpi_results_batch(self, results: list[KpiResult]) -> None:
+        """Çoklu KPI sonucunu tek batch halinde yazar."""
+        if not results:
+            return
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                "INSERT INTO kpi_results "
+                "(instance_id, kpi_definition_id, bucket_start, value) "
+                "VALUES ($1, $2, $3, $4) "
+                "ON CONFLICT (instance_id, kpi_definition_id, bucket_start) "
+                "DO UPDATE SET value = EXCLUDED.value",
+                [
+                    (r.instance_id, r.kpi_definition_id, r.bucket_start, r.value)
+                    for r in results
+                ],
+            )
+
+    async def list_kpi_results(
+        self,
+        instance_id: int,
+        kpi_definition_id: int | None = None,
+        limit: int = 100,
+    ) -> list[KpiResult]:
+        """KPI sonuç listesini döndürür."""
+        pool = self._get_pool()
+        params: list[object] = [instance_id]
+        idx = 2
+
+        where = "WHERE instance_id = $1"
+        if kpi_definition_id is not None:
+            where += f" AND kpi_definition_id = ${idx}"
+            params.append(kpi_definition_id)
+            idx += 1
+
+        params.append(limit)
+        sql = (
+            f"SELECT * FROM kpi_results {where} "
+            f"ORDER BY bucket_start DESC LIMIT ${idx}"
+        )
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [_row_to_kpi_result(row) for row in rows]
+
+    async def get_latest_kpi_results(
+        self,
+        instance_id: int,
+    ) -> dict[int, KpiResult]:
+        """Her KPI definition için en son hesaplanan değeri döndürür."""
+        pool = self._get_pool()
+        sql = (
+            "SELECT DISTINCT ON (kpi_definition_id) * "
+            "FROM kpi_results WHERE instance_id = $1 "
+            "ORDER BY kpi_definition_id, bucket_start DESC"
+        )
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, instance_id)
+        return {
+            row["kpi_definition_id"]: _row_to_kpi_result(row)
+            for row in rows
+        }
+
+    # --- Anomaly Scores implementasyonları ---
+
+    async def insert_anomaly_score(self, score: AnomalyScore) -> AnomalyScore:
+        """Yeni anomali skoru kaydeder ve döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO anomaly_scores "
+                "(instance_id, timestamp, score, is_anomaly, feature_vector) "
+                "VALUES ($1, $2, $3, $4, $5) "
+                "RETURNING *",
+                score.instance_id, score.timestamp,
+                score.score, score.is_anomaly, score.feature_vector,
+            )
+        assert row is not None
+        return _row_to_anomaly_score(row)
+
+    async def list_anomaly_scores(
+        self,
+        instance_id: int,
+        limit: int = 100,
+    ) -> list[AnomalyScore]:
+        """Anomali skor listesini döndürür."""
+        pool = self._get_pool()
+        sql = (
+            "SELECT * FROM anomaly_scores WHERE instance_id = $1 "
+            "ORDER BY timestamp DESC LIMIT $2"
+        )
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, instance_id, limit)
+        return [_row_to_anomaly_score(row) for row in rows]
+
+    async def get_latest_anomaly_score(
+        self,
+        instance_id: int,
+    ) -> AnomalyScore | None:
+        """En son anomali skorunu döndürür."""
+        pool = self._get_pool()
+        sql = (
+            "SELECT * FROM anomaly_scores WHERE instance_id = $1 "
+            "ORDER BY timestamp DESC LIMIT 1"
+        )
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(sql, instance_id)
+        if row is None:
+            return None
+        return _row_to_anomaly_score(row)
+
+    async def count_anomalies(
+        self,
+        since: datetime | None = None,
+    ) -> int:
+        """Anomali sayısını döndürür."""
+        pool = self._get_pool()
+        if since is not None:
+            sql = (
+                "SELECT COUNT(*) FROM anomaly_scores "
+                "WHERE is_anomaly = TRUE AND timestamp >= $1"
+            )
+            async with pool.acquire() as conn:
+                count = await conn.fetchval(sql, since)
+        else:
+            sql = "SELECT COUNT(*) FROM anomaly_scores WHERE is_anomaly = TRUE"
             async with pool.acquire() as conn:
                 count = await conn.fetchval(sql)
         return int(count or 0)

@@ -1,0 +1,140 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/chart_panel.html' import chart_panel %}
+
+{% block title %}KPI: {{ instance.name }} — Custos{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl space-y-4">
+  {# Baslik + Geri butonu #}
+  <div class="flex items-center gap-3">
+    <a href="/dashboard/kpi"
+       class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+       title="Geri">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <div>
+      <h1 class="text-heading text-text-primary font-semibold">{{ instance.name }} — KPI Detay</h1>
+      <p class="text-small text-text-secondary">
+        {{ tmpl.name if tmpl else '?' }}
+        {% if instance.location %} · {{ instance.location }}{% endif %}
+      </p>
+    </div>
+    <div class="ml-auto">
+      {% if anomaly_score %}
+        {% if anomaly_score.is_anomaly %}
+          {{ status_badge('Anomali', 'crit') }}
+        {% else %}
+          {{ status_badge('Normal', 'ok') }}
+        {% endif %}
+      {% else %}
+        {{ status_badge('Model Yok', 'neutral') }}
+      {% endif %}
+    </div>
+  </div>
+
+  {# KPI Ozet Kartlari #}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+    {% for kpi in kpi_summaries %}
+    <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+      <div class="text-kpi-label text-text-secondary uppercase tracking-wide mb-1">{{ kpi.name }}</div>
+      <div class="text-kpi text-text-primary">
+        {% if kpi.value is not none %}
+          {{ '%.2f' | format(kpi.value) }}
+        {% else %}
+          —
+        {% endif %}
+      </div>
+      <div class="text-small text-text-disabled mt-1">{{ kpi.unit }}{% if kpi.formula %} · {{ kpi.formula }}{% endif %}</div>
+    </div>
+    {% endfor %}
+    {% if not kpi_summaries %}
+    <div class="col-span-full text-text-disabled text-small">Bu instance için KPI tanımı yok.</div>
+    {% endif %}
+  </div>
+
+  {# KPI Trend Grafigi #}
+  {% if charts and charts.kpi_chart %}
+  <div>
+    {{ chart_panel('KPI Trend', 'kpi_chart', height=260) }}
+  </div>
+  {% endif %}
+
+  {# Anomali Skor Gecmisi #}
+  {% if anomaly_history %}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Anomali Skor Gecmisi (Son 50)</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Zaman</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Skor</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% for s in anomaly_history %}
+          <tr class="hover:bg-bg-elevated transition-colors">
+            <td class="px-3 py-2 text-cell text-text-primary">{{ s.timestamp.strftime('%d/%m %H:%M:%S') }}</td>
+            <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.4f' | format(s.score) }}</td>
+            <td class="px-3 py-2 text-cell">
+              {% if s.is_anomaly %}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-status-crit/10 text-status-crit">Anomali</span>
+              {% else %}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-status-ok/10 text-status-ok">Normal</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {# KPI Tanimlari (formul + aciklama) #}
+  {% if kpi_definitions %}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">KPI Tanimlari</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Ad</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Formul</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Birim</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aciklama</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% for kd in kpi_definitions %}
+          <tr class="hover:bg-bg-elevated transition-colors">
+            <td class="px-3 py-2 text-cell text-text-primary">{{ kd.name }}</td>
+            <td class="px-3 py-2 text-cell text-text-primary font-mono text-xs">{{ kd.formula }}</td>
+            <td class="px-3 py-2 text-cell text-text-secondary">{{ kd.unit }}</td>
+            <td class="px-3 py-2 text-cell text-text-secondary">{{ kd.description }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if charts and charts.kpi_chart %}
+<script src="/static/js/charts.js"></script>
+<script>
+  window.custos = window.custos || {};
+  window.custos.chartData = {{ charts | tojson }};
+</script>
+{% endif %}
+{% endblock %}

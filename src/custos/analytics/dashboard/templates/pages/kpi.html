@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+{% from 'components/status_badge.html' import status_badge %}
+
+{% block title %}KPI — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Baslik #}
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">KPI Dashboard</h1>
+    {# Filtre dropdown #}
+    <select id="instance-filter"
+            onchange="if(this.value) window.location='/dashboard/kpi?instance_id='+this.value; else window.location='/dashboard/kpi';"
+            class="px-3 py-1.5 text-small font-medium bg-bg-elevated text-text-secondary
+                   border border-border-weak rounded-md">
+      <option value="">Tüm Instance'lar</option>
+      {% for inst in instances %}
+        <option value="{{ inst.id }}" {{ 'selected' if filter_instance_id == inst.id }}>{{ inst.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  {# KPI Tablosu #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">KPI Degerleri</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Instance</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">KPI</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Son Deger</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Birim</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Anomali</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Detay</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak"
+               id="kpi-table-body"
+               hx-get="/dashboard/kpi/live{% if filter_instance_id %}?instance_id={{ filter_instance_id }}{% endif %}"
+               hx-trigger="every 30s"
+               hx-swap="innerHTML">
+          {% include 'partials/kpi_live.html' %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if not kpi_rows %}
+  <div class="bg-bg-surface border border-border-weak rounded-lg p-4">
+    <p class="text-small text-text-disabled">
+      Henüz KPI verisi yok. KPI Engine aktif instance'lar için formülleri hesaplayınca burada görünecek.
+    </p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

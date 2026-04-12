@@ -17,6 +17,8 @@ dependencies = [
     "uvicorn[standard]",
     "jinja2",
     "python-multipart",
+    "scikit-learn",
+    "numpy",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +57,18 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "pymodbus.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sklearn.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "joblib.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "numpy.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

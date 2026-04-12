@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,6 @@ from fastapi.templating import Jinja2Templates
 
 from custos.analytics.dashboard.fake_data import (
     get_overview_charts,
-    get_overview_kpis,
 )
 from custos.analytics.scanner import ModbusScanner
 from custos.shared.database import (
@@ -49,6 +48,10 @@ POLLING_PRESETS: dict[str, int] = {
     "normal": 1000,
     "fast": 100,
 }
+
+# Overview sayfası için sabit timedelta'lar (her çağrıda nesne oluşturmamak için)
+_timedelta_24h = timedelta(hours=24)
+_timedelta_30m = timedelta(minutes=30)
 
 
 def get_static_files_app() -> StaticFiles:
@@ -79,6 +82,7 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
             {"href": "/dashboard/connections", "icon": "cpu", "label": "Connections"},
             {"href": "/dashboard/templates", "icon": "layers", "label": "Templates"},
             {"href": "/dashboard/processes", "icon": "package", "label": "Processes"},
+            {"href": "/dashboard/kpi", "icon": "trending-up", "label": "KPI"},
             {"href": "/dashboard/alarms", "icon": "alert-triangle", "label": "Alarms"},
             {"href": "/dashboard/logs", "icon": "file-text", "label": "Logs"},
             {"href": "#", "icon": "settings", "label": "Settings"},
@@ -99,13 +103,15 @@ async def dashboard_root() -> RedirectResponse:
 @router.get("/overview", response_class=HTMLResponse)
 async def overview(request: Request) -> HTMLResponse:
     """Overview sayfası — ana kontrol paneli."""
-    # KPI ve grafik verileri (hâlâ sahte — F6'da gerçekle değişecek)
-    kpis = get_overview_kpis()
+    # Grafik verileri (hâlâ sahte — F7'de tam gerçekle değişecek)
     charts = get_overview_charts()
 
     # Gerçek alarm event'lerini çek
     alarms: list[dict[str, Any]] = []
     active_alarm_count = 0
+    total_tags = 0
+    total_assets = 0
+    anomaly_count_24h = 0
     db_instance: DatabaseInterface | None = getattr(request.app.state, "db", None)
     if db_instance is not None:
         recent_events = await db_instance.list_alarm_events(limit=10)
@@ -114,13 +120,45 @@ async def overview(request: Request) -> HTMLResponse:
         acked = await db_instance.list_alarm_events(state="acknowledged", limit=1000)
         active_alarm_count = len(triggered) + len(acked)
 
+        # Gerçek tag ve asset sayıları
+        all_tags = await db_instance.list_tags()
+        total_tags = len(all_tags)
+        all_instances = await db_instance.list_asset_instances()
+        total_assets = len(all_instances)
+
+        # Son 24 saatteki anomali sayısı
+        since_24h = datetime.now(UTC) - _timedelta_24h
+        anomaly_count_24h = await db_instance.count_anomalies(since=since_24h)
+
+        # Gerçek tag verisiyle ilk grafik — son 30 dakika
+        if all_tags:
+            real_tag_ids = [t.tag_id for t in all_tags[:3]]
+            real_start = datetime.now(UTC) - _timedelta_30m
+            real_end = datetime.now(UTC)
+            real_series: list[list[float]] = []
+            real_labels: list[str] = []
+            real_timestamps: list[int] = []
+            for tid in real_tag_ids:
+                readings = await db_instance.query_tag_readings(tid, real_start, real_end)
+                if readings:
+                    real_labels.append(f"{tid}")
+                    real_series.append([r.value for r in readings])
+                    if not real_timestamps:
+                        real_timestamps = [int(r.timestamp.timestamp()) for r in readings]
+            if real_timestamps and real_series:
+                charts["temp_chart"] = {
+                    "timestamps": real_timestamps,
+                    "series": real_series,
+                    "labels": real_labels,
+                }
+
         # Threshold adlarını çek
         thr_ids = {e.threshold_id for e in recent_events}
         thr_map: dict[int, Threshold] = {}
-        for tid in thr_ids:
-            t = await db_instance.get_threshold(tid)
+        for thr_id in thr_ids:
+            t = await db_instance.get_threshold(thr_id)
             if t is not None:
-                thr_map[tid] = t
+                thr_map[thr_id] = t
 
         for event in recent_events:
             t = thr_map.get(event.threshold_id)
@@ -145,14 +183,33 @@ async def overview(request: Request) -> HTMLResponse:
                 "status_label": state_label,
             })
 
-    # KPI'lardan ilkini aktif alarm sayısıyla güncelle
-    if kpis:
-        kpis[0] = {
+    # Gerçek KPI kartları
+    kpis: list[dict[str, str]] = [
+        {
             "label": "Active Alarms",
             "value": str(active_alarm_count),
             "status": "crit" if active_alarm_count > 0 else "ok",
             "delta": "",
-        }
+        },
+        {
+            "label": "Total Tags",
+            "value": str(total_tags),
+            "status": "neutral",
+            "delta": "",
+        },
+        {
+            "label": "Total Assets",
+            "value": str(total_assets),
+            "status": "neutral",
+            "delta": "",
+        },
+        {
+            "label": "Anomalies (24h)",
+            "value": str(anomaly_count_24h),
+            "status": "warn" if anomaly_count_24h > 0 else "ok",
+            "delta": "",
+        },
+    ]
 
     ctx = _base_context(
         page_title="Overview",
@@ -770,6 +827,18 @@ async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
 
     readings = await db.get_latest_tag_readings(tag_ids) if tag_ids else {}
 
+    # KPI özet kartları
+    kpi_cards: list[dict[str, Any]] = []
+    if tmpl and tmpl.kpi_definitions:
+        latest_kpis = await db.get_latest_kpi_results(instance_id)
+        for kd in tmpl.kpi_definitions:
+            result = latest_kpis.get(kd.id) if kd.id is not None else None
+            kpi_cards.append({
+                "name": kd.name,
+                "value": result.value if result else None,
+                "unit": kd.unit,
+            })
+
     ctx = _base_context(
         page_title=f"Asset: {instance.name}",
         active_nav="/dashboard/processes",
@@ -777,6 +846,7 @@ async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
         tmpl=tmpl,
         binding_data=binding_data,
         readings=readings,
+        kpi_cards=kpi_cards,
     )
     return templates.TemplateResponse(request, "pages/process_detail.html", ctx)
 
@@ -911,6 +981,137 @@ async def api_tag_reading(request: Request, tag_id: str) -> dict[str, Any]:
         "timestamp": reading.timestamp.isoformat(),
         "quality_flag": reading.quality_flag,
     }
+
+
+# --- KPI ---
+
+
+@router.get("/kpi", response_class=HTMLResponse)
+async def kpi_list(request: Request, instance_id: int | None = None) -> HTMLResponse:
+    """KPI listesi sayfası — tüm aktif instance'ların KPI değerleri."""
+    db = _get_db(request)
+    instances = await db.list_asset_instances(status="active")
+
+    # KPI satırlarını oluştur
+    kpi_rows = await _build_kpi_rows(db, instances, instance_id)
+
+    ctx = _base_context(
+        page_title="KPI",
+        active_nav="/dashboard/kpi",
+        instances=instances,
+        kpi_rows=kpi_rows,
+        filter_instance_id=instance_id,
+    )
+    return templates.TemplateResponse(request, "pages/kpi.html", ctx)
+
+
+@router.get("/kpi/live", response_class=HTMLResponse)
+async def kpi_live(request: Request, instance_id: int | None = None) -> HTMLResponse:
+    """HTMX partial — KPI değerleri güncelleme."""
+    db = _get_db(request)
+    instances = await db.list_asset_instances(status="active")
+    kpi_rows = await _build_kpi_rows(db, instances, instance_id)
+    ctx = {"kpi_rows": kpi_rows}
+    return templates.TemplateResponse(request, "partials/kpi_live.html", ctx)
+
+
+@router.get("/kpi/{instance_id:int}", response_class=HTMLResponse)
+async def kpi_detail(request: Request, instance_id: int) -> HTMLResponse:
+    """Instance KPI detay sayfası — trend grafikleri ve anomali skoru."""
+    db = _get_db(request)
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Instance bulunamadı")
+
+    tmpl = await db.get_asset_template(instance.template_id)
+    kpi_definitions = tmpl.kpi_definitions if tmpl else []
+
+    # En son KPI değerleri
+    latest_kpis = await db.get_latest_kpi_results(instance_id)
+    kpi_summaries: list[dict[str, Any]] = []
+    for kd in kpi_definitions:
+        result = latest_kpis.get(kd.id) if kd.id is not None else None
+        kpi_summaries.append({
+            "name": kd.name,
+            "value": result.value if result else None,
+            "unit": kd.unit,
+            "formula": kd.formula,
+        })
+
+    # Anomali skoru
+    anomaly_score = await db.get_latest_anomaly_score(instance_id)
+    anomaly_history = await db.list_anomaly_scores(instance_id, limit=50)
+
+    # KPI trend grafik verisi — en son 60 sonuç (yaklaşık 1 saat)
+    charts: dict[str, Any] = {}
+    if kpi_definitions:
+        kpi_series: list[list[float]] = []
+        kpi_labels: list[str] = []
+        kpi_timestamps: list[int] = []
+        for kd in kpi_definitions:
+            if kd.id is None:
+                continue
+            results = await db.list_kpi_results(instance_id, kd.id, limit=60)
+            if results:
+                results.reverse()  # eski → yeni sıra
+                kpi_labels.append(f"{kd.name} ({kd.unit})")
+                kpi_series.append([r.value for r in results])
+                if not kpi_timestamps:
+                    kpi_timestamps = [int(r.bucket_start.timestamp()) for r in results]
+        if kpi_timestamps and kpi_series:
+            charts["kpi_chart"] = {
+                "timestamps": kpi_timestamps,
+                "series": kpi_series,
+                "labels": kpi_labels,
+            }
+
+    ctx = _base_context(
+        page_title=f"KPI: {instance.name}",
+        active_nav="/dashboard/kpi",
+        instance=instance,
+        tmpl=tmpl,
+        kpi_summaries=kpi_summaries,
+        kpi_definitions=kpi_definitions,
+        anomaly_score=anomaly_score,
+        anomaly_history=anomaly_history,
+        charts=charts,
+    )
+    return templates.TemplateResponse(request, "pages/kpi_detail.html", ctx)
+
+
+async def _build_kpi_rows(
+    db: DatabaseInterface,
+    instances: list[AssetInstance],
+    filter_instance_id: int | None,
+) -> list[dict[str, Any]]:
+    """KPI tablosu için satır verisi oluşturur."""
+    kpi_rows: list[dict[str, Any]] = []
+    for inst in instances:
+        if filter_instance_id is not None and inst.id != filter_instance_id:
+            continue
+        assert inst.id is not None
+        tmpl = await db.get_asset_template(inst.template_id)
+        if tmpl is None or not tmpl.kpi_definitions:
+            continue
+
+        latest_kpis = await db.get_latest_kpi_results(inst.id)
+        anomaly = await db.get_latest_anomaly_score(inst.id)
+
+        for kd in tmpl.kpi_definitions:
+            result = latest_kpis.get(kd.id) if kd.id is not None else None
+            anomaly_status = "unknown"
+            if anomaly is not None:
+                anomaly_status = "anomaly" if anomaly.is_anomaly else "normal"
+
+            kpi_rows.append({
+                "instance_id": inst.id,
+                "instance_name": inst.name,
+                "kpi_name": kd.name,
+                "value": result.value if result else 0.0,
+                "unit": kd.unit,
+                "anomaly_status": anomaly_status,
+            })
+    return kpi_rows
 
 
 # --- Threshold CRUD ---

@@ -1,0 +1,32 @@
+{% for row in kpi_rows %}
+<tr class="hover:bg-bg-elevated transition-colors">
+  <td class="px-3 py-2 text-cell text-text-primary">
+    <a href="/dashboard/processes/{{ row.instance_id }}" class="hover:text-accent-primary">
+      {{ row.instance_name }}
+    </a>
+  </td>
+  <td class="px-3 py-2 text-cell text-text-primary">{{ row.kpi_name }}</td>
+  <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(row.value) }}</td>
+  <td class="px-3 py-2 text-cell text-text-secondary">{{ row.unit }}</td>
+  <td class="px-3 py-2 text-cell">
+    {% if row.anomaly_status == 'anomaly' %}
+      <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-status-crit/10 text-status-crit">Anomali</span>
+    {% elif row.anomaly_status == 'normal' %}
+      <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-status-ok/10 text-status-ok">Normal</span>
+    {% else %}
+      <span class="text-text-disabled text-xs">—</span>
+    {% endif %}
+  </td>
+  <td class="px-3 py-2 text-cell">
+    <a href="/dashboard/kpi/{{ row.instance_id }}"
+       class="text-accent-primary hover:underline text-small">Detay</a>
+  </td>
+</tr>
+{% endfor %}
+{% if not kpi_rows %}
+<tr>
+  <td colspan="6" class="px-3 py-8 text-center text-text-disabled text-body">
+    KPI verisi bulunamadı.
+  </td>
+</tr>
+{% endif %}

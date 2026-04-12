@@ -55,6 +55,29 @@
     </form>
   </div>
 
+  {# KPI Özet Kartları #}
+  {% if kpi_cards %}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+    {% for kpi in kpi_cards %}
+    <div class="bg-bg-surface rounded-sm border border-border-weak p-3">
+      <div class="text-kpi-label text-text-secondary uppercase tracking-wide mb-1">{{ kpi.name }}</div>
+      <div class="text-kpi text-text-primary">
+        {% if kpi.value is not none %}
+          {{ '%.2f' | format(kpi.value) }}
+        {% else %}
+          —
+        {% endif %}
+      </div>
+      <div class="text-small text-text-disabled">{{ kpi.unit }}</div>
+    </div>
+    {% endfor %}
+    <div class="flex items-end">
+      <a href="/dashboard/kpi/{{ instance.id }}"
+         class="text-accent-primary hover:underline text-small">KPI Detay →</a>
+    </div>
+  </div>
+  {% endif %}
+
   {# Bağlı tag'ler tablosu — HTMX ile canlı güncelleme #}
   <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
     <div class="px-4 py-3 border-b border-border-weak">
