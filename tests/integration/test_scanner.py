@@ -16,6 +16,9 @@ from custos.shared.database import ConnectionProfile, TimescaleDBDatabase
 # Simülatörü import et (test içinde başlatacağız)
 from custos.simulator.modbus_server import ModbusSimulator
 
+# Her test farklı port kullanır (TIME_WAIT port çakışmasını önler)
+_next_port = 5020
+
 
 @pytest.fixture
 def _check_db_available() -> None:
@@ -66,8 +69,17 @@ async def db() -> TimescaleDBDatabase:
 
 @pytest.fixture
 async def simulator() -> ModbusSimulator:
-    """Test için Modbus simülatör başlatır ve durdurur."""
-    sim = ModbusSimulator(host="127.0.0.1", port=5020)
+    """Test için Modbus simülatör başlatır ve durdurur.
+
+    Her test farklı port kullanır — pymodbus TCP server kapandıktan
+    sonra OS soketi TIME_WAIT'te tutabilir, aynı portu hemen bind
+    etmek başarısız olur.
+    """
+    global _next_port  # noqa: PLW0603
+    port = _next_port
+    _next_port += 1
+
+    sim = ModbusSimulator(host="127.0.0.1", port=port)
     task = asyncio.create_task(sim.start())
     # Simülatörün hazır olmasını bekle
     await asyncio.sleep(0.5)
@@ -89,11 +101,11 @@ async def test_scanner_discovers_registers(
     # Scanner'ı import et (pymodbus gerekli)
     from custos.analytics.scanner import ModbusScanner
 
-    # Connection profile oluştur
+    # Connection profile oluştur (simülatörün portunu kullan)
     profile = ConnectionProfile(
         name="TEST_SCAN",
         host="127.0.0.1",
-        port=5020,
+        port=simulator._port,
         unit_id_start=1,
         unit_id_end=1,
     )
@@ -125,7 +137,7 @@ async def test_scanner_discovers_registers(
     discovered = await db.list_tags(status="discovered")
     scan_tags = [
         t for t in discovered
-        if t.modbus_host == "127.0.0.1" and t.modbus_port == 5020
+        if t.modbus_host == "127.0.0.1" and t.modbus_port == simulator._port
     ]
     assert len(scan_tags) >= 1, "En az bir discovered tag oluşturulmalı"
 
@@ -141,7 +153,7 @@ async def test_scanner_no_duplicate_tags(
     profile = ConnectionProfile(
         name="TEST_DUP",
         host="127.0.0.1",
-        port=5020,
+        port=simulator._port,
         unit_id_start=1,
         unit_id_end=1,
     )
@@ -168,7 +180,7 @@ async def test_scanner_no_duplicate_tags(
     discovered = await db.list_tags(status="discovered")
     scan_tags = [
         t for t in discovered
-        if t.modbus_host == "127.0.0.1" and t.modbus_port == 5020
+        if t.modbus_host == "127.0.0.1" and t.modbus_port == simulator._port
     ]
     # Her register için en fazla 1 tag olmalı
     addresses = [t.register_address for t in scan_tags]
