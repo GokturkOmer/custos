@@ -125,8 +125,15 @@ function chartPanel(chartId) {
     chart: null,
 
     init() {
+      // Guard: aynı component için init() iki kez çağrılırsa ya da
+      // container'da eski bir chart DOM'u kaldıysa temizle — böylece
+      // aynı yerde iki uPlot overlay'i oluşmaz.
+      if (this.chart) return;
       const el = document.getElementById(chartId);
       if (!el) return;
+      if (el.firstChild) {
+        el.innerHTML = '';
+      }
 
       const chartData = window.custos.chartData?.[chartId];
       if (!chartData) return;
