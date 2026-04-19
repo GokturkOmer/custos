@@ -244,6 +244,7 @@ class OverviewChart:
     chart_key: str  # slug, PK
     title: str
     sort_order: int = 0
+    time_window_minutes: int = 30
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -617,6 +618,14 @@ class DatabaseInterface(abc.ABC):
     @abc.abstractmethod
     async def insert_overview_chart(self, chart: OverviewChart) -> OverviewChart:
         """Yeni chart slotu ekler; chart_key cakisirsa UniqueViolation."""
+
+    @abc.abstractmethod
+    async def update_overview_chart(
+        self,
+        chart_key: str,
+        updates: dict[str, object],
+    ) -> OverviewChart | None:
+        """Chart slotu alanlarini gunceller (title, sort_order, time_window_minutes)."""
 
     @abc.abstractmethod
     async def delete_overview_chart(self, chart_key: str) -> bool:
@@ -2027,6 +2036,39 @@ class TimescaleDBDatabase(DatabaseInterface):
         assert row is not None
         return _row_to_overview_chart(row)
 
+    async def update_overview_chart(
+        self,
+        chart_key: str,
+        updates: dict[str, object],
+    ) -> OverviewChart | None:
+        """Chart slotu alanlarini gunceller; bilinmeyen alan varsa ValueError."""
+        invalid = set(updates.keys()) - _ALLOWED_OVERVIEW_CHART_UPDATE_FIELDS
+        if invalid:
+            msg = f"Guncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+        if not updates:
+            return await self.get_overview_chart(chart_key)
+
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+        idx = len(values) + 1
+        set_clause = ", ".join(set_parts)
+        values.append(chart_key)
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"UPDATE overview_charts SET {set_clause} "
+                f"WHERE chart_key = ${idx} RETURNING *",
+                *values,
+            )
+        if row is None:
+            return None
+        return _row_to_overview_chart(row)
+
     async def delete_overview_chart(self, chart_key: str) -> bool:
         """Chart slotunu siler. Tag bindingleri FK CASCADE ile duser."""
         pool = self._get_pool()
@@ -2100,8 +2142,15 @@ def _row_to_overview_chart(row: asyncpg.Record) -> OverviewChart:
         chart_key=row["chart_key"],
         title=row["title"],
         sort_order=row["sort_order"],
+        time_window_minutes=row["time_window_minutes"],
         created_at=row["created_at"],
     )
+
+
+# Overview chart update icin izin verilen alanlar (SQL injection onlemi)
+_ALLOWED_OVERVIEW_CHART_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "title", "sort_order", "time_window_minutes",
+})
 
 
 def create_database(settings: Settings) -> DatabaseInterface:

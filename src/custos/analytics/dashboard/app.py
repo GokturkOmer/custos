@@ -145,14 +145,15 @@ async def overview(request: Request) -> HTMLResponse:
 
         tag_map = {t.tag_id: t for t in all_tags}
         now = datetime.now(UTC)
-        real_start = now - _timedelta_30m
         for oc in overview_charts:
             chart_slots.append({
                 "chart_key": oc.chart_key,
                 "title": oc.title,
                 "sort_order": oc.sort_order,
+                "time_window_minutes": oc.time_window_minutes,
             })
             tag_ids = tags_by_chart.get(oc.chart_key, [])
+            chart_start = now - timedelta(minutes=oc.time_window_minutes)
             if not tag_ids:
                 charts[oc.chart_key] = {
                     "timestamps": [],
@@ -168,7 +169,7 @@ async def overview(request: Request) -> HTMLResponse:
             timestamps: list[int] = []
             for tid in tag_ids:
                 readings = await db_instance.query_tag_readings(
-                    tid, real_start, now,
+                    tid, chart_start, now,
                 )
                 if readings:
                     tag_rec = tag_map.get(tid)
@@ -350,6 +351,107 @@ async def overview_chart_delete(
         category="chart_config", action="delete", detail=chart_key,
     ))
     return RedirectResponse(url="/dashboard/overview", status_code=303)
+
+
+# Detay sayfasinda izin verilen zaman aralik secenekleri (dakika)
+_ALLOWED_TIME_WINDOWS: frozenset[int] = frozenset({15, 30, 60, 180, 360, 720, 1440})
+
+
+def _format_time_window_label(minutes: int) -> str:
+    """15 → 'Last 15 min', 60 → 'Last 1h', 1440 → 'Last 24h'."""
+    if minutes < 60:
+        return f"Last {minutes} min"
+    hours = minutes // 60
+    return f"Last {hours}h"
+
+
+@router.get("/overview/charts/{chart_key}/view", response_class=HTMLResponse)
+async def overview_chart_detail(
+    request: Request, chart_key: str,
+) -> HTMLResponse:
+    """Chart detay sayfasi — genis chart + tag panel + zaman araligi."""
+    db = _get_db(request)
+    chart = await db.get_overview_chart(chart_key)
+    if chart is None:
+        raise HTTPException(status_code=404, detail="Chart bulunamadi")
+
+    all_tags = await db.list_tags(status="active")
+    tag_map = {t.tag_id: t for t in all_tags}
+    chart_tags = await db.list_overview_chart_tags(chart_key)
+
+    now = datetime.now(UTC)
+    chart_start = now - timedelta(minutes=chart.time_window_minutes)
+    series: list[list[float]] = []
+    labels: list[str] = []
+    units: list[str] = []
+    tag_meta: list[dict[str, str]] = []
+    timestamps: list[int] = []
+    for ct in chart_tags:
+        readings = await db.query_tag_readings(ct.tag_id, chart_start, now)
+        tag_rec = tag_map.get(ct.tag_id)
+        unit = tag_rec.unit if tag_rec else ""
+        unit_suffix = f" ({unit})" if unit else ""
+        labels.append(f"{ct.tag_id}{unit_suffix}")
+        units.append(unit)
+        tag_meta.append({
+            "tag_id": ct.tag_id,
+            "name": tag_rec.name if tag_rec else ct.tag_id,
+            "unit": unit,
+        })
+        series.append([r.value for r in readings] if readings else [])
+        if readings and not timestamps:
+            timestamps = [int(r.timestamp.timestamp()) for r in readings]
+
+    chart_data = {
+        "timestamps": timestamps,
+        "series": series,
+        "labels": labels,
+        "units": units,
+    }
+
+    time_windows = [
+        {"minutes": m, "label": _format_time_window_label(m)}
+        for m in sorted(_ALLOWED_TIME_WINDOWS)
+    ]
+
+    ctx = _base_context(
+        page_title=chart.title,
+        active_nav="/dashboard/overview",
+        chart=chart,
+        chart_data=chart_data,
+        tag_meta=tag_meta,
+        time_windows=time_windows,
+        time_label=_format_time_window_label(chart.time_window_minutes),
+    )
+    return templates.TemplateResponse(
+        request, "pages/overview_chart_detail.html", ctx,
+    )
+
+
+@router.post("/overview/charts/{chart_key}/time-window",
+             response_class=HTMLResponse)
+async def overview_chart_set_time_window(
+    request: Request,
+    chart_key: str,
+    minutes: int = Form(...),
+) -> RedirectResponse:
+    """Chart zaman araligini gunceller (sadece onceden tanimli secenekler)."""
+    if minutes not in _ALLOWED_TIME_WINDOWS:
+        raise HTTPException(status_code=400, detail="Gecersiz zaman araligi")
+    db = _get_db(request)
+    updated = await db.update_overview_chart(
+        chart_key, {"time_window_minutes": minutes},
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Chart bulunamadi")
+    await db.insert_audit_log(AuditLogEntry(
+        category="chart_config", action="time_window",
+        detail=f"{chart_key}: {minutes} min",
+    ))
+    return RedirectResponse(
+        url=f"/dashboard/overview/charts/{chart_key}/view",
+        status_code=303,
+    )
 
 
 @router.get("/overview/chart-config/{chart_key}", response_class=HTMLResponse)

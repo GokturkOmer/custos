@@ -44,12 +44,13 @@ function unitToScale(unit) {
 
 /**
  * Serileri birimlerine göre scale gruplarına ayırır.
- * Tüm benzersiz birimler görünür eksen alır; sol ve sağ arasında
- * dengeli dağıtılır (ör. 3 birim → 2 sol + 1 sağ, 4 birim → 2 sol + 2 sağ).
- * uPlot side property: 3 = sol, 1 = sağ. Aynı side'a birden fazla axis
- * konursa yan yana istiflenir.
+ * visibleLimit: görünür eksen sayısı üst sınırı.
+ *   - Overview için 2 önerilir (kompakt, chart alanı geniş kalır)
+ *   - Detay sayfası için Infinity (hepsi görünür, yan yana istiflenir)
+ * İlk limitLimit eksen görünür (sol + sağ dengeli), gerisi invisible
+ * scale'e bağlı (tooltip'te okunur).
  */
-function buildScaleLayout(units) {
+function buildScaleLayout(units, visibleLimit) {
   const uniqueUnits = [];
   for (const u of units) {
     const key = unitToScale(u);
@@ -57,12 +58,13 @@ function buildScaleLayout(units) {
       uniqueUnits.push({ key, label: u || '' });
     }
   }
-  const n = uniqueUnits.length;
-  const leftCount = Math.ceil(n / 2);  // odd sayılarda sol taraf bir fazla alsın
+  const total = uniqueUnits.length;
+  const limit = Math.min(total, visibleLimit);
+  const leftCount = Math.ceil(limit / 2);
   return uniqueUnits.map((u, idx) => ({
     key: u.key,
     label: u.label,
-    visible: true,
+    visible: idx < limit,
     side: idx < leftCount ? 3 : 1,
   }));
 }
@@ -255,9 +257,15 @@ function chartPanel(chartId) {
       const { timestamps, series, labels, units = [] } = chartData;
       if (!timestamps || timestamps.length === 0) return;
 
-      // Her serinin unit bilgisini dizi olarak elde et (eski data için fallback)
+      // Görünür eksen sayısı data-visible-axes ile geçilir (default 2).
+      // Overview kompakt: 2 eksen. Detay: tüm birimler için ayrı eksen.
+      const visibleLimitRaw = el.dataset.visibleAxes;
+      const visibleLimit = visibleLimitRaw === 'all'
+        ? Infinity
+        : (parseInt(visibleLimitRaw) || 2);
+
       const effectiveUnits = labels.map((_, i) => units[i] || '');
-      const layout = buildScaleLayout(effectiveUnits);
+      const layout = buildScaleLayout(effectiveUnits, visibleLimit);
 
       // uPlot series: ilki x ekseni
       const uplotSeries = [{}];

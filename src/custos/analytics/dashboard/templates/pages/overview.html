@@ -15,11 +15,20 @@
     {% endfor %}
   </div>
 
-  {# Satır 2+: Dinamik Chart Grid (2 sütun) #}
+  {# Satır 2+: Dinamik Chart Grid (2 sütun) — overview kompakt (2 eksen limiti) #}
   {% if chart_slots %}
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
     {% for slot in chart_slots %}
-      {{ chart_panel(slot.title, slot.chart_key, height=220, editable=true, deletable=true) }}
+      {% set mins = slot.time_window_minutes %}
+      {% if mins < 60 %}
+        {% set time_label = 'Last ' ~ mins ~ ' min' %}
+      {% else %}
+        {% set time_label = 'Last ' ~ (mins // 60) ~ 'h' %}
+      {% endif %}
+      {{ chart_panel(slot.title, slot.chart_key,
+                     height=220, editable=true, deletable=true,
+                     expandable=true, visible_axes=2,
+                     time_label=time_label) }}
     {% endfor %}
   </div>
   {% else %}

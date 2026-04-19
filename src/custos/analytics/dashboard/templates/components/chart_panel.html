@@ -1,6 +1,8 @@
 {# uPlot grafik container macro'su #}
 {% from 'components/icon.html' import icon_inline %}
-{% macro chart_panel(title, chart_id, height=200, editable=false, deletable=false) %}
+{% macro chart_panel(title, chart_id, height=200, editable=false,
+                     deletable=false, expandable=false,
+                     visible_axes=2, time_label='Last 30 min') %}
 <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
   <div class="flex items-center justify-between mb-3">
     <h3 class="text-panel-title text-text-primary">{{ title }}</h3>
@@ -10,6 +12,13 @@
             aria-label="Etkileşim ipuçları">
         {{ icon_inline('eye', class='w-4 h-4') }}
       </span>
+      {% if expandable %}
+      <a href="/dashboard/overview/charts/{{ chart_id }}/view"
+         class="text-text-disabled hover:text-text-primary transition-colors p-1"
+         title="Detay goruntule">
+        {{ icon_inline('maximize-2', class='w-4 h-4') }}
+      </a>
+      {% endif %}
       {% if editable %}
       <button
         hx-get="/dashboard/overview/chart-config/{{ chart_id }}"
@@ -32,7 +41,7 @@
         </button>
       </form>
       {% endif %}
-      <span class="text-small text-text-disabled ml-2 pl-2 border-l border-border-weak">Last 30 min</span>
+      <span class="text-small text-text-disabled ml-2 pl-2 border-l border-border-weak">{{ time_label }}</span>
     </div>
   </div>
   {% if editable %}
@@ -42,6 +51,7 @@
        x-data="chartPanel('{{ chart_id }}')"
        x-init="init()"
        data-chart-height="{{ height }}"
+       data-visible-axes="{{ visible_axes }}"
        class="w-full">
   </div>
 </div>

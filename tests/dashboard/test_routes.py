@@ -87,3 +87,31 @@ def test_overview_chart_delete_nonexistent_returns_error() -> None:
         follow_redirects=False,
     )
     assert response.status_code in {404, 503}
+
+
+def test_overview_chart_detail_nonexistent_returns_error() -> None:
+    """Var olmayan chart detay sayfasi 404 ya da 503."""
+    response = client.get(
+        "/dashboard/overview/charts/non-existent-slug/view",
+    )
+    assert response.status_code in {404, 503}
+
+
+def test_overview_chart_time_window_invalid_returns_error() -> None:
+    """Kabul edilmeyen zaman araligi icin 400 ya da 503."""
+    response = client.post(
+        "/dashboard/overview/charts/hvac-ahu/time-window",
+        data={"minutes": "99999"},
+        follow_redirects=False,
+    )
+    assert response.status_code in {400, 503}
+
+
+def test_overview_chart_time_window_nonexistent_returns_error() -> None:
+    """Var olmayan chart time-window 404 ya da 503."""
+    response = client.post(
+        "/dashboard/overview/charts/non-existent-slug/time-window",
+        data={"minutes": "60"},
+        follow_redirects=False,
+    )
+    assert response.status_code in {404, 503}
