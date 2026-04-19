@@ -6,15 +6,15 @@
  * görünmez scale'a bağlanır (tooltip'te okunur, eksen çizilmez).
  *
  * Etkileşim — X ekseni (plot alanında):
- *   - Sürükle (sol tuş)  → yatay zoom (box-select)
- *   - Tekerlek            → yatay zoom in/out
+ *   - Sürükle (sol tuş)   → yatay zoom (box-select)
+ *   - Ctrl + Tekerlek     → yatay zoom in/out (Ctrl olmadan sayfa scroll)
  *   - Shift + sürükle     → yatay pan
- *   - Çift tıkla           → X ekseni zoom sıfırla
+ *   - Çift tıkla          → X ekseni zoom sıfırla
  *
  * Etkileşim — Y ekseni (sol/sağ eksen üzerinde):
- *   - Tekerlek            → o ekseni zoom (Y)
+ *   - Ctrl + Tekerlek     → o ekseni zoom (Y)
  *   - Shift + sürükle     → o ekseni pan (Y)
- *   - Çift tıkla           → o eksenin auto-range'ini geri al
+ *   - Çift tıkla          → o eksenin auto-range'ini geri al
  */
 
 const CHART_COLORS = [
@@ -89,6 +89,9 @@ function wheelZoomPlugin() {
     hooks: {
       ready(u) {
         u.over.addEventListener('wheel', (e) => {
+          // Ctrl yoksa sayfa scroll akışına karışma (kullanıcı chart
+          // üzerinden geçerken yanlışlıkla zoom tetiklenmesin)
+          if (!e.ctrlKey) return;
           e.preventDefault();
           const { left } = u.cursor;
           if (left == null || left < 0) return;
@@ -106,7 +109,7 @@ function wheelZoomPlugin() {
             min: cursorX - newRange * ratio,
             max: cursorX + newRange * (1 - ratio),
           });
-        });
+        }, { passive: false });
       }
     }
   };
@@ -163,14 +166,15 @@ function perAxisZoomPanPlugin() {
           });
         };
 
-        // --- Wheel zoom on axis ---
+        // --- Wheel zoom on axis (Ctrl+Wheel) ---
         for (const [el, scaleKey] of scaleByEl) {
           el.addEventListener('wheel', (e) => {
+            // Ctrl olmadan wheel sayfa scroll'una dokunmaz
+            if (!e.ctrlKey) return;
             e.preventDefault();
             e.stopPropagation();
             const s = u.scales[scaleKey];
             if (s.min == null || s.max == null) return;
-            // Fare pozisyonunu scale değerine çevir (plot area yüksekliği kullanılır)
             const plotRect = u.over.getBoundingClientRect();
             const relY = e.clientY - plotRect.top;
             const clampedY = Math.max(0, Math.min(plotRect.height, relY));
