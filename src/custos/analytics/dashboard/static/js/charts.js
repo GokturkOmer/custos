@@ -470,11 +470,13 @@ function chartPanel(chartId) {
         : labels.map(() => [null, null]);
       const uplotData = [effectiveTimestamps, ...effectiveSeries];
 
-      // Scales: x backend penceresine sabit; Y scale'leri layout'a göre
+      // Scales: x backend penceresine sabit; Y scale'leri layout'a göre.
+      // auto:false ile uPlot redraw'da x range'i otomatik min/max'a
+      // dönmez — setScale ile verilen değer kalıcı olur.
       const scales = {
         x: {
           time: true,
-          range: () => [windowRange[0], windowRange[1]],
+          auto: false,
         },
       };
       if (axisMode === 'per-tag') {
@@ -558,6 +560,10 @@ function chartPanel(chartId) {
 
       this.chart = new uPlot(opts, uplotData, el);
       window.custos.charts[chartId] = this.chart;
+      // Init sonrası x ekseni zaman penceresine oturt (auto:false olduğu için
+      // uPlot kendi başına set etmiyor). setScale sonrası user zoom/pan yapar,
+      // çift tıkla yine windowRange'e döner.
+      this.chart.setScale('x', { min: windowRange[0], max: windowRange[1] });
 
       let resizeTimer = null;
       const ro = new ResizeObserver(() => {
