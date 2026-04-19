@@ -40,10 +40,17 @@
     <div class="xl:col-span-3 bg-bg-surface rounded-sm border border-border-weak p-4">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-panel-title text-text-primary">Trend</h3>
-        <span class="text-text-disabled p-1 cursor-help"
-              title="Plot alanı:&#10;  Ctrl+Tekerlek → yatay zoom&#10;  Sürükle → box zoom&#10;  Shift+sürükle → yatay pan&#10;  Çift tık → X reset&#10;Y ekseni üzerinde:&#10;  Ctrl+Tekerlek → dikey zoom&#10;  Shift+sürükle → dikey pan&#10;  Çift tık → auto-range">
-          {{ icon_inline('eye', class='w-4 h-4') }}
-        </span>
+        <div class="flex items-center gap-2">
+          <span class="text-text-disabled p-1 cursor-help"
+                title="Plot alanı:&#10;  Ctrl+Tekerlek → yatay zoom&#10;  Sürükle → box zoom&#10;  Shift+sürükle → yatay pan&#10;  Çift tık → X reset&#10;Y ekseni üzerinde:&#10;  Ctrl+Tekerlek → dikey zoom&#10;  Shift+sürükle → dikey pan&#10;  Çift tık → auto-range">
+            {{ icon_inline('eye', class='w-4 h-4') }}
+          </span>
+          <a href="/dashboard/overview"
+             class="text-text-disabled hover:text-text-primary transition-colors p-1"
+             title="Kucult (Overview'a don)">
+            {{ icon_inline('minimize-2', class='w-4 h-4') }}
+          </a>
+        </div>
       </div>
       <div id="{{ chart.chart_key }}"
            x-data="chartPanel('{{ chart.chart_key }}')"
