@@ -68,13 +68,14 @@
       <h3 class="text-panel-title text-text-primary">Tag Kontrolü</h3>
       {% if tag_meta %}
       <p class="text-small text-text-disabled">
-        Checkbox kapatılırsa seri gizlenir. Min/Max alanları o tag'in Y
-        ekseninin sınırlarını manuel ayarlar; "Auto" otomatik sınıra döner.
+        Checkbox kapatılırsa seri gizlenir. Y ekseni aralığını değiştirmek
+        için eksen üzerinde Ctrl+Tekerlek (zoom), Shift+sürükle (pan) veya
+        çift tıkla (auto-range) kullanın — değişiklikler otomatik kaydedilir.
       </p>
       <div class="space-y-3" id="tag-control-panel" data-chart-id="{{ chart.chart_key }}">
         {% for tag in tag_meta %}
         <div class="border-t border-border-weak pt-2 first:border-t-0 first:pt-0">
-          <div class="flex items-center gap-2 mb-1">
+          <div class="flex items-center gap-2">
             <input type="checkbox" checked
                    data-action="toggle"
                    data-tag-id="{{ tag.tag_id }}"
@@ -85,28 +86,6 @@
             {% if tag.unit %}
             <span class="text-small text-text-disabled">{{ tag.unit }}</span>
             {% endif %}
-          </div>
-          <div class="flex items-center gap-1 mt-1">
-            <input type="number" step="any" placeholder="Min"
-                   data-action="min"
-                   data-tag-id="{{ tag.tag_id }}"
-                   class="flex-1 w-0 px-2 py-1 bg-bg-base border border-border-weak
-                          rounded-sm text-small text-text-primary
-                          focus:outline-none focus:border-accent-primary">
-            <input type="number" step="any" placeholder="Max"
-                   data-action="max"
-                   data-tag-id="{{ tag.tag_id }}"
-                   class="flex-1 w-0 px-2 py-1 bg-bg-base border border-border-weak
-                          rounded-sm text-small text-text-primary
-                          focus:outline-none focus:border-accent-primary">
-            <button type="button"
-                    data-action="auto"
-                    data-tag-id="{{ tag.tag_id }}"
-                    class="px-2 py-1 text-small text-text-secondary
-                           hover:text-text-primary border border-border-weak
-                           rounded-sm transition-colors">
-              Auto
-            </button>
           </div>
         </div>
         {% endfor %}
@@ -120,7 +99,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/charts.js?v=20260419h"></script>
+<script src="/static/js/charts.js?v=20260419l"></script>
 <script>
   window.custos = window.custos || {};
   window.custos.chartData = {
@@ -128,7 +107,11 @@
   };
 </script>
 <script>
-  // Tag kontrol paneli — checkbox toggle + min/max + auto reset
+  // Tag kontrol paneli — sadece checkbox ile seri görünürlük.
+  // Y ekseni aralığı axis üzerinde mouse (Ctrl+Wheel / Shift+Drag / dblclick)
+  // ile değiştirilir; setScale wrap'i bu değişiklikleri debounce'la
+  // localStorage'a kaydeder. Tüm state bir sonraki sayfa açılışında
+  // otomatik uygulanır (applyChartState).
   (function () {
     const panel = document.getElementById('tag-control-panel');
     if (!panel) return;
@@ -147,50 +130,87 @@
       return -1;
     }
 
-    function tagToScale(tagId) {
-      const chart = getChart();
-      if (!chart) return null;
-      const idx = tagToSeriesIdx(tagId);
-      if (idx < 0) return null;
-      return chart.series[idx].scale;
+    // "tag_T001_0" → "T001". Per-tag mod scale key formatı.
+    function scaleKeyToTagId(scaleKey) {
+      if (!scaleKey || typeof scaleKey !== 'string') return null;
+      const m = scaleKey.match(/^tag_(.+)_\d+$/);
+      return m ? m[1] : null;
     }
 
+    function updateTagState(tagId, patch) {
+      const cur = window.custos.loadChartState(chartId) || { tags: {} };
+      if (!cur.tags) cur.tags = {};
+      const existing = cur.tags[tagId] || { hidden: false, min: null, max: null };
+      cur.tags[tagId] = Object.assign({}, existing, patch);
+      window.custos.saveChartState(chartId, cur);
+    }
+
+    // Sayfa açılışında: kaydedilmiş checkbox durumlarını DOM'a yansıt.
+    // min/max applyChartState tarafından chart'a zaten uygulanır.
+    (function syncCheckboxesFromState() {
+      const initial = window.custos.loadChartState(chartId);
+      if (!initial || !initial.tags) return;
+      for (const tagId in initial.tags) {
+        const ts = initial.tags[tagId];
+        const cb = panel.querySelector(`[data-action="toggle"][data-tag-id="${tagId}"]`);
+        if (cb) cb.checked = !ts.hidden;
+      }
+    })();
+
+    // Axis pan/zoom için debounce'lı persist — mouse pan sırasında setScale
+    // her frame tetiklenir, her seferinde localStorage yazmak (JSON.stringify
+    // + setItem × 6 tag) kasmaya yol açıyordu. 300ms gecikmeyle son değer
+    // yazılır; kullanıcı etkileşimi biter bitmez kayıt tamamlanmış olur.
+    const _pendingKeys = new Set();
+    let _persistTimer = null;
+    function schedulePersist(scaleKey) {
+      _pendingKeys.add(scaleKey);
+      if (_persistTimer) clearTimeout(_persistTimer);
+      _persistTimer = setTimeout(flushPersist, 300);
+    }
+    function flushPersist() {
+      _persistTimer = null;
+      const chart = getChart();
+      if (!chart) { _pendingKeys.clear(); return; }
+      for (const sk of _pendingKeys) {
+        const tagId = scaleKeyToTagId(sk);
+        if (!tagId) continue;
+        const s = chart.scales[sk];
+        if (!s || s.min == null || s.max == null) continue;
+        updateTagState(tagId, { min: s.min, max: s.max });
+      }
+      _pendingKeys.clear();
+    }
+
+    // setScale monkeypatch — axis üzerinde yapılan her Y değişikliğini
+    // yakalar. X ekseni (time) dışlanır. İlk init sırasındaki setScale
+    // çağrıları applyChartState'ten önce olduğu için bu hook'tan etkilenmez
+    // (hook install buradan sonra çalışır).
+    function installSetScaleHook() {
+      const chart = getChart();
+      if (!chart) { setTimeout(installSetScaleHook, 50); return; }
+      if (chart._custosSetScalePatched) return;
+      const orig = chart.setScale.bind(chart);
+      chart.setScale = function (scaleKey, opts) {
+        orig(scaleKey, opts);
+        if (typeof scaleKey === 'string' && scaleKey.startsWith('tag_')) {
+          schedulePersist(scaleKey);
+        }
+      };
+      chart._custosSetScalePatched = true;
+    }
+    installSetScaleHook();
+
+    // Checkbox toggle: seri görünürlüğünü değiştir ve state'e yaz.
     panel.addEventListener('change', (e) => {
       const t = e.target;
-      const action = t.dataset.action;
+      if (!t || t.dataset.action !== 'toggle') return;
       const tagId = t.dataset.tagId;
       const chart = getChart();
-      if (!chart || !action || !tagId) return;
-
-      if (action === 'toggle') {
-        const idx = tagToSeriesIdx(tagId);
-        if (idx > 0) chart.setSeries(idx, { show: t.checked });
-      } else if (action === 'min' || action === 'max') {
-        const scaleKey = tagToScale(tagId);
-        if (!scaleKey) return;
-        const scale = chart.scales[scaleKey];
-        const minInput = panel.querySelector(`[data-action="min"][data-tag-id="${tagId}"]`);
-        const maxInput = panel.querySelector(`[data-action="max"][data-tag-id="${tagId}"]`);
-        const newMin = minInput.value === '' ? scale.min : parseFloat(minInput.value);
-        const newMax = maxInput.value === '' ? scale.max : parseFloat(maxInput.value);
-        if (isFinite(newMin) && isFinite(newMax) && newMin < newMax) {
-          chart.setScale(scaleKey, { min: newMin, max: newMax });
-        }
-      }
-    });
-
-    panel.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-action="auto"]');
-      if (!t) return;
-      const tagId = t.dataset.tagId;
-      const scaleKey = tagToScale(tagId);
-      const chart = getChart();
-      if (!chart || !scaleKey) return;
-      chart.setScale(scaleKey, { min: null, max: null });
-      const minInput = panel.querySelector(`[data-action="min"][data-tag-id="${tagId}"]`);
-      const maxInput = panel.querySelector(`[data-action="max"][data-tag-id="${tagId}"]`);
-      if (minInput) minInput.value = '';
-      if (maxInput) maxInput.value = '';
+      if (!chart || !tagId) return;
+      const idx = tagToSeriesIdx(tagId);
+      if (idx > 0) chart.setSeries(idx, { show: t.checked });
+      updateTagState(tagId, { hidden: !t.checked });
     });
   })();
 </script>
