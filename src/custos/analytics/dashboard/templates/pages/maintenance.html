@@ -1,0 +1,256 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Custos — Maintenance{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">Maintenance</h1>
+    <div class="flex items-center gap-2">
+      {% if tab == 'checklists' %}
+      <a href="/dashboard/maintenance/checklists/new"
+         class="px-3 py-1 bg-accent-primary text-white rounded-sm text-small
+                hover:opacity-90 transition-opacity inline-flex items-center gap-1">
+        {{ icon_inline('plus', class='w-4 h-4') }} Yeni Checklist
+      </a>
+      {% elif tab == 'calendar' %}
+      <a href="/dashboard/maintenance/schedules/new"
+         class="px-3 py-1 bg-accent-primary text-white rounded-sm text-small
+                hover:opacity-90 transition-opacity inline-flex items-center gap-1">
+        {{ icon_inline('plus', class='w-4 h-4') }} Yeni Periyodik Bakım
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Sekmeler #}
+  <div class="flex border-b border-border-weak">
+    {% set _tabs = [
+      ('calendar', 'Takvim', 'calendar'),
+      ('checklists', 'Checklist\'ler', 'list'),
+      ('history', 'Geçmiş', 'clock'),
+    ] %}
+    {% for key, label, ic in _tabs %}
+    <a href="/dashboard/maintenance?tab={{ key }}"
+       class="px-4 py-2 text-cell inline-flex items-center gap-2
+              {% if tab == key %}
+                text-accent-primary border-b-2 border-accent-primary -mb-px
+              {% else %}
+                text-text-secondary hover:text-text-primary
+              {% endif %}">
+      {{ icon_inline(ic, class='w-4 h-4') }} {{ label }}
+    </a>
+    {% endfor %}
+  </div>
+
+  {# Takvim sekmesi #}
+  {% if tab == 'calendar' %}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+    <h2 class="text-panel-title text-text-primary mb-3">Yaklaşan Bakımlar</h2>
+    {% if upcoming %}
+    <table class="w-full text-cell">
+      <thead>
+        <tr class="text-left text-small text-text-secondary border-b border-border-weak">
+          <th class="py-2">Vade</th>
+          <th class="py-2">Başlık</th>
+          <th class="py-2">Asset</th>
+          <th class="py-2">Durum</th>
+          <th class="py-2 text-right">İşlem</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in upcoming %}
+        <tr class="border-b border-border-weak">
+          <td class="py-2 text-text-primary font-mono">
+            {{ t.due_at.strftime('%Y-%m-%d %H:%M') if t.due_at else '—' }}
+          </td>
+          <td class="py-2 text-text-primary">{{ t.title_snapshot }}</td>
+          <td class="py-2 text-text-secondary">
+            {% if t.asset_instance_id and instances.get(t.asset_instance_id) %}
+              {{ instances[t.asset_instance_id].name }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="py-2">
+            <span class="px-2 py-0.5 rounded-sm text-small
+                         {% if t.status == 'pending' %}bg-status-warn-bg text-status-warn
+                         {% elif t.status == 'in_progress' %}bg-accent-primary text-white
+                         {% endif %}">
+              {{ t.status }}
+            </span>
+          </td>
+          <td class="py-2 text-right">
+            <a href="/dashboard/maintenance/tasks/{{ t.id }}"
+               class="text-accent-primary hover:underline">Aç</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-text-disabled">Yaklaşan bakım yok.</p>
+    {% endif %}
+  </div>
+
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+    <h2 class="text-panel-title text-text-primary mb-3">Periyodik Bakım Takvimleri</h2>
+    {% if schedules %}
+    <table class="w-full text-cell">
+      <thead>
+        <tr class="text-left text-small text-text-secondary border-b border-border-weak">
+          <th class="py-2">Checklist</th>
+          <th class="py-2">Kapsam</th>
+          <th class="py-2">Periyot</th>
+          <th class="py-2">Sonraki Vade</th>
+          <th class="py-2">Durum</th>
+          <th class="py-2 text-right">İşlem</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in schedules %}
+        <tr class="border-b border-border-weak">
+          <td class="py-2 text-text-primary">
+            {% if checklist_lookup.get(s.checklist_id) %}
+              {{ checklist_lookup[s.checklist_id].title }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="py-2 text-text-secondary">
+            {% if s.asset_instance_id and instances.get(s.asset_instance_id) %}
+              Instance: {{ instances[s.asset_instance_id].name }}
+            {% elif s.asset_template_id %}
+              Template #{{ s.asset_template_id }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="py-2 text-text-primary font-mono">
+            {{ s.period_value }} × {{ s.period_kind }}
+          </td>
+          <td class="py-2 text-text-primary font-mono">
+            {{ s.next_due_at.strftime('%Y-%m-%d %H:%M') }}
+          </td>
+          <td class="py-2">
+            <form method="post"
+                  action="/dashboard/maintenance/schedules/{{ s.id }}/toggle"
+                  class="inline">
+              <button type="submit"
+                      class="px-2 py-0.5 rounded-sm text-small
+                             {% if s.enabled %}bg-status-ok-bg text-status-ok
+                             {% else %}bg-bg-base text-text-disabled{% endif %}">
+                {{ 'Aktif' if s.enabled else 'Pasif' }}
+              </button>
+            </form>
+          </td>
+          <td class="py-2 text-right space-x-2">
+            <a href="/dashboard/maintenance/schedules/{{ s.id }}/edit"
+               class="text-accent-primary hover:underline">Düzenle</a>
+            <form method="post"
+                  action="/dashboard/maintenance/schedules/{{ s.id }}/delete"
+                  onsubmit="return confirm('Silinsin mi?');" class="inline">
+              <button type="submit" class="text-status-crit hover:underline">
+                Sil
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-text-disabled">Henüz periyodik bakım tanımlı değil.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# Checklist'ler sekmesi #}
+  {% if tab == 'checklists' %}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+    {% if checklists %}
+    <table class="w-full text-cell">
+      <thead>
+        <tr class="text-left text-small text-text-secondary border-b border-border-weak">
+          <th class="py-2">Başlık</th>
+          <th class="py-2">Kategori</th>
+          <th class="py-2">Adım</th>
+          <th class="py-2">Asset Template</th>
+          <th class="py-2 text-right">İşlem</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in checklists %}
+        <tr class="border-b border-border-weak">
+          <td class="py-2 text-text-primary">{{ c.title }}</td>
+          <td class="py-2 text-text-secondary font-mono">{{ c.category }}</td>
+          <td class="py-2 text-text-primary">{{ c.steps | length }}</td>
+          <td class="py-2 text-text-secondary">
+            {% if c.asset_template_id %}#{{ c.asset_template_id }}{% else %}—{% endif %}
+          </td>
+          <td class="py-2 text-right space-x-2">
+            <a href="/dashboard/maintenance/checklists/{{ c.id }}/edit"
+               class="text-accent-primary hover:underline">Düzenle</a>
+            <form method="post"
+                  action="/dashboard/maintenance/checklists/{{ c.id }}/delete"
+                  onsubmit="return confirm('Silinsin mi?');" class="inline">
+              <button type="submit" class="text-status-crit hover:underline">
+                Sil
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-text-disabled">Henüz checklist yok. Sağ üstten yeni ekleyebilirsiniz.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# Geçmiş sekmesi #}
+  {% if tab == 'history' %}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+    {% if recent %}
+    <table class="w-full text-cell">
+      <thead>
+        <tr class="text-left text-small text-text-secondary border-b border-border-weak">
+          <th class="py-2">Tarih</th>
+          <th class="py-2">Başlık</th>
+          <th class="py-2">Durum</th>
+          <th class="py-2">Kaynak</th>
+          <th class="py-2">Yapan</th>
+          <th class="py-2 text-right">İşlem</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in recent %}
+        <tr class="border-b border-border-weak">
+          <td class="py-2 text-text-primary font-mono">
+            {{ t.completed_at.strftime('%Y-%m-%d %H:%M')
+               if t.completed_at else t.created_at.strftime('%Y-%m-%d %H:%M')
+               if t.created_at else '—' }}
+          </td>
+          <td class="py-2 text-text-primary">{{ t.title_snapshot }}</td>
+          <td class="py-2">
+            <span class="px-2 py-0.5 rounded-sm text-small
+                         {% if t.status == 'completed' %}bg-status-ok-bg text-status-ok
+                         {% elif t.status == 'skipped' %}bg-bg-base text-text-disabled
+                         {% elif t.status == 'missed' %}bg-status-crit-bg text-status-crit
+                         {% endif %}">
+              {{ t.status }}
+            </span>
+          </td>
+          <td class="py-2 text-text-secondary font-mono">{{ t.source }}</td>
+          <td class="py-2 text-text-secondary">{{ t.completed_by or '—' }}</td>
+          <td class="py-2 text-right">
+            <a href="/dashboard/maintenance/tasks/{{ t.id }}"
+               class="text-accent-primary hover:underline">Detay</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-text-disabled">Henüz tamamlanmış bakım yok.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,146 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Custos — {{ 'Yeni' if not schedule else 'Düzenle' }} Periyodik Bakım{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl space-y-4" x-data="scheduleForm()">
+  <div class="flex items-center gap-2">
+    <a href="/dashboard/maintenance?tab=calendar"
+       class="text-text-disabled hover:text-text-primary transition-colors p-1">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <h1 class="text-heading text-text-primary font-semibold">
+      {{ 'Yeni Periyodik Bakım' if not schedule else 'Periyodik Bakımı Düzenle' }}
+    </h1>
+  </div>
+
+  <form method="post"
+        action="{% if schedule %}/dashboard/maintenance/schedules/{{ schedule.id }}/edit{% else %}/dashboard/maintenance/schedules{% endif %}"
+        class="bg-bg-surface rounded-sm border border-border-weak p-4 space-y-4">
+
+    <div>
+      <label class="text-small text-text-secondary block mb-1">Checklist</label>
+      <select name="checklist_id" required
+              class="w-full px-3 py-2 bg-bg-base border border-border-weak
+                     rounded-sm text-cell text-text-primary
+                     focus:outline-none focus:border-accent-primary">
+        <option value="">— Seçin —</option>
+        {% for c in checklists %}
+        <option value="{{ c.id }}"
+                {% if schedule and schedule.checklist_id == c.id %}selected{% endif %}>
+          {{ c.title }} ({{ c.category }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div>
+      <label class="text-small text-text-secondary block mb-2">Kapsam</label>
+      <div class="flex items-center gap-4 mb-2">
+        <label class="flex items-center gap-2 text-cell">
+          <input type="radio" name="scope_kind" value="instance"
+                 x-model="scopeKind"
+                 {% if not schedule or schedule.asset_instance_id is not none %}checked{% endif %}>
+          Belirli bir ekipman (instance)
+        </label>
+        <label class="flex items-center gap-2 text-cell">
+          <input type="radio" name="scope_kind" value="template"
+                 x-model="scopeKind"
+                 {% if schedule and schedule.asset_template_id is not none %}checked{% endif %}>
+          Tüm ekipmanlar (template)
+        </label>
+      </div>
+      <select name="scope_target" required
+              class="w-full px-3 py-2 bg-bg-base border border-border-weak
+                     rounded-sm text-cell text-text-primary
+                     focus:outline-none focus:border-accent-primary">
+        <template x-if="scopeKind === 'instance'">
+          <optgroup label="Ekipman Instance'ları">
+            {% for i in asset_instances %}
+            <option value="{{ i.id }}"
+                    {% if schedule and schedule.asset_instance_id == i.id %}selected{% endif %}>
+              {{ i.name }}
+            </option>
+            {% endfor %}
+          </optgroup>
+        </template>
+        <template x-if="scopeKind === 'template'">
+          <optgroup label="Asset Template'ler">
+            {% for t in asset_templates %}
+            <option value="{{ t.id }}"
+                    {% if schedule and schedule.asset_template_id == t.id %}selected{% endif %}>
+              {{ t.name }}
+            </option>
+            {% endfor %}
+          </optgroup>
+        </template>
+      </select>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="text-small text-text-secondary block mb-1">Periyot Türü</label>
+        <select name="period_kind"
+                class="w-full px-3 py-2 bg-bg-base border border-border-weak
+                       rounded-sm text-cell text-text-primary
+                       focus:outline-none focus:border-accent-primary">
+          {% set cur_k = schedule.period_kind if schedule else 'monthly' %}
+          <option value="daily" {% if cur_k == 'daily' %}selected{% endif %}>Günlük</option>
+          <option value="weekly" {% if cur_k == 'weekly' %}selected{% endif %}>Haftalık</option>
+          <option value="monthly" {% if cur_k == 'monthly' %}selected{% endif %}>Aylık</option>
+          <option value="yearly" {% if cur_k == 'yearly' %}selected{% endif %}>Yıllık</option>
+          <option value="custom_days" {% if cur_k == 'custom_days' %}selected{% endif %}>Özel (N gün)</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-small text-text-secondary block mb-1">Değer (her N × periyot)</label>
+        <input name="period_value" type="number" min="1"
+               value="{{ schedule.period_value if schedule else 1 }}"
+               class="w-full px-3 py-2 bg-bg-base border border-border-weak
+                      rounded-sm text-cell text-text-primary
+                      focus:outline-none focus:border-accent-primary">
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="text-small text-text-secondary block mb-1">İlk Vade Tarihi</label>
+        <input name="anchor_date" type="date" required
+               value="{{ schedule.anchor_date.isoformat() if schedule else '' }}"
+               class="w-full px-3 py-2 bg-bg-base border border-border-weak
+                      rounded-sm text-cell text-text-primary
+                      focus:outline-none focus:border-accent-primary">
+      </div>
+      <div>
+        <label class="text-small text-text-secondary block mb-1">Uyarı Ön-Süresi (saat)</label>
+        <input name="notify_lead_hours" type="number" min="0"
+               value="{{ schedule.notify_lead_hours if schedule else 24 }}"
+               class="w-full px-3 py-2 bg-bg-base border border-border-weak
+                      rounded-sm text-cell text-text-primary
+                      focus:outline-none focus:border-accent-primary">
+      </div>
+    </div>
+
+    <div class="flex items-center justify-end gap-2">
+      <a href="/dashboard/maintenance?tab=calendar"
+         class="px-4 py-2 text-cell text-text-secondary hover:text-text-primary">
+        İptal
+      </a>
+      <button type="submit"
+              class="px-4 py-2 bg-accent-primary text-white rounded-sm text-cell
+                     hover:opacity-90 transition-opacity">
+        Kaydet
+      </button>
+    </div>
+  </form>
+</div>
+
+<script>
+function scheduleForm() {
+  return {
+    scopeKind: {% if schedule and schedule.asset_template_id is not none %}'template'{% else %}'instance'{% endif %},
+  };
+}
+</script>
+{% endblock %}

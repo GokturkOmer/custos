@@ -1,0 +1,131 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Custos — {{ task.title_snapshot }}{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl space-y-4">
+  <div class="flex items-center gap-2">
+    <a href="/dashboard/maintenance"
+       class="text-text-disabled hover:text-text-primary transition-colors p-1">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <h1 class="text-heading text-text-primary font-semibold">{{ task.title_snapshot }}</h1>
+    <span class="px-2 py-0.5 rounded-sm text-small
+                 {% if task.status == 'completed' %}bg-status-ok-bg text-status-ok
+                 {% elif task.status == 'pending' %}bg-status-warn-bg text-status-warn
+                 {% elif task.status == 'skipped' %}bg-bg-base text-text-disabled
+                 {% elif task.status == 'missed' %}bg-status-crit-bg text-status-crit
+                 {% else %}bg-accent-primary text-white{% endif %}">
+      {{ task.status }}
+    </span>
+  </div>
+
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4 space-y-2">
+    <div class="grid grid-cols-3 gap-4 text-cell">
+      <div>
+        <div class="text-small text-text-secondary">Kaynak</div>
+        <div class="text-text-primary font-mono">{{ task.source }}</div>
+      </div>
+      <div>
+        <div class="text-small text-text-secondary">Vade</div>
+        <div class="text-text-primary font-mono">
+          {{ task.due_at.strftime('%Y-%m-%d %H:%M') if task.due_at else '—' }}
+        </div>
+      </div>
+      <div>
+        <div class="text-small text-text-secondary">Ekipman</div>
+        <div class="text-text-primary">
+          {{ asset.name if asset else '—' }}
+        </div>
+      </div>
+    </div>
+    {% if task.completed_at %}
+    <div class="pt-2 border-t border-border-weak text-small text-text-secondary">
+      Tamamlanma: {{ task.completed_at.strftime('%Y-%m-%d %H:%M') }}
+      {% if task.completed_by %}— {{ task.completed_by }}{% endif %}
+    </div>
+    {% endif %}
+    {% if task.notes %}
+    <div class="pt-2 border-t border-border-weak">
+      <div class="text-small text-text-secondary">Notlar</div>
+      <div class="text-cell text-text-primary whitespace-pre-wrap">{{ task.notes }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if checklist %}
+  <form method="post"
+        action="/dashboard/maintenance/tasks/{{ task.id }}/complete"
+        class="bg-bg-surface rounded-sm border border-border-weak p-4 space-y-4">
+    <h2 class="text-panel-title text-text-primary">Adımlar</h2>
+    <div class="space-y-3">
+      {% for step in checklist.steps %}
+      {% set result = results_by_step.get(step.id) %}
+      <div class="border-t border-border-weak pt-3 first:border-t-0 first:pt-0">
+        <label class="flex items-start gap-2 cursor-pointer">
+          <input type="checkbox" name="step_checked"
+                 value="{{ step.id }}"
+                 {% if result and result.checked %}checked{% endif %}
+                 {% if task.status != 'pending' and task.status != 'in_progress' %}disabled{% endif %}
+                 class="mt-1 accent-accent-primary">
+          <div class="flex-1">
+            <div class="text-cell text-text-primary">
+              {{ loop.index }}. {{ step.text }}
+              {% if step.estimated_minutes %}
+              <span class="text-small text-text-disabled">({{ step.estimated_minutes }} dk)</span>
+              {% endif %}
+            </div>
+            <input type="text" name="step_note"
+                   value="{{ step.id }}:{{ result.note if result else '' }}"
+                   placeholder="Adım notu (opsiyonel)"
+                   class="mt-1 w-full px-2 py-1 bg-bg-base border border-border-weak
+                          rounded-sm text-small text-text-primary
+                          focus:outline-none focus:border-accent-primary"
+                   {% if task.status not in ('pending', 'in_progress') %}readonly{% endif %}>
+          </div>
+        </label>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if task.status in ('pending', 'in_progress') %}
+    <div class="border-t border-border-weak pt-4 space-y-3">
+      <div>
+        <label class="text-small text-text-secondary block mb-1">Yapan Kişi</label>
+        <input name="completed_by" type="text"
+               class="w-full px-3 py-2 bg-bg-base border border-border-weak
+                      rounded-sm text-cell text-text-primary
+                      focus:outline-none focus:border-accent-primary">
+      </div>
+      <div>
+        <label class="text-small text-text-secondary block mb-1">Genel Not</label>
+        <textarea name="notes" rows="2"
+                  class="w-full px-3 py-2 bg-bg-base border border-border-weak
+                         rounded-sm text-cell text-text-primary
+                         focus:outline-none focus:border-accent-primary"></textarea>
+      </div>
+      <div class="flex items-center justify-end gap-2">
+        <button type="submit"
+                formaction="/dashboard/maintenance/tasks/{{ task.id }}/skip"
+                formnovalidate
+                class="px-4 py-2 bg-bg-base text-text-secondary rounded-sm text-cell
+                       hover:text-text-primary border border-border-weak">
+          Atla
+        </button>
+        <button type="submit"
+                class="px-4 py-2 bg-accent-primary text-white rounded-sm text-cell
+                       hover:opacity-90 transition-opacity">
+          Tamamla
+        </button>
+      </div>
+    </div>
+    {% endif %}
+  </form>
+  {% else %}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+    <p class="text-text-disabled">Bu task'ın checklist'i silinmiş.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

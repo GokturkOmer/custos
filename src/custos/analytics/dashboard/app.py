@@ -10,7 +10,7 @@ import asyncio
 import os
 import re
 import unicodedata
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,11 @@ from custos.shared.database import (
     AuditLogEntry,
     ConnectionProfile,
     DatabaseInterface,
+    MaintenanceChecklist,
+    MaintenanceChecklistStep,
+    MaintenanceSchedule,
+    MaintenanceTask,
+    MaintenanceTaskStepResult,
     OverviewChart,
     PushSubscription,
     TagBinding,
@@ -44,6 +49,12 @@ _STATIC_DIR = _MODULE_DIR / "static"
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+# FastAPI Form(default_factory=list) — ruff B008 bugbear kuralı fonksiyon
+# çağrısını argüman default'unda yasaklar; module-level singleton ile sarmalıyoruz.
+# Type: Any çünkü Form(...) aslında FieldInfo döner ama imza yerine list[str] alanı.
+_EMPTY_FORM_STR_LIST: Any = Form(default_factory=list)
+
 
 # Polling preset → ms eşleştirmesi
 POLLING_PRESETS: dict[str, int] = {
@@ -87,6 +98,7 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
             {"href": "/dashboard/processes", "icon": "package", "label": "Processes"},
             {"href": "/dashboard/kpi", "icon": "trending-up", "label": "KPI"},
             {"href": "/dashboard/alarms", "icon": "alert-triangle", "label": "Alarms"},
+            {"href": "/dashboard/maintenance", "icon": "tool", "label": "Maintenance"},
             {"href": "/dashboard/logs", "icon": "file-text", "label": "Logs"},
             {"href": "/dashboard/settings", "icon": "settings", "label": "Settings"},
         ],
@@ -1867,3 +1879,579 @@ async def push_test(request: Request) -> JSONResponse:
         severity="warn",
     )
     return JSONResponse({"sent": sent})
+
+
+# --- Maintenance ---
+
+
+def _slugify_checklist_title(title: str) -> str:
+    """Türkçe karakterleri normalize edip URL-safe slug üretir."""
+    ascii_text = unicodedata.normalize("NFKD", title)
+    ascii_text = ascii_text.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_text).strip("-").lower()
+    return slug or "checklist"
+
+
+async def _unique_checklist_slug(db: DatabaseInterface, base: str) -> str:
+    """Slug çakışırsa `-2`, `-3` suffix ekleyerek unique yapar."""
+    existing = {c.slug for c in await db.list_maintenance_checklists()}
+    if base not in existing:
+        return base
+    n = 2
+    while f"{base}-{n}" in existing:
+        n += 1
+    return f"{base}-{n}"
+
+
+def _parse_checklist_steps_form(
+    texts: list[str], minutes: list[str],
+) -> list[MaintenanceChecklistStep]:
+    """Form'dan gelen paralel step_text[] ve step_minutes[] dizilerini birleştirir.
+
+    Boş text'ler atlanır. estimated_minutes boşsa None.
+    """
+    steps: list[MaintenanceChecklistStep] = []
+    for idx, text in enumerate(texts):
+        t = text.strip()
+        if not t:
+            continue
+        mins_raw = minutes[idx] if idx < len(minutes) else ""
+        try:
+            mins: int | None = int(mins_raw) if mins_raw.strip() else None
+        except ValueError:
+            mins = None
+        steps.append(MaintenanceChecklistStep(
+            checklist_id=0, sort_order=len(steps),
+            text=t, estimated_minutes=mins,
+        ))
+    return steps
+
+
+_MAINTENANCE_TABS = ("calendar", "checklists", "history")
+
+
+@router.get("/maintenance", response_class=HTMLResponse)
+async def maintenance_page(
+    request: Request, tab: str = "calendar",
+) -> HTMLResponse:
+    """Maintenance ana sayfa — 3 sekme (calendar / checklists / history)."""
+    if tab not in _MAINTENANCE_TABS:
+        tab = "calendar"
+    db = _get_db(request)
+
+    upcoming: list[MaintenanceTask] = []
+    recent: list[MaintenanceTask] = []
+    checklists: list[MaintenanceChecklist] = []
+    schedules: list[MaintenanceSchedule] = []
+
+    if tab == "calendar":
+        upcoming = await db.list_upcoming_maintenance_tasks(within_hours=24 * 30)
+        schedules = await db.list_maintenance_schedules()
+    elif tab == "checklists":
+        checklists = await db.list_maintenance_checklists()
+    elif tab == "history":
+        recent = await db.list_recent_maintenance_tasks(limit=100)
+
+    # Asset instance ve checklist isimleri için lookup dict'leri
+    instances = await db.list_asset_instances()
+    instance_by_id = {i.id: i for i in instances if i.id is not None}
+    checklist_lookup = {
+        c.id: c for c in await db.list_maintenance_checklists()
+        if c.id is not None
+    }
+
+    ctx = _base_context(
+        page_title="Maintenance",
+        active_nav="/dashboard/maintenance",
+        tab=tab,
+        upcoming=upcoming,
+        recent=recent,
+        checklists=checklists,
+        schedules=schedules,
+        instances=instance_by_id,
+        checklist_lookup=checklist_lookup,
+    )
+    return templates.TemplateResponse(request, "pages/maintenance.html", ctx)
+
+
+# --- Checklist CRUD ---
+
+
+@router.get("/maintenance/checklists/new", response_class=HTMLResponse)
+async def maintenance_checklist_new(request: Request) -> HTMLResponse:
+    """Yeni checklist formu."""
+    db = _get_db(request)
+    templates_list = await db.list_asset_templates()
+    ctx = _base_context(
+        page_title="Yeni Checklist",
+        active_nav="/dashboard/maintenance",
+        checklist=None,
+        asset_templates=templates_list,
+    )
+    return templates.TemplateResponse(
+        request, "pages/maintenance_checklist_form.html", ctx,
+    )
+
+
+@router.post("/maintenance/checklists", response_class=HTMLResponse)
+async def maintenance_checklist_create(
+    request: Request,
+    title: str = Form(...),
+    description: str = Form(""),
+    category: str = Form("generic"),
+    asset_template_id: str = Form(""),
+    step_text: list[str] = _EMPTY_FORM_STR_LIST,
+    step_minutes: list[str] = _EMPTY_FORM_STR_LIST,
+) -> RedirectResponse:
+    """Yeni checklist + adımları kaydeder."""
+    db = _get_db(request)
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Başlık boş olamaz")
+    if category not in ("periodic", "alarm", "generic"):
+        category = "generic"
+    tmpl_id: int | None = None
+    if asset_template_id.strip():
+        try:
+            tmpl_id = int(asset_template_id)
+        except ValueError:
+            tmpl_id = None
+
+    slug = await _unique_checklist_slug(db, _slugify_checklist_title(title))
+    steps = _parse_checklist_steps_form(step_text, step_minutes)
+    checklist = MaintenanceChecklist(
+        slug=slug, title=title, description=description.strip(),
+        category=category, asset_template_id=tmpl_id, steps=steps,
+    )
+    await db.insert_maintenance_checklist(checklist)
+    await db.insert_audit_log(AuditLogEntry(
+        category="maintenance", action="checklist_created",
+        entity_type="checklist", entity_id=slug, detail=title,
+    ))
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=checklists", status_code=303,
+    )
+
+
+@router.get(
+    "/maintenance/checklists/{checklist_id:int}/edit",
+    response_class=HTMLResponse,
+)
+async def maintenance_checklist_edit(
+    request: Request, checklist_id: int,
+) -> HTMLResponse:
+    """Checklist düzenleme formu."""
+    db = _get_db(request)
+    checklist = await db.get_maintenance_checklist(checklist_id)
+    if checklist is None:
+        raise HTTPException(status_code=404, detail="Checklist bulunamadı")
+    templates_list = await db.list_asset_templates()
+    ctx = _base_context(
+        page_title=f"Düzenle: {checklist.title}",
+        active_nav="/dashboard/maintenance",
+        checklist=checklist,
+        asset_templates=templates_list,
+    )
+    return templates.TemplateResponse(
+        request, "pages/maintenance_checklist_form.html", ctx,
+    )
+
+
+@router.post(
+    "/maintenance/checklists/{checklist_id:int}/edit",
+    response_class=HTMLResponse,
+)
+async def maintenance_checklist_update(
+    request: Request, checklist_id: int,
+    title: str = Form(...),
+    description: str = Form(""),
+    category: str = Form("generic"),
+    asset_template_id: str = Form(""),
+    step_text: list[str] = _EMPTY_FORM_STR_LIST,
+    step_minutes: list[str] = _EMPTY_FORM_STR_LIST,
+) -> RedirectResponse:
+    """Checklist + adımları (replace_all) günceller."""
+    db = _get_db(request)
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Başlık boş olamaz")
+    if category not in ("periodic", "alarm", "generic"):
+        category = "generic"
+    tmpl_id: int | None = None
+    if asset_template_id.strip():
+        try:
+            tmpl_id = int(asset_template_id)
+        except ValueError:
+            tmpl_id = None
+
+    updated = await db.update_maintenance_checklist(checklist_id, {
+        "title": title, "description": description.strip(),
+        "category": category, "asset_template_id": tmpl_id,
+    })
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Checklist bulunamadı")
+
+    steps = _parse_checklist_steps_form(step_text, step_minutes)
+    await db.replace_maintenance_checklist_steps(checklist_id, steps)
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=checklists", status_code=303,
+    )
+
+
+@router.post(
+    "/maintenance/checklists/{checklist_id:int}/delete",
+    response_class=HTMLResponse,
+)
+async def maintenance_checklist_delete(
+    request: Request, checklist_id: int,
+) -> RedirectResponse:
+    """Checklist siler (steps CASCADE)."""
+    db = _get_db(request)
+    existing = await db.get_maintenance_checklist(checklist_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Checklist bulunamadı")
+    ok = await db.delete_maintenance_checklist(checklist_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Silme başarısız")
+    await db.insert_audit_log(AuditLogEntry(
+        category="maintenance", action="checklist_deleted",
+        entity_type="checklist", entity_id=existing.slug, detail=existing.title,
+    ))
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=checklists", status_code=303,
+    )
+
+
+# --- Schedule CRUD ---
+
+
+@router.get("/maintenance/schedules/new", response_class=HTMLResponse)
+async def maintenance_schedule_new(request: Request) -> HTMLResponse:
+    """Yeni schedule formu."""
+    db = _get_db(request)
+    checklists = await db.list_maintenance_checklists()
+    templates_list = await db.list_asset_templates()
+    instances = await db.list_asset_instances()
+    ctx = _base_context(
+        page_title="Yeni Periyodik Bakım",
+        active_nav="/dashboard/maintenance",
+        schedule=None,
+        checklists=checklists,
+        asset_templates=templates_list,
+        asset_instances=instances,
+    )
+    return templates.TemplateResponse(
+        request, "pages/maintenance_schedule_form.html", ctx,
+    )
+
+
+def _parse_schedule_form(
+    checklist_id_str: str, scope_kind: str, scope_target_str: str,
+    period_kind: str, period_value_str: str,
+    anchor_date_str: str, notify_lead_hours_str: str,
+) -> tuple[int, int | None, int | None, str, int, date, int]:
+    """Schedule formunu dataclass alanlarına parse eder.
+
+    Dönüş: (checklist_id, asset_template_id, asset_instance_id, period_kind,
+             period_value, anchor_date, notify_lead_hours)
+
+    Raises HTTPException(400) eksik/geçersiz alanlarda.
+    """
+    try:
+        cid = int(checklist_id_str)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Geçersiz checklist",
+        ) from exc
+    if period_kind not in (
+        "daily", "weekly", "monthly", "yearly", "custom_days",
+    ):
+        raise HTTPException(status_code=400, detail="Geçersiz periyot türü")
+    try:
+        pval = max(1, int(period_value_str)) if period_value_str else 1
+    except ValueError:
+        pval = 1
+    try:
+        anchor = datetime.strptime(anchor_date_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Geçersiz tarih",
+        ) from exc
+    try:
+        notify = max(0, int(notify_lead_hours_str)) if notify_lead_hours_str else 24
+    except ValueError:
+        notify = 24
+
+    tmpl_id: int | None = None
+    inst_id: int | None = None
+    try:
+        sid = int(scope_target_str)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Geçersiz kapsam hedefi",
+        ) from exc
+    if scope_kind == "template":
+        tmpl_id = sid
+    elif scope_kind == "instance":
+        inst_id = sid
+    else:
+        raise HTTPException(status_code=400, detail="Geçersiz kapsam türü")
+
+    return cid, tmpl_id, inst_id, period_kind, pval, anchor, notify
+
+
+@router.post("/maintenance/schedules", response_class=HTMLResponse)
+async def maintenance_schedule_create(
+    request: Request,
+    checklist_id: str = Form(...),
+    scope_kind: str = Form(...),
+    scope_target: str = Form(...),
+    period_kind: str = Form(...),
+    period_value: str = Form("1"),
+    anchor_date: str = Form(...),
+    notify_lead_hours: str = Form("24"),
+) -> RedirectResponse:
+    """Yeni schedule kaydı."""
+    db = _get_db(request)
+    cid, tmpl_id, inst_id, pkind, pval, anchor, notify = _parse_schedule_form(
+        checklist_id, scope_kind, scope_target, period_kind,
+        period_value, anchor_date, notify_lead_hours,
+    )
+    # next_due_at = anchor_date at 09:00 UTC (sabah default)
+    next_due = datetime.combine(
+        anchor, time(9, 0), tzinfo=UTC,
+    )
+    await db.insert_maintenance_schedule(MaintenanceSchedule(
+        checklist_id=cid,
+        asset_template_id=tmpl_id,
+        asset_instance_id=inst_id,
+        period_kind=pkind,
+        period_value=pval,
+        anchor_date=anchor,
+        next_due_at=next_due,
+        notify_lead_hours=notify,
+    ))
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=calendar", status_code=303,
+    )
+
+
+@router.get(
+    "/maintenance/schedules/{schedule_id:int}/edit",
+    response_class=HTMLResponse,
+)
+async def maintenance_schedule_edit(
+    request: Request, schedule_id: int,
+) -> HTMLResponse:
+    """Schedule düzenleme formu."""
+    db = _get_db(request)
+    schedule = await db.get_maintenance_schedule(schedule_id)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule bulunamadı")
+    checklists = await db.list_maintenance_checklists()
+    templates_list = await db.list_asset_templates()
+    instances = await db.list_asset_instances()
+    ctx = _base_context(
+        page_title="Periyodik Bakımı Düzenle",
+        active_nav="/dashboard/maintenance",
+        schedule=schedule,
+        checklists=checklists,
+        asset_templates=templates_list,
+        asset_instances=instances,
+    )
+    return templates.TemplateResponse(
+        request, "pages/maintenance_schedule_form.html", ctx,
+    )
+
+
+@router.post(
+    "/maintenance/schedules/{schedule_id:int}/edit",
+    response_class=HTMLResponse,
+)
+async def maintenance_schedule_update(
+    request: Request, schedule_id: int,
+    checklist_id: str = Form(...),
+    scope_kind: str = Form(...),
+    scope_target: str = Form(...),
+    period_kind: str = Form(...),
+    period_value: str = Form("1"),
+    anchor_date: str = Form(...),
+    notify_lead_hours: str = Form("24"),
+) -> RedirectResponse:
+    """Schedule günceller."""
+    db = _get_db(request)
+    cid, tmpl_id, inst_id, pkind, pval, anchor, notify = _parse_schedule_form(
+        checklist_id, scope_kind, scope_target, period_kind,
+        period_value, anchor_date, notify_lead_hours,
+    )
+    next_due = datetime.combine(anchor, time(9, 0), tzinfo=UTC)
+    updated = await db.update_maintenance_schedule(schedule_id, {
+        "checklist_id": cid,
+        "asset_template_id": tmpl_id,
+        "asset_instance_id": inst_id,
+        "period_kind": pkind,
+        "period_value": pval,
+        "anchor_date": anchor,
+        "next_due_at": next_due,
+        "notify_lead_hours": notify,
+    })
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Schedule bulunamadı")
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=calendar", status_code=303,
+    )
+
+
+@router.post(
+    "/maintenance/schedules/{schedule_id:int}/delete",
+    response_class=HTMLResponse,
+)
+async def maintenance_schedule_delete(
+    request: Request, schedule_id: int,
+) -> RedirectResponse:
+    """Schedule siler."""
+    db = _get_db(request)
+    ok = await db.delete_maintenance_schedule(schedule_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Schedule bulunamadı")
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=calendar", status_code=303,
+    )
+
+
+@router.post(
+    "/maintenance/schedules/{schedule_id:int}/toggle",
+    response_class=HTMLResponse,
+)
+async def maintenance_schedule_toggle(
+    request: Request, schedule_id: int,
+) -> RedirectResponse:
+    """Schedule'ı aktif/pasif yapar."""
+    db = _get_db(request)
+    schedule = await db.get_maintenance_schedule(schedule_id)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule bulunamadı")
+    await db.update_maintenance_schedule(
+        schedule_id, {"enabled": not schedule.enabled},
+    )
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=calendar", status_code=303,
+    )
+
+
+# --- Task (tamamlama akışı) ---
+
+
+@router.get(
+    "/maintenance/tasks/{task_id:int}", response_class=HTMLResponse,
+)
+async def maintenance_task_detail(
+    request: Request, task_id: int,
+) -> HTMLResponse:
+    """Task detay sayfası — adım adım tamamlama formu."""
+    db = _get_db(request)
+    task = await db.get_maintenance_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task bulunamadı")
+    checklist = await db.get_maintenance_checklist(task.checklist_id)
+    step_results = await db.list_maintenance_task_step_results(task_id)
+    results_by_step = {r.step_id: r for r in step_results}
+    asset = None
+    if task.asset_instance_id is not None:
+        asset = await db.get_asset_instance(task.asset_instance_id)
+    ctx = _base_context(
+        page_title=task.title_snapshot,
+        active_nav="/dashboard/maintenance",
+        task=task,
+        checklist=checklist,
+        results_by_step=results_by_step,
+        asset=asset,
+    )
+    return templates.TemplateResponse(
+        request, "pages/maintenance_task_detail.html", ctx,
+    )
+
+
+@router.post(
+    "/maintenance/tasks/{task_id:int}/complete",
+    response_class=HTMLResponse,
+)
+async def maintenance_task_complete(
+    request: Request, task_id: int,
+    completed_by: str = Form(""),
+    notes: str = Form(""),
+    step_checked: list[str] = _EMPTY_FORM_STR_LIST,
+    step_note: list[str] = _EMPTY_FORM_STR_LIST,
+) -> RedirectResponse:
+    """Task'ı tamamla — her adımın checked+note sonucunu kaydet."""
+    db = _get_db(request)
+    task = await db.get_maintenance_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task bulunamadı")
+
+    now = datetime.now(UTC)
+    checked_set = {s for s in step_checked if s.strip()}
+    notes_by_step: dict[int, str] = {}
+    # step_note form field'ları "<step_id>:<note>" formatında gelir
+    for raw in step_note:
+        if ":" not in raw:
+            continue
+        sid_str, text = raw.split(":", 1)
+        try:
+            sid = int(sid_str)
+        except ValueError:
+            continue
+        notes_by_step[sid] = text
+
+    checklist = await db.get_maintenance_checklist(task.checklist_id)
+    if checklist is not None:
+        for step in checklist.steps:
+            if step.id is None:
+                continue
+            checked = str(step.id) in checked_set
+            await db.upsert_maintenance_task_step_result(
+                MaintenanceTaskStepResult(
+                    task_id=task_id, step_id=step.id,
+                    checked=checked,
+                    note=notes_by_step.get(step.id, ""),
+                    completed_at=now if checked else None,
+                ),
+            )
+
+    await db.update_maintenance_task(task_id, {
+        "status": "completed",
+        "completed_at": now,
+        "completed_by": completed_by.strip(),
+        "notes": notes.strip(),
+    })
+    await db.insert_audit_log(AuditLogEntry(
+        category="maintenance", action="task_completed",
+        entity_type="task", entity_id=str(task_id),
+        detail=task.title_snapshot,
+    ))
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=history", status_code=303,
+    )
+
+
+@router.post(
+    "/maintenance/tasks/{task_id:int}/skip",
+    response_class=HTMLResponse,
+)
+async def maintenance_task_skip(
+    request: Request, task_id: int,
+    notes: str = Form(""),
+) -> RedirectResponse:
+    """Task'ı skip et."""
+    db = _get_db(request)
+    task = await db.get_maintenance_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task bulunamadı")
+    await db.update_maintenance_task(task_id, {
+        "status": "skipped",
+        "completed_at": datetime.now(UTC),
+        "notes": notes.strip(),
+    })
+    return RedirectResponse(
+        url="/dashboard/maintenance?tab=history", status_code=303,
+    )
