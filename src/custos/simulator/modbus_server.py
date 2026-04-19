@@ -93,16 +93,21 @@ class ModbusSimulator:
         self._rng = random.Random(42)  # deterministic gürültü seed
 
     def _register_count(self) -> int:
-        """Sequential block boyutu. En yüksek register + 1 eleman gerek."""
-        return max(s.register for s in SENSORS) + 1
+        """Sequential block boyutu.
+
+        pymodbus ModbusSequentialDataBlock'ta ilk eleman iç indeks olarak
+        kullanıldığından, adres 0..N için N+2 eleman gerekir.
+        """
+        return max(s.register for s in SENSORS) + 2
 
     def _create_context(self) -> ModbusServerContext:
         """Modbus server context oluşturur; başlangıç değerlerini pattern'den üretir."""
         now = self._sim_start
         count = self._register_count()
         initial: list[int] = [0] * count
+        # pymodbus iç indeks yüzünden register N → initial[N+1] pozisyonuna yazılır
         for sensor in SENSORS:
-            initial[sensor.register] = compute_sensor_register(
+            initial[sensor.register + 1] = compute_sensor_register(
                 sensor, now, self._sim_start, noise=0.0
             )
 
