@@ -43,6 +43,33 @@ function unitToScale(unit) {
 }
 
 /**
+ * Tag label'ını (örn. "T101 (°C)") benzersiz scale key'ine çevirir.
+ * Per-tag modda her seri kendi scale'ine sahip olur.
+ */
+function tagLabelToScale(label, index) {
+  const id = (label || '').split(' ')[0] || `s${index}`;
+  return `tag_${id.replace(/[^a-zA-Z0-9]/g, '_')}_${index}`;
+}
+
+/**
+ * Per-tag layout: her seri kendi scale ve renkli ekseni alır, hepsi sol
+ * tarafta stacked dizilir. Label yazılmaz; eksen rengi serinin rengiyle
+ * aynı olduğu için hangi tag'e ait olduğu görsel olarak net.
+ */
+function buildPerTagLayout(labels, units) {
+  return labels.map((label, idx) => ({
+    key: tagLabelToScale(label, idx),
+    label: '',  // birim yazmıyoruz, renk yeterli
+    visible: true,
+    side: 3,     // hepsi sol
+    perTag: true,
+    color: CHART_COLORS[idx % CHART_COLORS.length],
+    unit: units[idx] || '',
+    seriesIdx: idx,
+  }));
+}
+
+/**
  * Serileri birimlerine göre scale gruplarına ayırır.
  * visibleLimit: görünür eksen sayısı üst sınırı.
  *   - Overview için 2 önerilir (kompakt, chart alanı geniş kalır)
@@ -82,6 +109,24 @@ function calcYRangeForScale(seriesArrays, units, scaleKey) {
         if (v < min) min = v;
         if (v > max) max = v;
       }
+    }
+  }
+  if (min === Infinity) return [0, 1];
+  const range = max - min;
+  const pad = range > 0 ? range * 0.15 : Math.abs(min) * 0.15 || 1;
+  return [min - pad, max + pad];
+}
+
+/**
+ * Tek bir seri için Y range hesaplar (per-tag modda kullanılır).
+ */
+function calcYRangeForSeries(arr) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of arr) {
+    if (v != null) {
+      if (v < min) min = v;
+      if (v > max) max = v;
     }
   }
   if (min === Infinity) return [0, 1];
@@ -280,8 +325,20 @@ function chartPanel(chartId) {
         ? Infinity
         : (parseInt(visibleLimitRaw) || 2);
 
+      // Axis mode: 'unit' (birim bazlı gruplama, overview default)
+      // veya 'per-tag' (her tag için ayrı renkli eksen, detay sayfası)
+      const axisMode = el.dataset.axisMode || 'unit';
+
       const effectiveUnits = labels.map((_, i) => units[i] || '');
-      const layout = buildScaleLayout(effectiveUnits, visibleLimit);
+      const layout = axisMode === 'per-tag'
+        ? buildPerTagLayout(labels, effectiveUnits)
+        : buildScaleLayout(effectiveUnits, visibleLimit);
+
+      // Her seri için scale key: per-tag modda her tag kendi scale'i,
+      // unit modda aynı birimli tag'ler tek scale paylaşır.
+      const seriesScale = (idx) => axisMode === 'per-tag'
+        ? tagLabelToScale(labels[idx], idx)
+        : unitToScale(effectiveUnits[idx]);
 
       // uPlot series: ilki x ekseni
       const uplotSeries = [{}];
@@ -291,7 +348,7 @@ function chartPanel(chartId) {
           stroke: CHART_COLORS[i % CHART_COLORS.length],
           width: 1,
           points: { show: false },
-          scale: unitToScale(effectiveUnits[i]),
+          scale: seriesScale(i),
         });
       });
 
@@ -305,34 +362,61 @@ function chartPanel(chartId) {
         : labels.map(() => [null, null]);
       const uplotData = [effectiveTimestamps, ...effectiveSeries];
 
-      // Scales: x backend penceresine sabit; her benzersiz birim için ayrı Y
+      // Scales: x backend penceresine sabit; Y scale'leri layout'a göre
       const scales = {
         x: {
           time: true,
           range: () => [windowRange[0], windowRange[1]],
         },
       };
-      for (const l of layout) {
-        scales[l.key] = {
-          range: () => calcYRangeForScale(
-            effectiveSeries, effectiveUnits, l.key,
-          ),
-        };
+      if (axisMode === 'per-tag') {
+        // Her tag kendi scale'inde → sadece kendi verisinin min/max'i
+        layout.forEach((l) => {
+          const sIdx = l.seriesIdx;
+          scales[l.key] = {
+            range: () => calcYRangeForSeries(effectiveSeries[sIdx]),
+          };
+        });
+      } else {
+        for (const l of layout) {
+          scales[l.key] = {
+            range: () => calcYRangeForScale(
+              effectiveSeries, effectiveUnits, l.key,
+            ),
+          };
+        }
       }
 
       // Axes: x ekseni + görünür Y eksenleri
       const axes = [{ ...BASE_AXIS, gap: 8 }];
-      for (const l of layout) {
-        if (!l.visible) continue;
-        axes.push({
-          ...BASE_AXIS,
-          scale: l.key,
-          side: l.side,
-          gap: 5,
-          size: 55,
-          label: l.label || undefined,
-          labelSize: l.label ? 18 : 0,
+      if (axisMode === 'per-tag') {
+        // Her tag için sol tarafta renkli eksen; grid çakışmasın diye
+        // sadece ilk eksende grid görünür, diğerlerinde kapalı.
+        layout.forEach((l, i) => {
+          axes.push({
+            ...BASE_AXIS,
+            scale: l.key,
+            side: 3,  // hepsi sol
+            stroke: l.color,       // tick etiketi bu renkte
+            ticks: { stroke: l.color, width: 1 },
+            grid: { show: i === 0, stroke: '#2C3235', width: 1 },
+            gap: 3,
+            size: 50,
+          });
         });
+      } else {
+        for (const l of layout) {
+          if (!l.visible) continue;
+          axes.push({
+            ...BASE_AXIS,
+            scale: l.key,
+            side: l.side,
+            gap: 5,
+            size: 55,
+            label: l.label || undefined,
+            labelSize: l.label ? 18 : 0,
+          });
+        }
       }
 
       const chartHeight = parseInt(el.dataset.chartHeight) || 200;
