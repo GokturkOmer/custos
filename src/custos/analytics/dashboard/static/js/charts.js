@@ -34,116 +34,6 @@ const BASE_AXIS = {
 window.custos = window.custos || {};
 window.custos.charts = window.custos.charts || {};
 
-// Chart state (tag görünürlük + min/max) localStorage key prefix'i.
-// Versiyonlu: şema değişirse v2'ye geçilir, eski kayıtlar sessizce atılır.
-const CHART_STATE_KEY_PREFIX = 'custos.chartState.v1.';
-
-/**
- * localStorage'dan chart state'ini yükler. Yoksa veya parse hatası varsa null döner.
- */
-function loadChartState(chartKey) {
-  try {
-    const raw = localStorage.getItem(CHART_STATE_KEY_PREFIX + chartKey);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    return parsed;
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Chart state'ini localStorage'a yazar. Hata durumunda sessizce başarısız olur
- * (quota, disabled mode, vb.).
- */
-function saveChartState(chartKey, state) {
-  try {
-    localStorage.setItem(
-      CHART_STATE_KEY_PREFIX + chartKey,
-      JSON.stringify(state),
-    );
-  } catch (e) {
-    // Silent fail: localStorage quota dolu veya private mode engeli
-  }
-}
-
-/**
- * Kaydedilmiş state'i uPlot instance'ına uygular.
- * - hidden=true olan tag'ler için setSeries(idx, {show:false})
- * - min/max dolu olan tag'ler için: scale'in range() fonksiyonunu
- *   sabit [min,max] dönen nop'a çevirir ve setScale yapar. Bu kritik —
- *   aksi halde uPlot redraw'da orijinal range() fonksiyonu çağrılıp
- *   user değerini auto-range ile override eder (uPlot tuzağı #1'in Y
- *   ekseni versiyonu).
- * Tag id labels[i]'nin ilk boşluğa kadar olan kısmından çıkarılır
- * (örn. "T101 (°C)" → "T101").
- */
-function applyChartState(u, chartKey, labels) {
-  const state = loadChartState(chartKey);
-  if (!state || !state.tags) return;
-  for (let i = 0; i < labels.length; i++) {
-    const tagId = (labels[i] || '').split(' ')[0];
-    if (!tagId) continue;
-    const tagState = state.tags[tagId];
-    if (!tagState) continue;
-    const seriesIdx = i + 1;  // series[0] x ekseni
-    if (tagState.hidden === true) {
-      u.setSeries(seriesIdx, { show: false });
-    }
-    const hasMin = tagState.min != null && isFinite(tagState.min);
-    const hasMax = tagState.max != null && isFinite(tagState.max);
-    if (hasMin && hasMax && tagState.min < tagState.max) {
-      const scaleKey = u.series[seriesIdx] && u.series[seriesIdx].scale;
-      if (scaleKey && u.scales[scaleKey]) {
-        lockScaleRange(u, scaleKey, tagState.min, tagState.max);
-      }
-    }
-  }
-}
-
-/**
- * Bir Y scale'ini kullanıcı tarafından belirlenmiş sabit [min, max] aralığına
- * kilitler. uPlot'un scale.range fonksiyonunu üzerine yazar, böylece redraw
- * döngüsünde orijinal auto-range hesabı devreye girmez. setScale çağrısı
- * görsel olarak hemen uygular.
- */
-function lockScaleRange(u, scaleKey, minVal, maxVal) {
-  const s = u.scales[scaleKey];
-  if (!s) return;
-  // Orijinal range fonksiyonunu saklayalım ki "Auto" çağrıldığında geri
-  // verilebilsin (unlockScaleRange).
-  if (!s._custosOriginalRange) {
-    s._custosOriginalRange = s.range;
-  }
-  s.range = () => [minVal, maxVal];
-  s.auto = false;
-  u.setScale(scaleKey, { min: minVal, max: maxVal });
-}
-
-/**
- * Scale'i auto-range moduna geri döndürür. lockScaleRange ile saklanan
- * orijinal range fonksiyonu geri yazılır ve setScale(null,null) ile
- * uPlot yeniden hesaplamaya zorlanır.
- */
-function unlockScaleRange(u, scaleKey) {
-  const s = u.scales[scaleKey];
-  if (!s) return;
-  if (s._custosOriginalRange) {
-    s.range = s._custosOriginalRange;
-    s._custosOriginalRange = null;
-  }
-  s.auto = true;
-  u.setScale(scaleKey, { min: null, max: null });
-}
-
-window.custos.lockScaleRange = lockScaleRange;
-window.custos.unlockScaleRange = unlockScaleRange;
-
-window.custos.loadChartState = loadChartState;
-window.custos.saveChartState = saveChartState;
-window.custos.applyChartState = applyChartState;
-
 /**
  * Birim string'ini uPlot scale key'ine çevirir. Boş birim → "default".
  */
@@ -610,28 +500,20 @@ function chartPanel(chartId) {
           auto: false,
         },
       };
-      // Y eksen range'leri init'te bir kez hesaplanıp sabit döndürülür.
-      // Aksi halde uPlot her redraw'da range() fonksiyonunu çağırır ve
-      // N tag × M data point iterasyonu fare hareketinde bile çalışır —
-      // bu da görünür kasmaya yol açar. `auto: false` ile birlikte bu
-      // precomputed değer kullanıcı setScale yapana kadar geçerlidir.
       if (axisMode === 'per-tag') {
+        // Her tag kendi scale'inde → sadece kendi verisinin min/max'i
         layout.forEach((l) => {
           const sIdx = l.seriesIdx;
-          const [pMin, pMax] = calcYRangeForSeries(effectiveSeries[sIdx]);
           scales[l.key] = {
-            auto: false,
-            range: () => [pMin, pMax],
+            range: () => calcYRangeForSeries(effectiveSeries[sIdx]),
           };
         });
       } else {
         for (const l of layout) {
-          const [pMin, pMax] = calcYRangeForScale(
-            effectiveSeries, effectiveUnits, l.key,
-          );
           scales[l.key] = {
-            auto: false,
-            range: () => [pMin, pMax],
+            range: () => calcYRangeForScale(
+              effectiveSeries, effectiveUnits, l.key,
+            ),
           };
         }
       }
@@ -703,11 +585,6 @@ function chartPanel(chartId) {
       // uPlot kendi başına set etmiyor). setScale sonrası user zoom/pan yapar,
       // çift tıkla yine windowRange'e döner.
       this.chart.setScale('x', { min: windowRange[0], max: windowRange[1] });
-
-      // Kullanıcının son kaydettiği tag görünürlük ve min/max ayarlarını uygula.
-      // Hem overview kompakt hem de detay sayfasında aynı localStorage state'i
-      // okunur, böylece reload ve overview dönüşünde ayarlar korunur.
-      applyChartState(this.chart, chartId, labels);
 
       let resizeTimer = null;
       const ro = new ResizeObserver(() => {
