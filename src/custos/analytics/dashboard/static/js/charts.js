@@ -309,7 +309,10 @@ function xAxisInteractionPlugin() {
         let mode = null;  // 'pan' | 'box' | null
         let state = null;
 
-        // Box-select için overlay div
+        // Box-select için overlay div. u.over zaten position:absolute
+        // ile doğru yerde konumlanmış — dokunmuyoruz. Overlay'i u.over'ın
+        // içine absolute olarak ekliyoruz; u.over positioned ancestor
+        // olduğu için overlay onun sınırlarına göre yerleşir.
         const overlay = document.createElement('div');
         overlay.style.cssText = (
           'position:absolute;top:0;bottom:0;pointer-events:none;' +
@@ -318,7 +321,6 @@ function xAxisInteractionPlugin() {
           'border-right:1px solid rgba(50,116,217,0.5);' +
           'display:none;'
         );
-        u.over.style.position = 'relative';
         u.over.appendChild(overlay);
 
         const onDown = (e) => {
@@ -374,8 +376,8 @@ function xAxisInteractionPlugin() {
             overlay.style.width = width + 'px';
           }
         };
-        const onUp = (e) => {
-          if (mode === 'box') {
+        const finish = (e) => {
+          if (mode === 'box' && state && e) {
             const curX = Math.max(
               0, Math.min(state.rect.width, e.clientX - state.rect.left),
             );
@@ -388,14 +390,21 @@ function xAxisInteractionPlugin() {
                 max: u.posToVal(end, 'x'),
               });
             }
+          } else if (mode === 'box') {
+            overlay.style.display = 'none';
           } else if (mode === 'pan') {
             u.over.style.cursor = '';
           }
           mode = null;
           state = null;
         };
+        // Mouse, pointer, pencere odak değişimi — hepsinde state'i bırak
         window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('mouseup', finish);
+        window.addEventListener('pointerup', finish);
+        window.addEventListener('pointercancel', () => finish(null));
+        window.addEventListener('blur', () => finish(null));
       }
     }
   };
