@@ -140,21 +140,20 @@ function wheelZoomPlugin() {
   return {
     hooks: {
       ready(u) {
-        u.over.addEventListener('wheel', (e) => {
-          // Ctrl yoksa sayfa scroll akışına karışma (kullanıcı chart
-          // üzerinden geçerken yanlışlıkla zoom tetiklenmesin)
+        // Listener'ı u.root (uPlot'un tüm wrap'i) üzerine koyuyoruz ki
+        // axis'in üstünde de Ctrl+Wheel engellensin ve X zoom çalışsın.
+        const handler = (e) => {
           if (!e.ctrlKey) return;
-          // passive:false + preventDefault + stopPropagation ile
-          // browser'ın Ctrl+wheel zoom'unu engelle
+          // Browser'ın Ctrl+wheel zoom'unu KESİNLİKLE engelle:
+          // passive:false + preventDefault + stopImmediatePropagation
           e.preventDefault();
-          e.stopPropagation();
+          e.stopImmediatePropagation();
           const { left } = u.cursor;
           const xMin = u.scales.x.min;
           const xMax = u.scales.x.max;
           if (xMin == null || xMax == null) return;
 
           const range = xMax - xMin;
-          // Cursor plot alanında değilse orta noktadan zoom
           const cursorX = (left != null && left >= 0)
             ? u.posToVal(left, 'x')
             : (xMin + xMax) / 2;
@@ -166,7 +165,10 @@ function wheelZoomPlugin() {
             min: cursorX - newRange * ratio,
             max: cursorX + newRange * (1 - ratio),
           });
-        }, { passive: false, capture: true });
+        };
+        u.root.addEventListener('wheel', handler, {
+          passive: false, capture: true,
+        });
       }
     }
   };
@@ -331,9 +333,9 @@ function xAxisInteractionPlugin() {
             overlay.style.width = '0';
             overlay.style.display = 'block';
           }
-          // uPlot cursor'un pointerdown/mousedown handler'ini atlat
+          // uPlot cursor'un pointerdown/mousedown handler'ini bastır
           e.preventDefault();
-          e.stopPropagation();
+          e.stopImmediatePropagation();
         };
         // Hem pointerdown hem mousedown — uPlot hangisini dinliyorsa
         // capture phase'de ondan once yakalayalim
