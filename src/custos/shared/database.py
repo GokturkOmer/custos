@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 
 import asyncpg
 import structlog
@@ -246,6 +246,93 @@ class OverviewChart:
     sort_order: int = 0
     time_window_minutes: int = 30
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
+class MaintenanceChecklistStep:
+    """Bir kontrol listesinin sıralı adımı (örn. 'Filtre basıncını oku')."""
+
+    checklist_id: int
+    sort_order: int
+    text: str
+    estimated_minutes: int | None = None
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
+class MaintenanceChecklist:
+    """Kontrol listesi tanımı — periyodik ya da alarm senaryosunda kullanılır."""
+
+    slug: str
+    title: str
+    description: str = ""
+    category: str = "generic"  # 'periodic' / 'alarm' / 'generic'
+    asset_template_id: int | None = None
+    steps: list[MaintenanceChecklistStep] = field(default_factory=list)
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
+class MaintenanceSchedule:
+    """Periyodik bakım takvimi — checklist + asset + periyot tanımı."""
+
+    checklist_id: int
+    period_kind: str  # 'daily' / 'weekly' / 'monthly' / 'yearly' / 'custom_days'
+    anchor_date: date
+    next_due_at: datetime
+    period_value: int = 1
+    asset_template_id: int | None = None
+    asset_instance_id: int | None = None
+    notify_lead_hours: int = 24
+    enabled: bool = True
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
+class MaintenanceTask:
+    """Tetiklenmiş bakım görevi — schedule, alarm veya manuel kaynaklı."""
+
+    checklist_id: int
+    source: str  # 'schedule' / 'alarm' / 'manual'
+    title_snapshot: str
+    schedule_id: int | None = None
+    asset_instance_id: int | None = None
+    alarm_event_id: int | None = None
+    due_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    completed_by: str = ""
+    notes: str = ""
+    status: str = "pending"  # 'pending' / 'in_progress' / 'completed' / 'skipped' / 'missed'
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
+class MaintenanceTaskStepResult:
+    """Tek bir checklist adımının bir task için tamamlanma durumu."""
+
+    task_id: int
+    step_id: int
+    checked: bool = False
+    note: str = ""
+    completed_at: datetime | None = None
+    id: int | None = None
+
+
+@dataclass
+class AlarmChecklistMapping:
+    """Bir threshold'u bir checklist ile 1:1 eşler (alarm müdahale prosedürü)."""
+
+    threshold_id: int
+    checklist_id: int
+    id: int | None = None
+    created_at: datetime | None = None
 
 
 class DatabaseInterface(abc.ABC):
@@ -647,6 +734,158 @@ class DatabaseInterface(abc.ABC):
         tag_ids: list[str],
     ) -> list[OverviewChartTag]:
         """Bir grafik slotunun tag listesini yenisiyle degistirir (tek transaction)."""
+
+    # --- Maintenance Checklist CRUD ---
+
+    @abc.abstractmethod
+    async def insert_maintenance_checklist(
+        self, checklist: MaintenanceChecklist,
+    ) -> MaintenanceChecklist:
+        """Yeni checklist + steps'i tek transaction ile oluşturur."""
+
+    @abc.abstractmethod
+    async def update_maintenance_checklist(
+        self, checklist_id: int, updates: dict[str, object],
+    ) -> MaintenanceChecklist | None:
+        """Checklist alanlarını günceller (steps hariç)."""
+
+    @abc.abstractmethod
+    async def delete_maintenance_checklist(self, checklist_id: int) -> bool:
+        """Checklist'i siler (steps CASCADE). Başarılıysa True."""
+
+    @abc.abstractmethod
+    async def get_maintenance_checklist(
+        self, checklist_id: int,
+    ) -> MaintenanceChecklist | None:
+        """Tekil checklist + steps'i döndürür. Bulunamazsa None."""
+
+    @abc.abstractmethod
+    async def list_maintenance_checklists(
+        self, category: str | None = None,
+    ) -> list[MaintenanceChecklist]:
+        """Checklist listesi (steps dahil)."""
+
+    @abc.abstractmethod
+    async def replace_maintenance_checklist_steps(
+        self, checklist_id: int, steps: list[MaintenanceChecklistStep],
+    ) -> list[MaintenanceChecklistStep]:
+        """Bir checklist'in tüm adımlarını yenileriyle değiştirir (tek transaction)."""
+
+    # --- Maintenance Schedule CRUD ---
+
+    @abc.abstractmethod
+    async def insert_maintenance_schedule(
+        self, schedule: MaintenanceSchedule,
+    ) -> MaintenanceSchedule:
+        """Yeni periyodik bakım takvimi kaydı oluşturur."""
+
+    @abc.abstractmethod
+    async def update_maintenance_schedule(
+        self, schedule_id: int, updates: dict[str, object],
+    ) -> MaintenanceSchedule | None:
+        """Schedule alanlarını günceller."""
+
+    @abc.abstractmethod
+    async def delete_maintenance_schedule(self, schedule_id: int) -> bool:
+        """Schedule'ı siler. Başarılıysa True."""
+
+    @abc.abstractmethod
+    async def get_maintenance_schedule(
+        self, schedule_id: int,
+    ) -> MaintenanceSchedule | None:
+        """Tekil schedule'ı döndürür."""
+
+    @abc.abstractmethod
+    async def list_maintenance_schedules(
+        self, enabled: bool | None = None,
+    ) -> list[MaintenanceSchedule]:
+        """Schedule listesi. enabled filtresi opsiyonel."""
+
+    @abc.abstractmethod
+    async def list_due_maintenance_schedules(
+        self, now: datetime,
+    ) -> list[MaintenanceSchedule]:
+        """Scheduler için — next_due_at <= now ve enabled=TRUE olan schedule'lar."""
+
+    # --- Maintenance Task CRUD ---
+
+    @abc.abstractmethod
+    async def insert_maintenance_task(
+        self, task: MaintenanceTask,
+    ) -> MaintenanceTask:
+        """Yeni maintenance task kaydı oluşturur."""
+
+    @abc.abstractmethod
+    async def update_maintenance_task(
+        self, task_id: int, updates: dict[str, object],
+    ) -> MaintenanceTask | None:
+        """Task alanlarını günceller (status, completed_at, notes vb.)."""
+
+    @abc.abstractmethod
+    async def get_maintenance_task(
+        self, task_id: int,
+    ) -> MaintenanceTask | None:
+        """Tekil task'ı döndürür."""
+
+    @abc.abstractmethod
+    async def list_upcoming_maintenance_tasks(
+        self, within_hours: int = 48,
+    ) -> list[MaintenanceTask]:
+        """Önümüzdeki X saat içinde due olan pending task'lar (Overview widget)."""
+
+    @abc.abstractmethod
+    async def list_recent_maintenance_tasks(
+        self, limit: int = 50,
+    ) -> list[MaintenanceTask]:
+        """Son tamamlanmış/atlanmış/missed task'lar (Geçmiş sekmesi)."""
+
+    @abc.abstractmethod
+    async def list_maintenance_tasks_for_schedule(
+        self, schedule_id: int,
+    ) -> list[MaintenanceTask]:
+        """Bir schedule'a bağlı tüm task'lar."""
+
+    # --- Maintenance Task Step Result ---
+
+    @abc.abstractmethod
+    async def upsert_maintenance_task_step_result(
+        self, result: MaintenanceTaskStepResult,
+    ) -> MaintenanceTaskStepResult:
+        """Task + step kombinasyonu için sonuç ekler/günceller (UNIQUE constraint)."""
+
+    @abc.abstractmethod
+    async def list_maintenance_task_step_results(
+        self, task_id: int,
+    ) -> list[MaintenanceTaskStepResult]:
+        """Bir task'ın tüm step sonuçlarını döndürür."""
+
+    # --- Alarm Checklist Mapping ---
+
+    @abc.abstractmethod
+    async def upsert_alarm_checklist_mapping(
+        self, threshold_id: int, checklist_id: int,
+    ) -> AlarmChecklistMapping:
+        """Threshold → checklist eşlemesi ekler/günceller (1:1)."""
+
+    @abc.abstractmethod
+    async def delete_alarm_checklist_mapping(self, threshold_id: int) -> bool:
+        """Threshold'un checklist eşlemesini kaldırır."""
+
+    @abc.abstractmethod
+    async def get_alarm_checklist_mapping(
+        self, threshold_id: int,
+    ) -> AlarmChecklistMapping | None:
+        """Threshold için eşlenen checklist (varsa)."""
+
+    @abc.abstractmethod
+    async def list_alarm_checklist_mappings(self) -> list[AlarmChecklistMapping]:
+        """Tüm alarm → checklist eşlemelerini döndürür."""
+
+    @abc.abstractmethod
+    async def count_alarm_events_for_threshold(
+        self, threshold_id: int, since: datetime,
+    ) -> int:
+        """Bir threshold'un verilen zamandan sonra tetiklenme sayısı."""
 
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
@@ -2124,6 +2363,482 @@ class TimescaleDBDatabase(DatabaseInterface):
                     result.append(_row_to_overview_chart_tag(row))
                 return result
 
+    # --- Maintenance Checklist CRUD ---
+
+    async def insert_maintenance_checklist(
+        self, checklist: MaintenanceChecklist,
+    ) -> MaintenanceChecklist:
+        """Checklist + steps'i tek transaction ile oluşturur."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                "INSERT INTO maintenance_checklists "
+                "(slug, title, description, category, asset_template_id) "
+                "VALUES ($1, $2, $3, $4, $5) RETURNING *",
+                checklist.slug, checklist.title, checklist.description,
+                checklist.category, checklist.asset_template_id,
+            )
+            assert row is not None
+            new_checklist = _row_to_maintenance_checklist(row)
+            new_steps: list[MaintenanceChecklistStep] = []
+            for idx, step in enumerate(checklist.steps):
+                srow = await conn.fetchrow(
+                    "INSERT INTO maintenance_checklist_steps "
+                    "(checklist_id, sort_order, text, estimated_minutes) "
+                    "VALUES ($1, $2, $3, $4) RETURNING *",
+                    new_checklist.id, idx, step.text, step.estimated_minutes,
+                )
+                assert srow is not None
+                new_steps.append(_row_to_maintenance_step(srow))
+            new_checklist.steps = new_steps
+            return new_checklist
+
+    async def update_maintenance_checklist(
+        self, checklist_id: int, updates: dict[str, object],
+    ) -> MaintenanceChecklist | None:
+        """Checklist alanlarını günceller (steps ayrı replace ile)."""
+        invalid = set(updates.keys()) - _ALLOWED_CHECKLIST_UPDATE_FIELDS
+        if invalid:
+            msg = f"Güncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+        if not updates:
+            return await self.get_maintenance_checklist(checklist_id)
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+        idx = len(values) + 1
+        set_clause = ", ".join(set_parts)
+        values.append(checklist_id)
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"UPDATE maintenance_checklists SET {set_clause}, "
+                f"updated_at = NOW() WHERE id = ${idx} RETURNING *",
+                *values,
+            )
+        if row is None:
+            return None
+        return await self.get_maintenance_checklist(checklist_id)
+
+    async def delete_maintenance_checklist(self, checklist_id: int) -> bool:
+        """Checklist'i siler (steps CASCADE). Başarılıysa True."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            status = await conn.execute(
+                "DELETE FROM maintenance_checklists WHERE id = $1",
+                checklist_id,
+            )
+        return str(status) == "DELETE 1"
+
+    async def get_maintenance_checklist(
+        self, checklist_id: int,
+    ) -> MaintenanceChecklist | None:
+        """Tekil checklist + steps."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM maintenance_checklists WHERE id = $1",
+                checklist_id,
+            )
+            if row is None:
+                return None
+            checklist = _row_to_maintenance_checklist(row)
+            step_rows = await conn.fetch(
+                "SELECT * FROM maintenance_checklist_steps "
+                "WHERE checklist_id = $1 ORDER BY sort_order, id",
+                checklist_id,
+            )
+            checklist.steps = [_row_to_maintenance_step(r) for r in step_rows]
+            return checklist
+
+    async def list_maintenance_checklists(
+        self, category: str | None = None,
+    ) -> list[MaintenanceChecklist]:
+        """Checklist listesi (steps dahil, tek SQL round-trip ile)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            if category is None:
+                rows = await conn.fetch(
+                    "SELECT * FROM maintenance_checklists ORDER BY title",
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM maintenance_checklists "
+                    "WHERE category = $1 ORDER BY title",
+                    category,
+                )
+            checklists = [_row_to_maintenance_checklist(r) for r in rows]
+            if not checklists:
+                return checklists
+            ids = [c.id for c in checklists if c.id is not None]
+            step_rows = await conn.fetch(
+                "SELECT * FROM maintenance_checklist_steps "
+                "WHERE checklist_id = ANY($1::int[]) "
+                "ORDER BY checklist_id, sort_order, id",
+                ids,
+            )
+            steps_by_cid: dict[int, list[MaintenanceChecklistStep]] = {}
+            for sr in step_rows:
+                steps_by_cid.setdefault(sr["checklist_id"], []).append(
+                    _row_to_maintenance_step(sr),
+                )
+            for c in checklists:
+                c.steps = steps_by_cid.get(c.id or 0, [])
+            return checklists
+
+    async def replace_maintenance_checklist_steps(
+        self, checklist_id: int,
+        steps: list[MaintenanceChecklistStep],
+    ) -> list[MaintenanceChecklistStep]:
+        """Tüm adımları atomik olarak yenileriyle değiştirir."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                "DELETE FROM maintenance_checklist_steps WHERE checklist_id = $1",
+                checklist_id,
+            )
+            result: list[MaintenanceChecklistStep] = []
+            for idx, st in enumerate(steps):
+                row = await conn.fetchrow(
+                    "INSERT INTO maintenance_checklist_steps "
+                    "(checklist_id, sort_order, text, estimated_minutes) "
+                    "VALUES ($1, $2, $3, $4) RETURNING *",
+                    checklist_id, idx, st.text, st.estimated_minutes,
+                )
+                assert row is not None
+                result.append(_row_to_maintenance_step(row))
+            return result
+
+    # --- Maintenance Schedule CRUD ---
+
+    async def insert_maintenance_schedule(
+        self, schedule: MaintenanceSchedule,
+    ) -> MaintenanceSchedule:
+        """Yeni periyodik bakım takvimi kaydı."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO maintenance_schedules "
+                "(checklist_id, asset_template_id, asset_instance_id, "
+                " period_kind, period_value, anchor_date, next_due_at, "
+                " notify_lead_hours, enabled) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *",
+                schedule.checklist_id, schedule.asset_template_id,
+                schedule.asset_instance_id, schedule.period_kind,
+                schedule.period_value, schedule.anchor_date,
+                schedule.next_due_at, schedule.notify_lead_hours,
+                schedule.enabled,
+            )
+        assert row is not None
+        return _row_to_maintenance_schedule(row)
+
+    async def update_maintenance_schedule(
+        self, schedule_id: int, updates: dict[str, object],
+    ) -> MaintenanceSchedule | None:
+        """Schedule alanlarını günceller."""
+        invalid = set(updates.keys()) - _ALLOWED_SCHEDULE_UPDATE_FIELDS
+        if invalid:
+            msg = f"Güncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+        if not updates:
+            return await self.get_maintenance_schedule(schedule_id)
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+        idx = len(values) + 1
+        set_clause = ", ".join(set_parts)
+        values.append(schedule_id)
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"UPDATE maintenance_schedules SET {set_clause}, "
+                f"updated_at = NOW() WHERE id = ${idx} RETURNING *",
+                *values,
+            )
+        if row is None:
+            return None
+        return _row_to_maintenance_schedule(row)
+
+    async def delete_maintenance_schedule(self, schedule_id: int) -> bool:
+        """Schedule'ı siler."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            status = await conn.execute(
+                "DELETE FROM maintenance_schedules WHERE id = $1",
+                schedule_id,
+            )
+        return str(status) == "DELETE 1"
+
+    async def get_maintenance_schedule(
+        self, schedule_id: int,
+    ) -> MaintenanceSchedule | None:
+        """Tekil schedule."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM maintenance_schedules WHERE id = $1",
+                schedule_id,
+            )
+        if row is None:
+            return None
+        return _row_to_maintenance_schedule(row)
+
+    async def list_maintenance_schedules(
+        self, enabled: bool | None = None,
+    ) -> list[MaintenanceSchedule]:
+        """Schedule listesi."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            if enabled is None:
+                rows = await conn.fetch(
+                    "SELECT * FROM maintenance_schedules ORDER BY next_due_at",
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM maintenance_schedules "
+                    "WHERE enabled = $1 ORDER BY next_due_at",
+                    enabled,
+                )
+        return [_row_to_maintenance_schedule(r) for r in rows]
+
+    async def list_due_maintenance_schedules(
+        self, now: datetime,
+    ) -> list[MaintenanceSchedule]:
+        """Scheduler için — vadesi gelmiş aktif schedule'lar."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM maintenance_schedules "
+                "WHERE enabled = TRUE AND next_due_at <= $1 "
+                "ORDER BY next_due_at",
+                now,
+            )
+        return [_row_to_maintenance_schedule(r) for r in rows]
+
+    # --- Maintenance Task CRUD ---
+
+    async def insert_maintenance_task(
+        self, task: MaintenanceTask,
+    ) -> MaintenanceTask:
+        """Yeni maintenance task kaydı."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO maintenance_tasks "
+                "(schedule_id, checklist_id, asset_instance_id, source, "
+                " alarm_event_id, title_snapshot, due_at, started_at, "
+                " completed_at, completed_by, notes, status) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) "
+                "RETURNING *",
+                task.schedule_id, task.checklist_id, task.asset_instance_id,
+                task.source, task.alarm_event_id, task.title_snapshot,
+                task.due_at, task.started_at, task.completed_at,
+                task.completed_by, task.notes, task.status,
+            )
+        assert row is not None
+        return _row_to_maintenance_task(row)
+
+    async def update_maintenance_task(
+        self, task_id: int, updates: dict[str, object],
+    ) -> MaintenanceTask | None:
+        """Task alanlarını günceller."""
+        invalid = set(updates.keys()) - _ALLOWED_TASK_UPDATE_FIELDS
+        if invalid:
+            msg = f"Güncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+        if not updates:
+            return await self.get_maintenance_task(task_id)
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+        idx = len(values) + 1
+        set_clause = ", ".join(set_parts)
+        values.append(task_id)
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"UPDATE maintenance_tasks SET {set_clause} "
+                f"WHERE id = ${idx} RETURNING *",
+                *values,
+            )
+        if row is None:
+            return None
+        return _row_to_maintenance_task(row)
+
+    async def get_maintenance_task(
+        self, task_id: int,
+    ) -> MaintenanceTask | None:
+        """Tekil task."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM maintenance_tasks WHERE id = $1",
+                task_id,
+            )
+        if row is None:
+            return None
+        return _row_to_maintenance_task(row)
+
+    async def list_upcoming_maintenance_tasks(
+        self, within_hours: int = 48,
+    ) -> list[MaintenanceTask]:
+        """Yaklaşan pending/in_progress task'lar (Overview widget)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM maintenance_tasks "
+                "WHERE status IN ('pending', 'in_progress') "
+                "AND due_at IS NOT NULL "
+                "AND due_at <= NOW() + make_interval(hours => $1) "
+                "ORDER BY due_at",
+                within_hours,
+            )
+        return [_row_to_maintenance_task(r) for r in rows]
+
+    async def list_recent_maintenance_tasks(
+        self, limit: int = 50,
+    ) -> list[MaintenanceTask]:
+        """Son tamamlanmış / atlanmış / missed task'lar."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM maintenance_tasks "
+                "WHERE completed_at IS NOT NULL "
+                "OR status IN ('skipped', 'missed') "
+                "ORDER BY COALESCE(completed_at, created_at) DESC "
+                "LIMIT $1",
+                limit,
+            )
+        return [_row_to_maintenance_task(r) for r in rows]
+
+    async def list_maintenance_tasks_for_schedule(
+        self, schedule_id: int,
+    ) -> list[MaintenanceTask]:
+        """Bir schedule'a ait tüm task'lar."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM maintenance_tasks WHERE schedule_id = $1 "
+                "ORDER BY due_at DESC NULLS LAST",
+                schedule_id,
+            )
+        return [_row_to_maintenance_task(r) for r in rows]
+
+    # --- Maintenance Task Step Result ---
+
+    async def upsert_maintenance_task_step_result(
+        self, result: MaintenanceTaskStepResult,
+    ) -> MaintenanceTaskStepResult:
+        """Task + step unique constraint ile upsert."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO maintenance_task_step_results "
+                "(task_id, step_id, checked, note, completed_at) "
+                "VALUES ($1, $2, $3, $4, $5) "
+                "ON CONFLICT (task_id, step_id) DO UPDATE SET "
+                "  checked = EXCLUDED.checked, "
+                "  note = EXCLUDED.note, "
+                "  completed_at = EXCLUDED.completed_at "
+                "RETURNING *",
+                result.task_id, result.step_id, result.checked,
+                result.note, result.completed_at,
+            )
+        assert row is not None
+        return _row_to_maintenance_step_result(row)
+
+    async def list_maintenance_task_step_results(
+        self, task_id: int,
+    ) -> list[MaintenanceTaskStepResult]:
+        """Task'ın tüm adım sonuçları (step sort_order sırasında)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT r.* FROM maintenance_task_step_results r "
+                "JOIN maintenance_checklist_steps s ON r.step_id = s.id "
+                "WHERE r.task_id = $1 ORDER BY s.sort_order, s.id",
+                task_id,
+            )
+        return [_row_to_maintenance_step_result(r) for r in rows]
+
+    # --- Alarm Checklist Mapping ---
+
+    async def upsert_alarm_checklist_mapping(
+        self, threshold_id: int, checklist_id: int,
+    ) -> AlarmChecklistMapping:
+        """Threshold → checklist eşlemesi (1:1)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO alarm_checklist_mappings "
+                "(threshold_id, checklist_id) VALUES ($1, $2) "
+                "ON CONFLICT (threshold_id) DO UPDATE SET "
+                "  checklist_id = EXCLUDED.checklist_id "
+                "RETURNING *",
+                threshold_id, checklist_id,
+            )
+        assert row is not None
+        return _row_to_alarm_checklist_mapping(row)
+
+    async def delete_alarm_checklist_mapping(
+        self, threshold_id: int,
+    ) -> bool:
+        """Threshold eşlemesini kaldırır."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            status = await conn.execute(
+                "DELETE FROM alarm_checklist_mappings WHERE threshold_id = $1",
+                threshold_id,
+            )
+        return str(status) == "DELETE 1"
+
+    async def get_alarm_checklist_mapping(
+        self, threshold_id: int,
+    ) -> AlarmChecklistMapping | None:
+        """Bir threshold'un eşlemesi (varsa)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM alarm_checklist_mappings "
+                "WHERE threshold_id = $1",
+                threshold_id,
+            )
+        if row is None:
+            return None
+        return _row_to_alarm_checklist_mapping(row)
+
+    async def list_alarm_checklist_mappings(
+        self,
+    ) -> list[AlarmChecklistMapping]:
+        """Tüm alarm → checklist eşlemeleri."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM alarm_checklist_mappings "
+                "ORDER BY threshold_id",
+            )
+        return [_row_to_alarm_checklist_mapping(r) for r in rows]
+
+    async def count_alarm_events_for_threshold(
+        self, threshold_id: int, since: datetime,
+    ) -> int:
+        """Verilen zaman sonrası threshold'un tetiklenme sayısı."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT COUNT(*) AS cnt FROM alarm_events "
+                "WHERE threshold_id = $1 AND triggered_at >= $2",
+                threshold_id, since,
+            )
+        assert row is not None
+        return int(row["cnt"])
+
 
 def _row_to_overview_chart_tag(row: asyncpg.Record) -> OverviewChartTag:
     """asyncpg satirini OverviewChartTag'e donusturur."""
@@ -2151,6 +2866,119 @@ def _row_to_overview_chart(row: asyncpg.Record) -> OverviewChart:
 _ALLOWED_OVERVIEW_CHART_UPDATE_FIELDS: frozenset[str] = frozenset({
     "title", "sort_order", "time_window_minutes",
 })
+
+
+# Maintenance update whitelist'leri (SQL injection önlemi)
+_ALLOWED_CHECKLIST_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "title", "description", "category", "asset_template_id",
+})
+
+_ALLOWED_SCHEDULE_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "checklist_id", "asset_template_id", "asset_instance_id",
+    "period_kind", "period_value", "anchor_date", "next_due_at",
+    "notify_lead_hours", "enabled",
+})
+
+_ALLOWED_TASK_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "status", "started_at", "completed_at",
+    "completed_by", "notes", "due_at",
+})
+
+
+def _row_to_maintenance_checklist(
+    row: asyncpg.Record,
+) -> MaintenanceChecklist:
+    """asyncpg satırını MaintenanceChecklist'e dönüştürür (steps hariç)."""
+    return MaintenanceChecklist(
+        id=row["id"],
+        slug=row["slug"],
+        title=row["title"],
+        description=row["description"],
+        category=row["category"],
+        asset_template_id=row["asset_template_id"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_maintenance_step(
+    row: asyncpg.Record,
+) -> MaintenanceChecklistStep:
+    """asyncpg satırını MaintenanceChecklistStep'e dönüştürür."""
+    return MaintenanceChecklistStep(
+        id=row["id"],
+        checklist_id=row["checklist_id"],
+        sort_order=row["sort_order"],
+        text=row["text"],
+        estimated_minutes=row["estimated_minutes"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_maintenance_schedule(
+    row: asyncpg.Record,
+) -> MaintenanceSchedule:
+    """asyncpg satırını MaintenanceSchedule'a dönüştürür."""
+    return MaintenanceSchedule(
+        id=row["id"],
+        checklist_id=row["checklist_id"],
+        asset_template_id=row["asset_template_id"],
+        asset_instance_id=row["asset_instance_id"],
+        period_kind=row["period_kind"],
+        period_value=row["period_value"],
+        anchor_date=row["anchor_date"],
+        next_due_at=row["next_due_at"],
+        notify_lead_hours=row["notify_lead_hours"],
+        enabled=row["enabled"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_maintenance_task(row: asyncpg.Record) -> MaintenanceTask:
+    """asyncpg satırını MaintenanceTask'e dönüştürür."""
+    return MaintenanceTask(
+        id=row["id"],
+        schedule_id=row["schedule_id"],
+        checklist_id=row["checklist_id"],
+        asset_instance_id=row["asset_instance_id"],
+        source=row["source"],
+        alarm_event_id=row["alarm_event_id"],
+        title_snapshot=row["title_snapshot"],
+        due_at=row["due_at"],
+        started_at=row["started_at"],
+        completed_at=row["completed_at"],
+        completed_by=row["completed_by"],
+        notes=row["notes"],
+        status=row["status"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_maintenance_step_result(
+    row: asyncpg.Record,
+) -> MaintenanceTaskStepResult:
+    """asyncpg satırını MaintenanceTaskStepResult'a dönüştürür."""
+    return MaintenanceTaskStepResult(
+        id=row["id"],
+        task_id=row["task_id"],
+        step_id=row["step_id"],
+        checked=row["checked"],
+        note=row["note"],
+        completed_at=row["completed_at"],
+    )
+
+
+def _row_to_alarm_checklist_mapping(
+    row: asyncpg.Record,
+) -> AlarmChecklistMapping:
+    """asyncpg satırını AlarmChecklistMapping'e dönüştürür."""
+    return AlarmChecklistMapping(
+        id=row["id"],
+        threshold_id=row["threshold_id"],
+        checklist_id=row["checklist_id"],
+        created_at=row["created_at"],
+    )
 
 
 def create_database(settings: Settings) -> DatabaseInterface:
