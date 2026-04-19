@@ -44,7 +44,10 @@ function unitToScale(unit) {
 
 /**
  * Serileri birimlerine göre scale gruplarına ayırır.
- * İlk 2 birim görünür axis alır (sol + sağ), gerisi invisible.
+ * Tüm benzersiz birimler görünür eksen alır; sol ve sağ arasında
+ * dengeli dağıtılır (ör. 3 birim → 2 sol + 1 sağ, 4 birim → 2 sol + 2 sağ).
+ * uPlot side property: 3 = sol, 1 = sağ. Aynı side'a birden fazla axis
+ * konursa yan yana istiflenir.
  */
 function buildScaleLayout(units) {
   const uniqueUnits = [];
@@ -54,11 +57,13 @@ function buildScaleLayout(units) {
       uniqueUnits.push({ key, label: u || '' });
     }
   }
+  const n = uniqueUnits.length;
+  const leftCount = Math.ceil(n / 2);  // odd sayılarda sol taraf bir fazla alsın
   return uniqueUnits.map((u, idx) => ({
     key: u.key,
     label: u.label,
-    visible: idx < 2,
-    side: idx === 0 ? 3 : (idx === 1 ? 1 : null),  // uPlot: 3=left, 1=right
+    visible: true,
+    side: idx < leftCount ? 3 : 1,
   }));
 }
 
