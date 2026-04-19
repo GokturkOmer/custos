@@ -80,6 +80,28 @@
       </div>
     </div>
 
+    {# Alarm → Checklist eşleme (opsiyonel) #}
+    <div>
+      <label for="alarm_checklist_id" class="block text-small font-medium text-text-secondary mb-1">
+        Alarm Checklist (opsiyonel)
+      </label>
+      <select id="alarm_checklist_id" name="alarm_checklist_id"
+              class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                     text-text-primary
+                     focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        <option value="">— Yok (eşleme atanmaz)</option>
+        {% for c in checklists %}
+        <option value="{{ c.id }}"
+                {% if current_checklist_id == c.id %}selected{% endif %}>
+          {{ c.title }} ({{ c.category }})
+        </option>
+        {% endfor %}
+      </select>
+      <p class="mt-1 text-small text-text-disabled">
+        Bu eşik tetiklendiğinde operatöre bu kontrol listesi sunulur.
+      </p>
+    </div>
+
     {# Severity + Debounce + Hysteresis #}
     <div class="grid grid-cols-3 gap-4">
       <div>

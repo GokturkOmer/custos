@@ -129,6 +129,8 @@ async def overview(request: Request) -> HTMLResponse:
     chart_slots: list[dict[str, Any]] = []
 
     alarms: list[dict[str, Any]] = []
+    upcoming_maint: list[MaintenanceTask] = []
+    maint_asset_names: dict[int, str] = {}
     active_alarm_count = 0
     total_tags = 0
     total_assets = 0
@@ -215,6 +217,20 @@ async def overview(request: Request) -> HTMLResponse:
             if t is not None:
                 thr_map[thr_id] = t
 
+        # Yaklaşan bakım task'ları (Overview widget) — ilk 5, 48 saat içinde
+        upcoming_maint = (
+            await db_instance.list_upcoming_maintenance_tasks(within_hours=48)
+        )[:5]
+        if upcoming_maint:
+            inst_ids = {
+                t.asset_instance_id for t in upcoming_maint
+                if t.asset_instance_id is not None
+            }
+            for iid in inst_ids:
+                inst = await db_instance.get_asset_instance(iid)
+                if inst is not None and inst.id is not None:
+                    maint_asset_names[inst.id] = inst.name
+
         for event in recent_events:
             t = thr_map.get(event.threshold_id)
             state_label = {
@@ -273,6 +289,8 @@ async def overview(request: Request) -> HTMLResponse:
         charts=charts,
         chart_slots=chart_slots,
         alarms=alarms,
+        upcoming_maint=upcoming_maint,
+        maint_asset_names=maint_asset_names,
     )
     return templates.TemplateResponse(request, "pages/overview.html", ctx)
 
@@ -1432,11 +1450,14 @@ async def threshold_new(request: Request) -> HTMLResponse:
     """Yeni threshold formu."""
     db = _get_db(request)
     tags = await db.list_tags(status="active")
+    checklists = await db.list_maintenance_checklists()
     ctx = _base_context(
         page_title="Yeni Threshold",
         active_nav="/dashboard/alarms",
         tags=tags,
         edit_mode=False,
+        checklists=checklists,
+        current_checklist_id=None,
     )
     return templates.TemplateResponse(request, "pages/threshold_form.html", ctx)
 
@@ -1451,8 +1472,9 @@ async def threshold_create(
     severity: str = Form("warn"),
     debounce_seconds: int = Form(5),
     hysteresis: float = Form(0.0),
+    alarm_checklist_id: str = Form(""),
 ) -> RedirectResponse:
-    """Yeni threshold kaydı oluşturur."""
+    """Yeni threshold kaydı oluşturur + opsiyonel alarm→checklist eşleme."""
     db = _get_db(request)
     threshold = Threshold(
         tag_id=tag_id,
@@ -1464,8 +1486,13 @@ async def threshold_create(
         hysteresis=hysteresis,
     )
     created = await db.insert_threshold(threshold)
+    assert created.id is not None
 
-    # Audit log
+    # Alarm-checklist eşleme (opsiyonel)
+    await _upsert_or_delete_alarm_checklist(
+        db, created.id, alarm_checklist_id,
+    )
+
     await db.insert_audit_log(
         AuditLogEntry(
             category="alarm",
@@ -1488,12 +1515,16 @@ async def threshold_edit(request: Request, threshold_id: int) -> HTMLResponse:
         raise HTTPException(status_code=404, detail="Threshold bulunamadı")
 
     tags = await db.list_tags(status="active")
+    checklists = await db.list_maintenance_checklists()
+    mapping = await db.get_alarm_checklist_mapping(threshold_id)
     ctx = _base_context(
         page_title=f"Düzenle: {threshold.name}",
         active_nav="/dashboard/alarms",
         threshold=threshold,
         tags=tags,
         edit_mode=True,
+        checklists=checklists,
+        current_checklist_id=mapping.checklist_id if mapping else None,
     )
     return templates.TemplateResponse(request, "pages/threshold_form.html", ctx)
 
@@ -1508,8 +1539,9 @@ async def threshold_update(
     severity: str = Form("warn"),
     debounce_seconds: int = Form(5),
     hysteresis: float = Form(0.0),
+    alarm_checklist_id: str = Form(""),
 ) -> RedirectResponse:
-    """Threshold kaydını günceller."""
+    """Threshold kaydını günceller + alarm-checklist eşlemeyi yeniler."""
     db = _get_db(request)
     updates: dict[str, object] = {
         "name": name,
@@ -1523,7 +1555,29 @@ async def threshold_update(
     if result is None:
         raise HTTPException(status_code=404, detail="Threshold bulunamadı")
 
+    await _upsert_or_delete_alarm_checklist(
+        db, threshold_id, alarm_checklist_id,
+    )
+
     return RedirectResponse(url="/dashboard/thresholds", status_code=303)
+
+
+async def _upsert_or_delete_alarm_checklist(
+    db: DatabaseInterface, threshold_id: int, checklist_id_str: str,
+) -> None:
+    """Form'dan gelen alarm_checklist_id değerini mapping'e uygular.
+
+    Boş string → mapping varsa sil. Geçerli int → upsert.
+    """
+    cleaned = checklist_id_str.strip()
+    if cleaned == "":
+        await db.delete_alarm_checklist_mapping(threshold_id)
+        return
+    try:
+        cid = int(cleaned)
+    except ValueError:
+        return
+    await db.upsert_alarm_checklist_mapping(threshold_id, cid)
 
 
 @router.post("/thresholds/{threshold_id:int}/delete", response_class=HTMLResponse)
@@ -1598,11 +1652,23 @@ async def alarms_page(request: Request) -> HTMLResponse:
     }
     threshold_names: dict[int, str] = {}
     threshold_severities: dict[int, str] = {}
+    checklist_by_threshold: dict[int, int] = {}  # threshold_id → checklist_id
     for tid in threshold_ids:
         t = await db.get_threshold(tid)
         if t is not None:
             threshold_names[tid] = t.name
             threshold_severities[tid] = t.severity
+        mapping = await db.get_alarm_checklist_mapping(tid)
+        if mapping is not None:
+            checklist_by_threshold[tid] = mapping.checklist_id
+
+    # "Son 7 günde N kez" rozeti için aktif alarm'ların threshold'larının sayısı
+    seven_days_ago = datetime.now(UTC) - timedelta(days=7)
+    recent_alarm_count: dict[int, int] = {}
+    for tid in {a.threshold_id for a in active_alarms}:
+        recent_alarm_count[tid] = await db.count_alarm_events_for_threshold(
+            tid, seven_days_ago,
+        )
 
     ctx = _base_context(
         page_title="Alarms",
@@ -1611,6 +1677,8 @@ async def alarms_page(request: Request) -> HTMLResponse:
         cleared_alarms=cleared_alarms,
         threshold_names=threshold_names,
         threshold_severities=threshold_severities,
+        checklist_by_threshold=checklist_by_threshold,
+        recent_alarm_count=recent_alarm_count,
     )
     return templates.TemplateResponse(request, "pages/alarms.html", ctx)
 
@@ -2454,4 +2522,46 @@ async def maintenance_task_skip(
     })
     return RedirectResponse(
         url="/dashboard/maintenance?tab=history", status_code=303,
+    )
+
+
+@router.post(
+    "/alarms/{alarm_event_id:int}/start-checklist",
+    response_class=HTMLResponse,
+)
+async def alarm_start_checklist(
+    request: Request, alarm_event_id: int,
+) -> RedirectResponse:
+    """Alarm event'inden checklist task'ı açar + detay sayfasına yönlendirir."""
+    db = _get_db(request)
+    alarm = await db.get_alarm_event(alarm_event_id)
+    if alarm is None:
+        raise HTTPException(status_code=404, detail="Alarm bulunamadı")
+    mapping = await db.get_alarm_checklist_mapping(alarm.threshold_id)
+    if mapping is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Bu alarm için checklist eşlemesi yok",
+        )
+    checklist = await db.get_maintenance_checklist(mapping.checklist_id)
+    if checklist is None:
+        raise HTTPException(status_code=404, detail="Checklist bulunamadı")
+
+    task = MaintenanceTask(
+        checklist_id=checklist.id or 0,
+        source="alarm",
+        alarm_event_id=alarm_event_id,
+        title_snapshot=f"{checklist.title} — {alarm.tag_id}",
+        due_at=datetime.now(UTC),
+        status="pending",
+    )
+    created = await db.insert_maintenance_task(task)
+    await db.insert_audit_log(AuditLogEntry(
+        category="maintenance", action="task_from_alarm",
+        entity_type="alarm", entity_id=str(alarm_event_id),
+        detail=f"Alarm {alarm_event_id} için task {created.id} oluşturuldu",
+    ))
+    return RedirectResponse(
+        url=f"/dashboard/maintenance/tasks/{created.id}",
+        status_code=303,
     )

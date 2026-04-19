@@ -53,6 +53,58 @@
   </div>
   {% endif %}
 
+  {# Yaklaşan Bakım widget — sadece pending task varsa görünür #}
+  {% if upcoming_maint %}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-panel-title text-text-primary">Yaklaşan Bakım (48 saat)</h3>
+      <a href="/dashboard/maintenance"
+         class="text-small text-accent-primary hover:underline">
+        Tümünü gör →
+      </a>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Vade</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Başlık</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Ekipman</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
+            <th class="px-3 py-2 text-right"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% for t in upcoming_maint %}
+          <tr class="hover:bg-bg-elevated transition-colors">
+            <td class="px-3 py-2 text-cell text-text-primary font-mono">
+              {{ t.due_at.strftime('%d/%m %H:%M') if t.due_at else '—' }}
+            </td>
+            <td class="px-3 py-2 text-cell text-text-primary">{{ t.title_snapshot }}</td>
+            <td class="px-3 py-2 text-cell text-text-secondary">
+              {% if t.asset_instance_id and maint_asset_names.get(t.asset_instance_id) %}
+                {{ maint_asset_names[t.asset_instance_id] }}
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-2 text-cell">
+              <span class="px-2 py-0.5 rounded-sm text-small font-mono
+                          {% if t.status == 'pending' %}bg-status-warn-bg text-status-warn
+                          {% else %}bg-accent-primary/20 text-accent-primary{% endif %}">
+                {{ t.status }}
+              </span>
+            </td>
+            <td class="px-3 py-2 text-cell text-right">
+              <a href="/dashboard/maintenance/tasks/{{ t.id }}"
+                 class="text-accent-primary hover:underline text-small">Aç</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   {# Recent Alarms tablosu — full width #}
   <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
     <h3 class="text-panel-title text-text-primary mb-3">Recent Alarms</h3>

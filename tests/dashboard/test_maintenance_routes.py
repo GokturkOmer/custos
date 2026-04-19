@@ -127,3 +127,12 @@ def test_maintenance_appears_in_sidebar_via_overview() -> None:
     response = client.get("/dashboard/overview")
     if response.status_code == 200:
         assert "/dashboard/maintenance" in response.text
+
+
+def test_alarm_start_checklist_nonexistent_returns_404_or_503() -> None:
+    """Var olmayan alarm event için start-checklist → 404/503."""
+    response = client.post(
+        "/dashboard/alarms/999999/start-checklist",
+        follow_redirects=False,
+    )
+    assert response.status_code in (404, 503)
