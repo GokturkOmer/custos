@@ -284,49 +284,90 @@ function perAxisZoomPanPlugin() {
 }
 
 /**
- * Plot alanında Shift+sürükle ile yatay pan.
- * uPlot'un cursor.drag box-zoom davranışını shift basılıyken devre dışı
- * bırakır (capture + stopPropagation). Cursor.bind yerine direkt DOM
- * listener kullanıyor — daha güvenilir.
+ * Plot alanı etkileşimleri — uPlot'un cursor.drag'i tamamen kapalı:
+ *   - Sol tık + sürükle (shift yok)  → yatay box-zoom (select)
+ *   - Shift + sol tık + sürükle       → yatay pan
+ * İki mod da aynı plugin'de, mousedown'da shift kontrolüyle ayrılır.
  */
-function xAxisPanDragPlugin() {
+function xAxisInteractionPlugin() {
   return {
     hooks: {
       ready(u) {
-        let panStart = null;
+        let mode = null;  // 'pan' | 'box' | null
+        let state = null;
+
+        // Box-select için overlay div
+        const overlay = document.createElement('div');
+        overlay.style.cssText = (
+          'position:absolute;top:0;bottom:0;pointer-events:none;' +
+          'background:rgba(50,116,217,0.15);' +
+          'border-left:1px solid rgba(50,116,217,0.5);' +
+          'border-right:1px solid rgba(50,116,217,0.5);' +
+          'display:none;'
+        );
+        u.over.style.position = 'relative';
+        u.over.appendChild(overlay);
 
         u.over.addEventListener('mousedown', (e) => {
-          if (!e.shiftKey || e.button !== 0) return;
-          const xMin = u.scales.x.min;
-          const xMax = u.scales.x.max;
-          if (xMin == null || xMax == null) return;
-          // uPlot'un drag-select davranışını engelle
+          if (e.button !== 0 || e.ctrlKey) return;
+          const rect = u.over.getBoundingClientRect();
+          const localX = e.clientX - rect.left;
+          if (e.shiftKey) {
+            const xMin = u.scales.x.min;
+            const xMax = u.scales.x.max;
+            if (xMin == null || xMax == null) return;
+            mode = 'pan';
+            state = { startX: e.clientX, xMin, xMax, width: rect.width };
+            u.over.style.cursor = 'grabbing';
+          } else {
+            mode = 'box';
+            state = { startX: localX, rect };
+            overlay.style.left = localX + 'px';
+            overlay.style.width = '0';
+            overlay.style.display = 'block';
+          }
           e.preventDefault();
-          e.stopPropagation();
-          panStart = {
-            x: e.clientX,
-            min: xMin,
-            max: xMax,
-            width: u.over.getBoundingClientRect().width,
-          };
-          u.over.style.cursor = 'grabbing';
-        }, { capture: true });
+        });
 
         const onMove = (e) => {
-          if (!panStart) return;
-          const dx = e.clientX - panStart.x;
-          const range = panStart.max - panStart.min;
-          const shift = (dx / panStart.width) * range * -1;
-          u.setScale('x', {
-            min: panStart.min + shift,
-            max: panStart.max + shift,
-          });
+          if (!mode) return;
+          if (mode === 'pan') {
+            const dx = e.clientX - state.startX;
+            const range = state.xMax - state.xMin;
+            const shift = (dx / state.width) * range * -1;
+            u.setScale('x', {
+              min: state.xMin + shift,
+              max: state.xMax + shift,
+            });
+          } else if (mode === 'box') {
+            const curX = Math.max(
+              0, Math.min(state.rect.width, e.clientX - state.rect.left),
+            );
+            const left = Math.min(state.startX, curX);
+            const width = Math.abs(curX - state.startX);
+            overlay.style.left = left + 'px';
+            overlay.style.width = width + 'px';
+          }
         };
-        const onUp = () => {
-          if (panStart) {
-            panStart = null;
+        const onUp = (e) => {
+          if (mode === 'box') {
+            const curX = Math.max(
+              0, Math.min(state.rect.width, e.clientX - state.rect.left),
+            );
+            const start = Math.min(state.startX, curX);
+            const end = Math.max(state.startX, curX);
+            overlay.style.display = 'none';
+            if (end - start > 5) {
+              u.setScale('x', {
+                min: u.posToVal(start, 'x'),
+                max: u.posToVal(end, 'x'),
+              });
+            }
+          } else if (mode === 'pan') {
             u.over.style.cursor = '';
           }
+          mode = null;
+          state = null;
         };
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
@@ -483,7 +524,9 @@ function chartPanel(chartId) {
         axes: axes,
         scales: scales,
         cursor: {
-          drag: { x: true, y: false, setScale: true },
+          // uPlot'un kendi drag mekanizmasi tamamen kapali — tum yatay
+          // etkilesimler xAxisInteractionPlugin tarafindan yonetiliyor.
+          drag: { x: false, y: false, setScale: false },
           points: {
             size: 6 * DPR,
             stroke: '#E6E9EC',
@@ -491,14 +534,10 @@ function chartPanel(chartId) {
             width: 1.5 * DPR,
           },
         },
-        select: {
-          fill: 'rgba(50, 116, 217, 0.15)',
-          stroke: 'rgba(50, 116, 217, 0.5)',
-        },
         legend: { show: true },
         plugins: [
           wheelZoomPlugin(),
-          xAxisPanDragPlugin(),
+          xAxisInteractionPlugin(),
           dblClickResetPlugin(windowRange),
           perAxisZoomPanPlugin(),
         ],
