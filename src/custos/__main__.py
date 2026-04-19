@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from custos.analytics.anomaly_detector import AnomalyDetector
 from custos.analytics.dashboard.app import get_static_files_app, router
 from custos.analytics.kpi_engine import KpiEngine
+from custos.analytics.maintenance_scheduler import MaintenanceScheduler
 from custos.analytics.threshold_engine import ThresholdEngine
 from custos.shared.config import settings
 from custos.shared.database import DatabaseInterface, create_database
@@ -36,6 +37,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     kpi_task: asyncio.Task[None] | None = None
     detector: AnomalyDetector | None = None
     detector_task: asyncio.Task[None] | None = None
+    maint_scheduler: MaintenanceScheduler | None = None
+    maint_scheduler_task: asyncio.Task[None] | None = None
     try:
         await db.connect()
         application.state.db = db
@@ -55,10 +58,24 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         detector = AnomalyDetector(db=db, models_dir=_MODELS_DIR)
         detector_task = asyncio.create_task(detector.start())
         application.state.anomaly_detector = detector
+
+        # Bakım zamanlayıcısını başlat (periyodik bakım + overdue tarama)
+        maint_scheduler = MaintenanceScheduler(db=db)
+        maint_scheduler_task = asyncio.create_task(maint_scheduler.start())
+        application.state.maintenance_scheduler = maint_scheduler
     except Exception:
         await logger.aerror("DB bağlantısı kurulamadı", exc_info=True)
         application.state.db = None
     yield
+    # Bakım zamanlayıcısını durdur
+    if maint_scheduler is not None:
+        await maint_scheduler.stop()
+    if maint_scheduler_task is not None and not maint_scheduler_task.done():
+        maint_scheduler_task.cancel()
+        try:
+            await maint_scheduler_task
+        except asyncio.CancelledError:
+            pass
     # Anomaly detector'ı durdur
     if detector is not None:
         await detector.stop()
