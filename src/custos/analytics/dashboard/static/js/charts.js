@@ -144,15 +144,20 @@ function wheelZoomPlugin() {
           // Ctrl yoksa sayfa scroll akışına karışma (kullanıcı chart
           // üzerinden geçerken yanlışlıkla zoom tetiklenmesin)
           if (!e.ctrlKey) return;
+          // passive:false + preventDefault + stopPropagation ile
+          // browser'ın Ctrl+wheel zoom'unu engelle
           e.preventDefault();
+          e.stopPropagation();
           const { left } = u.cursor;
-          if (left == null || left < 0) return;
           const xMin = u.scales.x.min;
           const xMax = u.scales.x.max;
           if (xMin == null || xMax == null) return;
 
           const range = xMax - xMin;
-          const cursorX = u.posToVal(left, 'x');
+          // Cursor plot alanında değilse orta noktadan zoom
+          const cursorX = (left != null && left >= 0)
+            ? u.posToVal(left, 'x')
+            : (xMin + xMax) / 2;
           const zoomIn = e.deltaY < 0;
           const newRange = zoomIn ? range * factor : range / factor;
           const ratio = (cursorX - xMin) / range;
@@ -161,7 +166,7 @@ function wheelZoomPlugin() {
             min: cursorX - newRange * ratio,
             max: cursorX + newRange * (1 - ratio),
           });
-        }, { passive: false });
+        }, { passive: false, capture: true });
       }
     }
   };
@@ -308,7 +313,7 @@ function xAxisInteractionPlugin() {
         u.over.style.position = 'relative';
         u.over.appendChild(overlay);
 
-        u.over.addEventListener('mousedown', (e) => {
+        const onDown = (e) => {
           if (e.button !== 0 || e.ctrlKey) return;
           const rect = u.over.getBoundingClientRect();
           const localX = e.clientX - rect.left;
@@ -326,8 +331,14 @@ function xAxisInteractionPlugin() {
             overlay.style.width = '0';
             overlay.style.display = 'block';
           }
+          // uPlot cursor'un pointerdown/mousedown handler'ini atlat
           e.preventDefault();
-        });
+          e.stopPropagation();
+        };
+        // Hem pointerdown hem mousedown — uPlot hangisini dinliyorsa
+        // capture phase'de ondan once yakalayalim
+        u.over.addEventListener('pointerdown', onDown, { capture: true });
+        u.over.addEventListener('mousedown', onDown, { capture: true });
 
         const onMove = (e) => {
           if (!mode) return;
