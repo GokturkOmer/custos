@@ -5,6 +5,11 @@
   <div class="flex items-center justify-between mb-3">
     <h3 class="text-panel-title text-text-primary">{{ title }}</h3>
     <div class="flex items-center gap-1">
+      <span class="text-text-disabled p-1 cursor-help"
+            title="Plot alanı: sürükle yatay zoom, tekerlek yatay zoom, Shift+sürükle yatay pan, çift tık X reset.&#10;Y ekseni üzerinde: tekerlek Y zoom, Shift+sürükle Y pan, çift tık o eksen auto-range."
+            aria-label="Etkileşim ipuçları">
+        {{ icon_inline('eye', class='w-4 h-4') }}
+      </span>
       {% if editable %}
       <button
         hx-get="/dashboard/overview/chart-config/{{ chart_id }}"

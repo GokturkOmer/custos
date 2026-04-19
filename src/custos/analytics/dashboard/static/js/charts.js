@@ -5,11 +5,16 @@
  * İlk 2 benzersiz birim görünür Y ekseni alır (sol + sağ); 3. ve sonrası
  * görünmez scale'a bağlanır (tooltip'te okunur, eksen çizilmez).
  *
- * Etkileşim:
- *   - Sürükle (sol tuş)  → yatay zoom
- *   - Scroll (tekerlek)   → zoom in/out
- *   - Shift + sürükle     → pan
- *   - Çift tıkla           → zoom sıfırla
+ * Etkileşim — X ekseni (plot alanında):
+ *   - Sürükle (sol tuş)  → yatay zoom (box-select)
+ *   - Tekerlek            → yatay zoom in/out
+ *   - Shift + sürükle     → yatay pan
+ *   - Çift tıkla           → X ekseni zoom sıfırla
+ *
+ * Etkileşim — Y ekseni (sol/sağ eksen üzerinde):
+ *   - Tekerlek            → o ekseni zoom (Y)
+ *   - Shift + sürükle     → o ekseni pan (Y)
+ *   - Çift tıkla           → o eksenin auto-range'ini geri al
  */
 
 const CHART_COLORS = [
@@ -115,6 +120,106 @@ function dblClickResetPlugin(fullData) {
           const ts = fullData[0];
           u.setScale('x', { min: ts[0], max: ts[ts.length - 1] });
         });
+      }
+    }
+  };
+}
+
+/**
+ * Per-axis Y pan/zoom — fare görünür bir Y ekseni üzerindeyken:
+ *   - Wheel          → o scale'i cursor etrafında zoom
+ *   - Shift+sürükle  → o scale'i dikey pan
+ *   - Çift tıkla      → o scale'i auto-range'e döndür
+ * X ekseni (sürükle, tekerlek, çift tık plot alanında) olduğu gibi korunur.
+ */
+function perAxisZoomPanPlugin() {
+  const zoomFactor = 0.8;
+  return {
+    hooks: {
+      ready(u) {
+        const root = u.root;
+        // uPlot axis DOM'u: `.u-axis` elementleri. u.axes ile sırayla eşleşir.
+        const axisEls = Array.from(root.querySelectorAll('.u-axis'));
+
+        // Her axis element'i için hangi scale'e ait olduğunu bul
+        const scaleByEl = new Map();
+        axisEls.forEach((el, idx) => {
+          const ax = u.axes[idx];
+          if (ax && ax.scale && ax.scale !== 'x') {
+            scaleByEl.set(el, ax.scale);
+            el.style.cursor = 'ns-resize';
+          }
+        });
+
+        const zoomScale = (scaleKey, cursorVal, zoomIn) => {
+          const s = u.scales[scaleKey];
+          if (s.min == null || s.max == null) return;
+          const range = s.max - s.min;
+          const newRange = zoomIn ? range * zoomFactor : range / zoomFactor;
+          const ratio = cursorVal == null ? 0.5 : (cursorVal - s.min) / range;
+          u.setScale(scaleKey, {
+            min: cursorVal - newRange * ratio,
+            max: cursorVal + newRange * (1 - ratio),
+          });
+        };
+
+        // --- Wheel zoom on axis ---
+        for (const [el, scaleKey] of scaleByEl) {
+          el.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const s = u.scales[scaleKey];
+            if (s.min == null || s.max == null) return;
+            // Fare pozisyonunu scale değerine çevir (plot area yüksekliği kullanılır)
+            const plotRect = u.over.getBoundingClientRect();
+            const relY = e.clientY - plotRect.top;
+            const clampedY = Math.max(0, Math.min(plotRect.height, relY));
+            const cursorVal = u.posToVal(clampedY, scaleKey);
+            zoomScale(scaleKey, cursorVal, e.deltaY < 0);
+          }, { passive: false });
+        }
+
+        // --- Shift+drag pan on axis ---
+        let panState = null;
+        for (const [el, scaleKey] of scaleByEl) {
+          el.addEventListener('mousedown', (e) => {
+            if (!e.shiftKey) return;
+            e.preventDefault();
+            const s = u.scales[scaleKey];
+            if (s.min == null || s.max == null) return;
+            panState = {
+              scaleKey,
+              startY: e.clientY,
+              startMin: s.min,
+              startMax: s.max,
+              plotHeight: u.over.getBoundingClientRect().height,
+            };
+          });
+        }
+
+        const onMove = (e) => {
+          if (!panState) return;
+          const dy = e.clientY - panState.startY;
+          const range = panState.startMax - panState.startMin;
+          // Aşağı fare → min artsın (değer düşer görünsün)
+          const shift = (dy / panState.plotHeight) * range;
+          u.setScale(panState.scaleKey, {
+            min: panState.startMin + shift,
+            max: panState.startMax + shift,
+          });
+        };
+        const onUp = () => { panState = null; };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+
+        // --- Double-click auto-range ---
+        for (const [el, scaleKey] of scaleByEl) {
+          el.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            // uPlot auto-range: scale.auto=true + setScale(null,null) range fonksiyonu yeniden çalışır
+            u.setScale(scaleKey, { min: null, max: null });
+          });
+        }
       }
     }
   };
@@ -238,6 +343,7 @@ function chartPanel(chartId) {
         plugins: [
           wheelZoomPlugin(),
           dblClickResetPlugin(uplotData),
+          perAxisZoomPanPlugin(),
         ],
       };
 
