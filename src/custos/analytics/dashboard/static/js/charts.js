@@ -144,8 +144,14 @@ function wheelZoomPlugin() {
         // axis'in üstünde de Ctrl+Wheel engellensin ve X zoom çalışsın.
         const handler = (e) => {
           if (!e.ctrlKey) return;
-          // Browser'ın Ctrl+wheel zoom'unu KESİNLİKLE engelle:
-          // passive:false + preventDefault + stopImmediatePropagation
+          // Axis elementi üzerindeyse per-axis Y zoom plugin'ine bırak
+          if (e.target.closest && e.target.closest('.u-axis')) {
+            // preventDefault yine gerekli: browser Ctrl+wheel iptal
+            // stopImmediatePropagation YOK ki axis listener çalışsın
+            e.preventDefault();
+            return;
+          }
+          // Plot alanında: X zoom
           e.preventDefault();
           e.stopImmediatePropagation();
           const { left } = u.cursor;
@@ -178,10 +184,10 @@ function dblClickResetPlugin(windowRange) {
   return {
     hooks: {
       ready(u) {
-        u.over.addEventListener('dblclick', (e) => {
-          // uPlot'un default dblclick davranışıyla çakışmayı önle
+        u.root.addEventListener('dblclick', (e) => {
+          // Axis üzerindeki çift tık per-axis auto-range'e ait
+          if (e.target.closest && e.target.closest('.u-axis')) return;
           e.stopImmediatePropagation();
-          // X reset her zaman backend'in verdiği zaman penceresine döner
           u.setScale('x', { min: windowRange[0], max: windowRange[1] });
         }, { capture: true });
       }
@@ -317,8 +323,14 @@ function xAxisInteractionPlugin() {
 
         const onDown = (e) => {
           if (e.button !== 0 || e.ctrlKey) return;
+          // Axis elementi üzerindeki tıklamalar perAxisZoomPanPlugin'e ait;
+          // plot alanı dışında ise bu plugin müdahale etmesin
+          if (e.target.closest && e.target.closest('.u-axis')) return;
           const rect = u.over.getBoundingClientRect();
           const localX = e.clientX - rect.left;
+          // Plot alanı dışında (ör. legend) mousedown'ı göz ardı et
+          if (localX < 0 || localX > rect.width
+              || e.clientY < rect.top || e.clientY > rect.bottom) return;
           if (e.shiftKey) {
             const xMin = u.scales.x.min;
             const xMax = u.scales.x.max;
@@ -337,10 +349,10 @@ function xAxisInteractionPlugin() {
           e.preventDefault();
           e.stopImmediatePropagation();
         };
-        // Hem pointerdown hem mousedown — uPlot hangisini dinliyorsa
-        // capture phase'de ondan once yakalayalim
-        u.over.addEventListener('pointerdown', onDown, { capture: true });
-        u.over.addEventListener('mousedown', onDown, { capture: true });
+        // u.root — chart'ın tüm DOM'u. u.over'da bazı uPlot konfigleriyle
+        // event flow sorunlu olabiliyor; u.root daima güvenilir.
+        u.root.addEventListener('pointerdown', onDown, { capture: true });
+        u.root.addEventListener('mousedown', onDown, { capture: true });
 
         const onMove = (e) => {
           if (!mode) return;
