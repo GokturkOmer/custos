@@ -43,22 +43,47 @@ def test_showcase_returns_200_with_dev_mode() -> None:
         os.environ.pop("CUSTOS_DEV_MODE", None)
 
 
-def test_chart_config_invalid_key_returns_404() -> None:
-    """Gecersiz chart_key icin 404 donmeli."""
+def test_chart_config_invalid_key_returns_error() -> None:
+    """Bilinmeyen chart_key icin 404 (DB varsa) ya da 503 (DB yoksa)."""
     response = client.get("/dashboard/overview/chart-config/invalid_chart")
-    assert response.status_code == 404
+    assert response.status_code in {404, 503}
 
 
-def test_chart_config_post_invalid_key_returns_404() -> None:
-    """Gecersiz chart_key POST icin 404 donmeli."""
+def test_chart_config_post_invalid_key_returns_error() -> None:
+    """Bilinmeyen chart_key POST icin 404 ya da 503."""
     response = client.post(
         "/dashboard/overview/chart-config/invalid_chart",
         data={"tag_ids": []},
     )
-    assert response.status_code == 404
+    assert response.status_code in {404, 503}
 
 
-def test_chart_config_returns_503_or_200() -> None:
-    """chart-config formu DB yoksa 503, varsa 200 donmeli."""
-    response = client.get("/dashboard/overview/chart-config/temp_chart")
+def test_chart_config_form_returns_200_or_error() -> None:
+    """chart-config formu DB yoksa 503, chart yoksa 404, varsa 200."""
+    response = client.get("/dashboard/overview/chart-config/sample-chart")
+    assert response.status_code in {200, 404, 503}
+
+
+def test_overview_chart_new_form_returns_200_or_503() -> None:
+    """Yeni chart formu DB yoksa 503, varsa 200."""
+    response = client.get("/dashboard/overview/charts/new")
     assert response.status_code in {200, 503}
+
+
+def test_overview_chart_create_empty_title_returns_error() -> None:
+    """Bos title ile yeni chart olusturulmaya calisilirsa 400 ya da 503."""
+    response = client.post(
+        "/dashboard/overview/charts",
+        data={"title": "   ", "tag_ids": []},
+        follow_redirects=False,
+    )
+    assert response.status_code in {400, 503}
+
+
+def test_overview_chart_delete_nonexistent_returns_error() -> None:
+    """Var olmayan chart silmeye calisilirsa 404 ya da 503."""
+    response = client.post(
+        "/dashboard/overview/charts/non-existent-slug/delete",
+        follow_redirects=False,
+    )
+    assert response.status_code in {404, 503}

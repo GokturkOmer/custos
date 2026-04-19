@@ -1,8 +1,8 @@
 {% extends 'base.html' %}
 {% from 'components/kpi_card.html' import kpi_card %}
 {% from 'components/chart_panel.html' import chart_panel %}
-{% from 'components/data_table.html' import data_table %}
 {% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
 
 {% block title %}Custos — Overview{% endblock %}
 
@@ -15,47 +15,65 @@
     {% endfor %}
   </div>
 
-  {# Satır 2: Sıcaklık ve Basınç Grafikleri #}
+  {# Satır 2+: Dinamik Chart Grid (2 sütun) #}
+  {% if chart_slots %}
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-    {{ chart_panel('Temperature Trends (Last 30 min)', 'temp_chart', height=220, editable=true) }}
-    {{ chart_panel('Pressure Trends (Last 30 min)', 'pressure_chart', height=220, editable=true) }}
+    {% for slot in chart_slots %}
+      {{ chart_panel(slot.title, slot.chart_key, height=220, editable=true, deletable=true) }}
+    {% endfor %}
   </div>
-
-  {# Satır 3: Debi/Titreşim grafiği + Alarm tablosu #}
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-    <div class="lg:col-span-2">
-      {{ chart_panel('Flow & Vibration (Last 1 hour)', 'flow_vibration_chart', height=220, editable=true) }}
-    </div>
-    <div class="bg-bg-surface rounded-sm border border-border-weak p-4 overflow-hidden">
-      <h3 class="text-panel-title text-text-primary mb-3">Recent Alarms</h3>
-      <div class="overflow-x-auto">
-        <table class="w-full">
-          <thead>
-            <tr class="bg-bg-elevated">
-              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Time</th>
-              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Sensor</th>
-              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Type</th>
-              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-border-weak">
-            {% for alarm in alarms %}
-            <tr class="hover:bg-bg-elevated transition-colors">
-              <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.time }}</td>
-              <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.sensor }}</td>
-              <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.type }}</td>
-              <td class="px-3 py-2 text-cell">{{ status_badge(alarm.status_label, alarm.status) }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+  {% else %}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-8 text-center">
+    <p class="text-text-secondary mb-4">Henüz chart eklenmedi.</p>
+    <a href="/dashboard/overview/charts/new"
+       class="inline-flex items-center gap-2 px-4 py-2 bg-accent-primary hover:bg-accent-primary-hover text-white rounded-sm transition-colors">
+      {{ icon_inline('plus', class='w-4 h-4') }}
+      <span>İlk chart'ı oluştur</span>
+    </a>
   </div>
+  {% endif %}
 
-  {# Satır 4: RPM grafiği (tam genişlik) #}
-  <div>
-    {{ chart_panel('RPM Trends (Last 1 hour)', 'rpm_chart', height=180, editable=true) }}
+  {# Yeni chart butonu — liste doluysa alt bölümde #}
+  {% if chart_slots %}
+  <div class="flex justify-end">
+    <a href="/dashboard/overview/charts/new"
+       class="inline-flex items-center gap-2 px-3 py-2 bg-bg-surface hover:bg-bg-elevated text-text-primary border border-border-weak rounded-sm transition-colors">
+      {{ icon_inline('plus', class='w-4 h-4') }}
+      <span>Yeni Chart</span>
+    </a>
+  </div>
+  {% endif %}
+
+  {# Recent Alarms tablosu — full width #}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
+    <h3 class="text-panel-title text-text-primary mb-3">Recent Alarms</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Time</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Sensor</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Type</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Status</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% for alarm in alarms %}
+          <tr class="hover:bg-bg-elevated transition-colors">
+            <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.time }}</td>
+            <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.sensor }}</td>
+            <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.type }}</td>
+            <td class="px-3 py-2 text-cell">{{ status_badge(alarm.status_label, alarm.status) }}</td>
+          </tr>
+          {% endfor %}
+          {% if not alarms %}
+          <tr>
+            <td colspan="4" class="px-3 py-4 text-center text-text-secondary text-small">Aktif alarm yok</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 {% endblock %}

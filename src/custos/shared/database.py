@@ -237,6 +237,16 @@ class OverviewChartTag:
     created_at: datetime | None = None
 
 
+@dataclass
+class OverviewChart:
+    """Overview dashboard'undaki bir chart slotu (kullanici tanimli)."""
+
+    chart_key: str  # slug, PK
+    title: str
+    sort_order: int = 0
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
 class DatabaseInterface(abc.ABC):
     """Veritabanı erişim arayüzü.
 
@@ -593,6 +603,24 @@ class DatabaseInterface(abc.ABC):
         updates: dict[str, object],
     ) -> PushSubscription | None:
         """Push subscription ayarlarını günceller. Bulunamazsa None döndürür."""
+
+    # --- Overview Charts (dinamik slot) ---
+
+    @abc.abstractmethod
+    async def list_overview_charts(self) -> list[OverviewChart]:
+        """Tum overview chart slotlarini sort_order'a gore dondurur."""
+
+    @abc.abstractmethod
+    async def get_overview_chart(self, chart_key: str) -> OverviewChart | None:
+        """Tek bir chart slotunu dondurur. Yoksa None."""
+
+    @abc.abstractmethod
+    async def insert_overview_chart(self, chart: OverviewChart) -> OverviewChart:
+        """Yeni chart slotu ekler; chart_key cakisirsa UniqueViolation."""
+
+    @abc.abstractmethod
+    async def delete_overview_chart(self, chart_key: str) -> bool:
+        """Chart slotunu siler (tag bindingleri CASCADE). Basariliysa True."""
 
     # --- Overview Chart Tags ---
 
@@ -1964,6 +1992,51 @@ class TimescaleDBDatabase(DatabaseInterface):
         return _row_to_push_subscription(row)
 
 
+    # --- Overview Charts (dinamik slot) implementasyonlari ---
+
+    async def list_overview_charts(self) -> list[OverviewChart]:
+        """Tum chart slotlarini sort_order + created_at sirasiyla dondurur."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM overview_charts ORDER BY sort_order, created_at",
+            )
+        return [_row_to_overview_chart(r) for r in rows]
+
+    async def get_overview_chart(self, chart_key: str) -> OverviewChart | None:
+        """Tek bir chart slotunu dondurur. Yoksa None."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM overview_charts WHERE chart_key = $1",
+                chart_key,
+            )
+        if row is None:
+            return None
+        return _row_to_overview_chart(row)
+
+    async def insert_overview_chart(self, chart: OverviewChart) -> OverviewChart:
+        """Yeni chart slotu ekler."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO overview_charts (chart_key, title, sort_order) "
+                "VALUES ($1, $2, $3) RETURNING *",
+                chart.chart_key, chart.title, chart.sort_order,
+            )
+        assert row is not None
+        return _row_to_overview_chart(row)
+
+    async def delete_overview_chart(self, chart_key: str) -> bool:
+        """Chart slotunu siler. Tag bindingleri FK CASCADE ile duser."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM overview_charts WHERE chart_key = $1",
+                chart_key,
+            )
+        return bool(result.endswith(" 1"))
+
     # --- Overview Chart Tags implementasyonlari ---
 
     async def list_overview_chart_tags(
@@ -2016,6 +2089,16 @@ def _row_to_overview_chart_tag(row: asyncpg.Record) -> OverviewChartTag:
         id=row["id"],
         chart_key=row["chart_key"],
         tag_id=row["tag_id"],
+        sort_order=row["sort_order"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_overview_chart(row: asyncpg.Record) -> OverviewChart:
+    """asyncpg satirini OverviewChart'a donusturur."""
+    return OverviewChart(
+        chart_key=row["chart_key"],
+        title=row["title"],
         sort_order=row["sort_order"],
         created_at=row["created_at"],
     )

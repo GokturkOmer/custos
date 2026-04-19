@@ -1,6 +1,10 @@
 /**
  * Custos uPlot grafik factory — Alpine.js component.
  *
+ * Multi-axis: Her tag'in birimi (units[i]) bir scale key'e çevrilir.
+ * İlk 2 benzersiz birim görünür Y ekseni alır (sol + sağ); 3. ve sonrası
+ * görünmez scale'a bağlanır (tooltip'te okunur, eksen çizilmez).
+ *
  * Etkileşim:
  *   - Sürükle (sol tuş)  → yatay zoom
  *   - Scroll (tekerlek)   → zoom in/out
@@ -15,36 +19,53 @@ const CHART_COLORS = [
 
 const DPR = window.devicePixelRatio || 1;
 
-const DARK_THEME_AXES = [
-  {
-    stroke: '#9DA0A5',
-    font: '11px Inter, system-ui, sans-serif',
-    grid: { stroke: '#2C3235', width: 1 },
-    ticks: { stroke: '#3D4147', width: 1 },
-    gap: 8,
-  },
-  {
-    stroke: '#9DA0A5',
-    font: '11px Inter, system-ui, sans-serif',
-    grid: { stroke: '#2C3235', width: 1 },
-    ticks: { stroke: '#3D4147', width: 1 },
-    gap: 5,
-    size: 55,
-  }
-];
+const BASE_AXIS = {
+  stroke: '#9DA0A5',
+  font: '11px Inter, system-ui, sans-serif',
+  grid: { stroke: '#2C3235', width: 1 },
+  ticks: { stroke: '#3D4147', width: 1 },
+};
 
 window.custos = window.custos || {};
 window.custos.charts = window.custos.charts || {};
 
 /**
- * Tüm serilerden Y min/max hesapla, %15 padding ekle.
- * Sonuç sabit — render döngüsüne girmez.
+ * Birim string'ini uPlot scale key'ine çevirir. Boş birim → "default".
  */
-function calcYRange(seriesArrays) {
+function unitToScale(unit) {
+  if (!unit) return 'default';
+  return `u_${unit.replace(/[^a-zA-Z0-9]/g, '_')}`;
+}
+
+/**
+ * Serileri birimlerine göre scale gruplarına ayırır.
+ * İlk 2 birim görünür axis alır (sol + sağ), gerisi invisible.
+ */
+function buildScaleLayout(units) {
+  const uniqueUnits = [];
+  for (const u of units) {
+    const key = unitToScale(u);
+    if (!uniqueUnits.find((x) => x.key === key)) {
+      uniqueUnits.push({ key, label: u || '' });
+    }
+  }
+  return uniqueUnits.map((u, idx) => ({
+    key: u.key,
+    label: u.label,
+    visible: idx < 2,
+    side: idx === 0 ? 3 : (idx === 1 ? 1 : null),  // uPlot: 3=left, 1=right
+  }));
+}
+
+/**
+ * Verilen scale için Y range hesaplar (sadece o scale'deki seriler).
+ */
+function calcYRangeForScale(seriesArrays, units, scaleKey) {
   let min = Infinity;
   let max = -Infinity;
-  for (const arr of seriesArrays) {
-    for (const v of arr) {
+  for (let i = 0; i < seriesArrays.length; i++) {
+    if (unitToScale(units[i]) !== scaleKey) continue;
+    for (const v of seriesArrays[i]) {
       if (v != null) {
         if (v < min) min = v;
         if (v > max) max = v;
@@ -110,8 +131,14 @@ function chartPanel(chartId) {
       const chartData = window.custos.chartData?.[chartId];
       if (!chartData) return;
 
-      const { timestamps, series, labels } = chartData;
+      const { timestamps, series, labels, units = [] } = chartData;
+      if (!timestamps || timestamps.length === 0) return;
 
+      // Her serinin unit bilgisini dizi olarak elde et (eski data için fallback)
+      const effectiveUnits = labels.map((_, i) => units[i] || '');
+      const layout = buildScaleLayout(effectiveUnits);
+
+      // uPlot series: ilki x ekseni
       const uplotSeries = [{}];
       labels.forEach((label, i) => {
         uplotSeries.push({
@@ -119,15 +146,35 @@ function chartPanel(chartId) {
           stroke: CHART_COLORS[i % CHART_COLORS.length],
           width: 1,
           points: { show: false },
+          scale: unitToScale(effectiveUnits[i]),
         });
       });
 
       const uplotData = [timestamps, ...series];
 
-      // Y range'i bir kez hesapla — sabit, döngüye girmez
-      const yRange = calcYRange(series);
+      // Scales: her benzersiz birim için ayrı Y scale
+      const scales = { x: { time: true } };
+      for (const l of layout) {
+        scales[l.key] = {
+          range: () => calcYRangeForScale(series, effectiveUnits, l.key),
+        };
+      }
 
-      // Yüksekliği data attribute'dan al — container height'a bağımlılık yok
+      // Axes: x ekseni + görünür Y eksenleri
+      const axes = [{ ...BASE_AXIS, gap: 8 }];
+      for (const l of layout) {
+        if (!l.visible) continue;
+        axes.push({
+          ...BASE_AXIS,
+          scale: l.key,
+          side: l.side,
+          gap: 5,
+          size: 55,
+          label: l.label || undefined,
+          labelSize: l.label ? 18 : 0,
+        });
+      }
+
       const chartHeight = parseInt(el.dataset.chartHeight) || 200;
 
       const opts = {
@@ -135,7 +182,8 @@ function chartPanel(chartId) {
         height: chartHeight,
         pxAlign: false,
         series: uplotSeries,
-        axes: DARK_THEME_AXES,
+        axes: axes,
+        scales: scales,
         cursor: {
           drag: { x: true, y: false, setScale: true },
           points: {
@@ -179,10 +227,6 @@ function chartPanel(chartId) {
           fill: 'rgba(50, 116, 217, 0.15)',
           stroke: 'rgba(50, 116, 217, 0.5)',
         },
-        scales: {
-          x: { time: true },
-          y: { range: () => yRange },
-        },
         legend: { show: true },
         plugins: [
           wheelZoomPlugin(),
@@ -193,7 +237,6 @@ function chartPanel(chartId) {
       this.chart = new uPlot(opts, uplotData, el);
       window.custos.charts[chartId] = this.chart;
 
-      // Debounced resize
       let resizeTimer = null;
       const ro = new ResizeObserver(() => {
         if (resizeTimer) clearTimeout(resizeTimer);

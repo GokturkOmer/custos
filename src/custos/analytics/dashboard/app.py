@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+import unicodedata
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,7 @@ from custos.shared.database import (
     AuditLogEntry,
     ConnectionProfile,
     DatabaseInterface,
+    OverviewChart,
     PushSubscription,
     TagBinding,
     TagRecord,
@@ -102,17 +105,17 @@ async def dashboard_root() -> RedirectResponse:
 
 @router.get("/overview", response_class=HTMLResponse)
 async def overview(request: Request) -> HTMLResponse:
-    """Overview sayfası — ana kontrol paneli."""
-    # Bos grafik yapisi — tag yoksa veya veri yoksa kullanilir
-    _empty_chart: dict[str, Any] = {"timestamps": [], "series": [], "labels": []}
-    charts: dict[str, Any] = {
-        "temp_chart": _empty_chart,
-        "pressure_chart": _empty_chart,
-        "flow_vibration_chart": _empty_chart,
-        "rpm_chart": _empty_chart,
-    }
+    """Overview sayfası — ana kontrol paneli.
 
-    # Gercek alarm event'lerini cek
+    Chart slotlari DB'den dinamik olarak gelir (overview_charts tablosu).
+    Kullanici yeni chart ekleyip silebilir; her chart kendi tag seciminden
+    beslenir.
+    """
+    # chart_key → { timestamps, series, labels, units }
+    charts: dict[str, Any] = {}
+    # Template'in render edecegi chart metadata (baslik + sort sirasi)
+    chart_slots: list[dict[str, Any]] = []
+
     alarms: list[dict[str, Any]] = []
     active_alarm_count = 0
     total_tags = 0
@@ -121,53 +124,47 @@ async def overview(request: Request) -> HTMLResponse:
     db_instance: DatabaseInterface | None = getattr(request.app.state, "db", None)
     if db_instance is not None:
         recent_events = await db_instance.list_alarm_events(limit=10)
-        # Aktif alarm sayisi
         triggered = await db_instance.list_alarm_events(state="triggered", limit=1000)
         acked = await db_instance.list_alarm_events(state="acknowledged", limit=1000)
         active_alarm_count = len(triggered) + len(acked)
 
-        # Gercek tag ve asset sayilari
         all_tags = await db_instance.list_tags()
         total_tags = len(all_tags)
         all_instances = await db_instance.list_asset_instances()
         total_assets = len(all_instances)
 
-        # Son 24 saatteki anomali sayisi
         since_24h = datetime.now(UTC) - _timedelta_24h
         anomaly_count_24h = await db_instance.count_anomalies(since=since_24h)
 
-        # Grafikleri doldur — once DB'den konfigurasyon cek, yoksa prefix fallback
-        chart_keys = ["temp_chart", "pressure_chart", "flow_vibration_chart", "rpm_chart"]
+        # Dinamik chart listesi — DB'den (sort_order + created_at sirasi)
+        overview_charts = await db_instance.list_overview_charts()
         all_chart_tags = await db_instance.list_overview_chart_tags()
-        config_map: dict[str, list[str]] = {k: [] for k in chart_keys}
+        tags_by_chart: dict[str, list[str]] = {}
         for ct in all_chart_tags:
-            if ct.chart_key in config_map:
-                config_map[ct.chart_key].append(ct.tag_id)
+            tags_by_chart.setdefault(ct.chart_key, []).append(ct.tag_id)
 
-        # Her chart icin bagimsiz fallback: tag_id prefix'ine gore ataniyor
-        # Bir chart icin DB'de config varsa onu kullan; yoksa prefix eslesmesi uygula
-        fallback_limit = 6
-        for key in chart_keys:
-            if config_map[key]:
-                continue
-            prefixes = _CHART_KEY_FALLBACK_PREFIXES.get(key, ())
-            if not prefixes:
-                continue
-            matches = [
-                t.tag_id for t in all_tags if t.tag_id.startswith(prefixes)
-            ][:fallback_limit]
-            config_map[key] = matches
-
-        # Her grafik icin gercek verileri cek
         tag_map = {t.tag_id: t for t in all_tags}
         now = datetime.now(UTC)
         real_start = now - _timedelta_30m
-        for key in chart_keys:
-            tag_ids = config_map[key]
+        for oc in overview_charts:
+            chart_slots.append({
+                "chart_key": oc.chart_key,
+                "title": oc.title,
+                "sort_order": oc.sort_order,
+            })
+            tag_ids = tags_by_chart.get(oc.chart_key, [])
             if not tag_ids:
+                charts[oc.chart_key] = {
+                    "timestamps": [],
+                    "series": [],
+                    "labels": [],
+                    "units": [],
+                }
                 continue
+
             series: list[list[float]] = []
             labels: list[str] = []
+            units: list[str] = []
             timestamps: list[int] = []
             for tid in tag_ids:
                 readings = await db_instance.query_tag_readings(
@@ -175,19 +172,21 @@ async def overview(request: Request) -> HTMLResponse:
                 )
                 if readings:
                     tag_rec = tag_map.get(tid)
-                    unit_suffix = f" ({tag_rec.unit})" if tag_rec and tag_rec.unit else ""
+                    unit = tag_rec.unit if tag_rec else ""
+                    unit_suffix = f" ({unit})" if unit else ""
                     labels.append(f"{tid}{unit_suffix}")
+                    units.append(unit)
                     series.append([r.value for r in readings])
                     if not timestamps:
                         timestamps = [
                             int(r.timestamp.timestamp()) for r in readings
                         ]
-            if timestamps and series:
-                charts[key] = {
-                    "timestamps": timestamps,
-                    "series": series,
-                    "labels": labels,
-                }
+            charts[oc.chart_key] = {
+                "timestamps": timestamps,
+                "series": series,
+                "labels": labels,
+                "units": units,
+            }
 
         # Threshold adlarini cek
         thr_ids = {e.threshold_id for e in recent_events}
@@ -253,35 +252,114 @@ async def overview(request: Request) -> HTMLResponse:
         active_nav="/dashboard/overview",
         kpis=kpis,
         charts=charts,
+        chart_slots=chart_slots,
         alarms=alarms,
     )
     return templates.TemplateResponse(request, "pages/overview.html", ctx)
 
 
-# --- Overview Chart Config ---
+# --- Overview Chart Slotlari (dinamik) ---
 
-# Gecerli grafik slotlari
-_CHART_KEYS: frozenset[str] = frozenset({
-    "temp_chart", "pressure_chart", "flow_vibration_chart", "rpm_chart",
-})
+# Slug uretiminde kullanilan Turkce karakter eslestirmesi
+_SLUG_TR_MAP = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
 
-# Her slot icin fallback tag eslesmesi: tag_id prefix'ine gore
-# (DB'de config yoksa kullanicinin elini tutmak icin)
-_CHART_KEY_FALLBACK_PREFIXES: dict[str, tuple[str, ...]] = {
-    "temp_chart": ("T",),             # Sicaklik tag'leri
-    "pressure_chart": ("P",),          # Basinc tag'leri
-    "flow_vibration_chart": ("F", "V"),  # Debi + Titresim
-    "rpm_chart": ("I", "E"),           # Motor akimi + Elektrik
-}
+
+def slugify_chart_title(title: str) -> str:
+    """Chart basligini URL-safe slug'a cevirir.
+
+    Ornekler:
+        "Sirkülasyon Pompası #1" → "sirkulasyon-pompasi-1"
+        "HVAC / AHU"              → "hvac-ahu"
+    """
+    s = title.translate(_SLUG_TR_MAP)
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = s.strip("-")
+    return s or "chart"
+
+
+async def _unique_chart_key(base: str, db: DatabaseInterface) -> str:
+    """Base slug varsa -2, -3 gibi suffix ekleyerek benzersiz chart_key uretir."""
+    candidate = base
+    n = 2
+    while await db.get_overview_chart(candidate) is not None:
+        candidate = f"{base}-{n}"
+        n += 1
+    return candidate
+
+
+@router.get("/overview/charts/new", response_class=HTMLResponse)
+async def overview_chart_new_form(request: Request) -> HTMLResponse:
+    """Yeni chart olusturma formu."""
+    db = _get_db(request)
+    all_tags = await db.list_tags(status="active")
+    ctx = _base_context(
+        page_title="Yeni Chart",
+        active_nav="/dashboard/overview",
+        all_tags=all_tags,
+    )
+    return templates.TemplateResponse(
+        request, "pages/overview_chart_form.html", ctx,
+    )
+
+
+@router.post("/overview/charts", response_class=HTMLResponse)
+async def overview_chart_create(
+    request: Request,
+    title: str = Form(...),
+) -> RedirectResponse:
+    """Yeni chart slotu olusturur ve secili tag'leri baglar."""
+    db = _get_db(request)
+    clean_title = title.strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="Baslik bos olamaz")
+
+    base_slug = slugify_chart_title(clean_title)
+    chart_key = await _unique_chart_key(base_slug, db)
+
+    existing = await db.list_overview_charts()
+    sort_order = max((c.sort_order for c in existing), default=-1) + 1
+
+    await db.insert_overview_chart(OverviewChart(
+        chart_key=chart_key, title=clean_title, sort_order=sort_order,
+    ))
+
+    form = await request.form()
+    tag_ids = [str(t) for t in form.getlist("tag_ids")]
+    if tag_ids:
+        await db.replace_overview_chart_tags(chart_key, tag_ids)
+
+    await db.insert_audit_log(AuditLogEntry(
+        category="chart_config", action="create",
+        detail=f"{chart_key}: {clean_title} ({len(tag_ids)} tag)",
+    ))
+    return RedirectResponse(url="/dashboard/overview", status_code=303)
+
+
+@router.post("/overview/charts/{chart_key}/delete", response_class=HTMLResponse)
+async def overview_chart_delete(
+    request: Request, chart_key: str,
+) -> RedirectResponse:
+    """Chart slotunu siler; tag bindingleri FK CASCADE ile duser."""
+    db = _get_db(request)
+    ok = await db.delete_overview_chart(chart_key)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Chart bulunamadi")
+    await db.insert_audit_log(AuditLogEntry(
+        category="chart_config", action="delete", detail=chart_key,
+    ))
+    return RedirectResponse(url="/dashboard/overview", status_code=303)
 
 
 @router.get("/overview/chart-config/{chart_key}", response_class=HTMLResponse)
 async def chart_config_form(request: Request, chart_key: str) -> HTMLResponse:
     """Grafik tag secim formunu HTMX partial olarak dondurur."""
-    if chart_key not in _CHART_KEYS:
+    db = _get_db(request)
+    chart = await db.get_overview_chart(chart_key)
+    if chart is None:
         raise HTTPException(status_code=404, detail="Gecersiz grafik slotu")
 
-    db = _get_db(request)
     all_tags = await db.list_tags(status="active")
     chart_tags = await db.list_overview_chart_tags(chart_key)
     selected_ids = {ct.tag_id for ct in chart_tags}
@@ -289,6 +367,7 @@ async def chart_config_form(request: Request, chart_key: str) -> HTMLResponse:
     ctx = {
         "request": request,
         "chart_key": chart_key,
+        "chart_title": chart.title,
         "all_tags": all_tags,
         "selected_ids": selected_ids,
     }
@@ -300,23 +379,20 @@ async def chart_config_form(request: Request, chart_key: str) -> HTMLResponse:
 @router.post("/overview/chart-config/{chart_key}", response_class=HTMLResponse)
 async def chart_config_save(request: Request, chart_key: str) -> RedirectResponse:
     """Grafik tag secimini kaydeder ve overview'a yonlendirir."""
-    if chart_key not in _CHART_KEYS:
+    db = _get_db(request)
+    chart = await db.get_overview_chart(chart_key)
+    if chart is None:
         raise HTTPException(status_code=404, detail="Gecersiz grafik slotu")
 
-    db = _get_db(request)
     form = await request.form()
-    # Checkbox'lardan secili tag_id'leri al
     tag_ids = form.getlist("tag_ids")
-
     await db.replace_overview_chart_tags(chart_key, [str(t) for t in tag_ids])
 
-    # Audit log
     await db.insert_audit_log(AuditLogEntry(
         category="chart_config",
         action="update",
         detail=f"{chart_key}: {len(tag_ids)} tag secildi",
     ))
-
     return RedirectResponse(url="/dashboard/overview", status_code=303)
 
 

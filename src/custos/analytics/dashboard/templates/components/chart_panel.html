@@ -1,9 +1,10 @@
 {# uPlot grafik container macro'su #}
-{% macro chart_panel(title, chart_id, height=200, editable=false) %}
+{% from 'components/icon.html' import icon_inline %}
+{% macro chart_panel(title, chart_id, height=200, editable=false, deletable=false) %}
 <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
   <div class="flex items-center justify-between mb-3">
     <h3 class="text-panel-title text-text-primary">{{ title }}</h3>
-    <div class="flex items-center gap-2">
+    <div class="flex items-center gap-1">
       {% if editable %}
       <button
         hx-get="/dashboard/overview/chart-config/{{ chart_id }}"
@@ -11,13 +12,22 @@
         hx-swap="innerHTML"
         class="text-text-disabled hover:text-text-primary transition-colors p-1"
         title="Tag sec">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-        </svg>
+        {{ icon_inline('edit', class='w-4 h-4') }}
       </button>
       {% endif %}
-      <span class="text-small text-text-disabled">Last 30 min</span>
+      {% if deletable %}
+      <form method="post"
+            action="/dashboard/overview/charts/{{ chart_id }}/delete"
+            onsubmit="return confirm('{{ title }} chart\'ini silmek istediginize emin misiniz?');"
+            class="inline">
+        <button type="submit"
+                class="text-text-disabled hover:text-status-crit transition-colors p-1"
+                title="Chart'i sil">
+          {{ icon_inline('trash-2', class='w-4 h-4') }}
+        </button>
+      </form>
+      {% endif %}
+      <span class="text-small text-text-disabled ml-1">Last 30 min</span>
     </div>
   </div>
   {% if editable %}
