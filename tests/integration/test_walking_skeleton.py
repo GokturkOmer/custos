@@ -17,46 +17,47 @@ from custos.shared.database import TagRecord, TimescaleDBDatabase
 from custos.shared.logging import configure_logging
 from custos.simulator.modbus_server import ModbusSimulator
 
-# Tag aralıkları (gain/offset uygulandıktan sonraki gerçek değerler)
+# AVM sensör kataloğundan ilk 5 tag (register 0-4) — walking skeleton kapsamı
+# Değer aralıkları pattern clamp'leriyle eşleşir; gain uygulanmış gerçek değerde.
 TAG_RANGES: dict[str, tuple[float, float]] = {
-    "T001": (20.0, 90.0),
-    "P001": (0.0, 10.0),
-    "F001": (0.0, 500.0),
-    "V001": (0.0, 25.0),
-    "R001": (0.0, 3000.0),
+    "T001": (5.0, 40.0),    # Supply Air Temp °C
+    "T002": (10.0, 40.0),   # Return Air Temp °C
+    "T003": (-10.0, 45.0),  # Outdoor Air Temp °C
+    "T004": (5.0, 35.0),    # Mixed Air Temp °C
+    "H001": (15.0, 95.0),   # Indoor Humidity %
 }
 
-# Test tag'leri — simülatörün register adresleri (0-4) ile eşleşir
-# polling_interval_ms=1000 ile 5 saniyede ~5 okuma beklenir
+# Test tag'leri — simülatörün ilk 5 register adresi
+# polling_interval_ms=1000, simulator update 500ms ile 5 saniyede ~5 okuma beklenir
 TEST_TAGS: list[TagRecord] = [
     TagRecord(
-        tag_id="T001", name="Temperature", modbus_host="127.0.0.1",
+        tag_id="T001", name="Supply Air Temp", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=0,
-        register_type="uint16", gain=1.0, offset=0.0, unit="°C",
+        register_type="uint16", gain=0.1, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
-        tag_id="P001", name="Pressure", modbus_host="127.0.0.1",
+        tag_id="T002", name="Return Air Temp", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=1,
-        register_type="uint16", gain=0.1, offset=0.0, unit="bar",
+        register_type="uint16", gain=0.1, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
-        tag_id="F001", name="Flow", modbus_host="127.0.0.1",
+        tag_id="T003", name="Outdoor Air Temp", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=2,
-        register_type="uint16", gain=1.0, offset=0.0, unit="m³/h",
+        register_type="uint16", gain=0.1, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
-        tag_id="V001", name="Vibration", modbus_host="127.0.0.1",
+        tag_id="T004", name="Mixed Air Temp", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=3,
-        register_type="uint16", gain=0.1, offset=0.0, unit="mm/s",
+        register_type="uint16", gain=0.1, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
-        tag_id="R001", name="RPM", modbus_host="127.0.0.1",
+        tag_id="H001", name="Indoor Humidity", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=4,
-        register_type="uint16", gain=1.0, offset=0.0, unit="RPM",
+        register_type="uint16", gain=0.1, offset=0.0, unit="%",
         polling_interval_ms=1000, polling_preset="normal",
     ),
 ]

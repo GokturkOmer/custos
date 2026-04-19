@@ -120,7 +120,7 @@ async def test_scanner_discovers_registers(
     scanner = ModbusScanner(profile=profile_with_id, database=db)
     results = await scanner.scan()
 
-    # Simülatörde 5 register var (0-4)
+    # Simülatörde 30 register var (0-29); scanner her birini keşfetmeli
     assert len(results) >= 1, "En az bir register keşfedilmeli"
 
     # Profil durumu güncellenmeli
