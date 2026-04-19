@@ -136,7 +136,7 @@ async def overview(request: Request) -> HTMLResponse:
         since_24h = datetime.now(UTC) - _timedelta_24h
         anomaly_count_24h = await db_instance.count_anomalies(since=since_24h)
 
-        # Grafikleri doldur — once DB'den konfigurasyon cek, yoksa otomatik dagit
+        # Grafikleri doldur — once DB'den konfigurasyon cek, yoksa prefix fallback
         chart_keys = ["temp_chart", "pressure_chart", "flow_vibration_chart", "rpm_chart"]
         all_chart_tags = await db_instance.list_overview_chart_tags()
         config_map: dict[str, list[str]] = {k: [] for k in chart_keys}
@@ -144,20 +144,19 @@ async def overview(request: Request) -> HTMLResponse:
             if ct.chart_key in config_map:
                 config_map[ct.chart_key].append(ct.tag_id)
 
-        has_config = any(len(v) > 0 for v in config_map.values())
-
-        # Konfigurasyon yoksa fallback: taglari sirayla dagit
-        if not has_config and all_tags:
-            tag_map = {t.tag_id: t for t in all_tags}
-            slices = [3, 2, 2]
-            idx = 0
-            for ci, key in enumerate(chart_keys):
-                if ci < len(slices):
-                    group = all_tags[idx:idx + slices[ci]]
-                    idx += slices[ci]
-                else:
-                    group = all_tags[idx:]
-                config_map[key] = [t.tag_id for t in group]
+        # Her chart icin bagimsiz fallback: tag_id prefix'ine gore ataniyor
+        # Bir chart icin DB'de config varsa onu kullan; yoksa prefix eslesmesi uygula
+        fallback_limit = 6
+        for key in chart_keys:
+            if config_map[key]:
+                continue
+            prefixes = _CHART_KEY_FALLBACK_PREFIXES.get(key, ())
+            if not prefixes:
+                continue
+            matches = [
+                t.tag_id for t in all_tags if t.tag_id.startswith(prefixes)
+            ][:fallback_limit]
+            config_map[key] = matches
 
         # Her grafik icin gercek verileri cek
         tag_map = {t.tag_id: t for t in all_tags}
@@ -265,6 +264,15 @@ async def overview(request: Request) -> HTMLResponse:
 _CHART_KEYS: frozenset[str] = frozenset({
     "temp_chart", "pressure_chart", "flow_vibration_chart", "rpm_chart",
 })
+
+# Her slot icin fallback tag eslesmesi: tag_id prefix'ine gore
+# (DB'de config yoksa kullanicinin elini tutmak icin)
+_CHART_KEY_FALLBACK_PREFIXES: dict[str, tuple[str, ...]] = {
+    "temp_chart": ("T",),             # Sicaklik tag'leri
+    "pressure_chart": ("P",),          # Basinc tag'leri
+    "flow_vibration_chart": ("F", "V"),  # Debi + Titresim
+    "rpm_chart": ("I", "E"),           # Motor akimi + Elektrik
+}
 
 
 @router.get("/overview/chart-config/{chart_key}", response_class=HTMLResponse)

@@ -117,7 +117,7 @@ function chartPanel(chartId) {
         uplotSeries.push({
           label: label,
           stroke: CHART_COLORS[i % CHART_COLORS.length],
-          width: 1.5 * DPR,
+          width: 1,
           points: { show: false },
         });
       });
