@@ -171,10 +171,12 @@ function dblClickResetPlugin(windowRange) {
   return {
     hooks: {
       ready(u) {
-        u.over.addEventListener('dblclick', () => {
+        u.over.addEventListener('dblclick', (e) => {
+          // uPlot'un default dblclick davranışıyla çakışmayı önle
+          e.stopImmediatePropagation();
           // X reset her zaman backend'in verdiği zaman penceresine döner
           u.setScale('x', { min: windowRange[0], max: windowRange[1] });
-        });
+        }, { capture: true });
       }
     }
   };
@@ -276,6 +278,58 @@ function perAxisZoomPanPlugin() {
             u.setScale(scaleKey, { min: null, max: null });
           });
         }
+      }
+    }
+  };
+}
+
+/**
+ * Plot alanında Shift+sürükle ile yatay pan.
+ * uPlot'un cursor.drag box-zoom davranışını shift basılıyken devre dışı
+ * bırakır (capture + stopPropagation). Cursor.bind yerine direkt DOM
+ * listener kullanıyor — daha güvenilir.
+ */
+function xAxisPanDragPlugin() {
+  return {
+    hooks: {
+      ready(u) {
+        let panStart = null;
+
+        u.over.addEventListener('mousedown', (e) => {
+          if (!e.shiftKey || e.button !== 0) return;
+          const xMin = u.scales.x.min;
+          const xMax = u.scales.x.max;
+          if (xMin == null || xMax == null) return;
+          // uPlot'un drag-select davranışını engelle
+          e.preventDefault();
+          e.stopPropagation();
+          panStart = {
+            x: e.clientX,
+            min: xMin,
+            max: xMax,
+            width: u.over.getBoundingClientRect().width,
+          };
+          u.over.style.cursor = 'grabbing';
+        }, { capture: true });
+
+        const onMove = (e) => {
+          if (!panStart) return;
+          const dx = e.clientX - panStart.x;
+          const range = panStart.max - panStart.min;
+          const shift = (dx / panStart.width) * range * -1;
+          u.setScale('x', {
+            min: panStart.min + shift,
+            max: panStart.max + shift,
+          });
+        };
+        const onUp = () => {
+          if (panStart) {
+            panStart = null;
+            u.over.style.cursor = '';
+          }
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
       }
     }
   };
@@ -436,36 +490,6 @@ function chartPanel(chartId) {
             fill: '#141619',
             width: 1.5 * DPR,
           },
-          bind: {
-            mousedown: (u, targ, handler) => (e) => {
-              if (e.shiftKey) {
-                u._panStart = { x: e.clientX, min: u.scales.x.min, max: u.scales.x.max };
-                return null;
-              }
-              return handler(e);
-            },
-            mousemove: (u, targ, handler) => (e) => {
-              if (u._panStart) {
-                const dx = e.clientX - u._panStart.x;
-                const pxRange = u.bbox.width / DPR;
-                const xRange = u._panStart.max - u._panStart.min;
-                const shift = (dx / pxRange) * xRange * -1;
-                u.setScale('x', {
-                  min: u._panStart.min + shift,
-                  max: u._panStart.max + shift,
-                });
-                return null;
-              }
-              return handler(e);
-            },
-            mouseup: (u, targ, handler) => (e) => {
-              if (u._panStart) {
-                u._panStart = null;
-                return null;
-              }
-              return handler(e);
-            },
-          },
         },
         select: {
           fill: 'rgba(50, 116, 217, 0.15)',
@@ -474,6 +498,7 @@ function chartPanel(chartId) {
         legend: { show: true },
         plugins: [
           wheelZoomPlugin(),
+          xAxisPanDragPlugin(),
           dblClickResetPlugin(windowRange),
           perAxisZoomPanPlugin(),
         ],
