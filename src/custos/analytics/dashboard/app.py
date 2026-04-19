@@ -154,12 +154,16 @@ async def overview(request: Request) -> HTMLResponse:
             })
             tag_ids = tags_by_chart.get(oc.chart_key, [])
             chart_start = now - timedelta(minutes=oc.time_window_minutes)
+            window_start_ts = int(chart_start.timestamp())
+            window_end_ts = int(now.timestamp())
             if not tag_ids:
                 charts[oc.chart_key] = {
                     "timestamps": [],
                     "series": [],
                     "labels": [],
                     "units": [],
+                    "window_start": window_start_ts,
+                    "window_end": window_end_ts,
                 }
                 continue
 
@@ -187,6 +191,8 @@ async def overview(request: Request) -> HTMLResponse:
                 "series": series,
                 "labels": labels,
                 "units": units,
+                "window_start": window_start_ts,
+                "window_end": window_end_ts,
             }
 
         # Threshold adlarini cek
@@ -407,6 +413,8 @@ async def overview_chart_detail(
         "series": series,
         "labels": labels,
         "units": units,
+        "window_start": int(chart_start.timestamp()),
+        "window_end": int(now.timestamp()),
     }
 
     time_windows = [

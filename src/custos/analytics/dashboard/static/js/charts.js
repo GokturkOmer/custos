@@ -122,13 +122,13 @@ function wheelZoomPlugin() {
   };
 }
 
-function dblClickResetPlugin(fullData) {
+function dblClickResetPlugin(windowRange) {
   return {
     hooks: {
       ready(u) {
         u.over.addEventListener('dblclick', () => {
-          const ts = fullData[0];
-          u.setScale('x', { min: ts[0], max: ts[ts.length - 1] });
+          // X reset her zaman backend'in verdiği zaman penceresine döner
+          u.setScale('x', { min: windowRange[0], max: windowRange[1] });
         });
       }
     }
@@ -254,8 +254,24 @@ function chartPanel(chartId) {
       const chartData = window.custos.chartData?.[chartId];
       if (!chartData) return;
 
-      const { timestamps, series, labels, units = [] } = chartData;
-      if (!timestamps || timestamps.length === 0) return;
+      const {
+        timestamps = [],
+        series = [],
+        labels = [],
+        units = [],
+        window_start,
+        window_end,
+      } = chartData;
+
+      // X ekseni aralığı: backend'in verdiği window (örn. 24h seçildiyse
+      // 24 saat geri). Veri yoksa bile chart doğru span ile render edilir.
+      // Eski data için fallback: timestamp min/max.
+      const windowRange = (window_start != null && window_end != null)
+        ? [window_start, window_end]
+        : (timestamps.length > 0
+            ? [timestamps[0], timestamps[timestamps.length - 1]]
+            : null);
+      if (!windowRange) return;
 
       // Görünür eksen sayısı data-visible-axes ile geçilir (default 2).
       // Overview kompakt: 2 eksen. Detay: tüm birimler için ayrı eksen.
@@ -279,13 +295,28 @@ function chartPanel(chartId) {
         });
       });
 
-      const uplotData = [timestamps, ...series];
+      // Veri yoksa da chart render edilsin diye minimum 2 timestamp gerek
+      // (uPlot'un iç boşluk hesabı için). Window aralığını x olarak kullan.
+      const effectiveTimestamps = timestamps.length > 0
+        ? timestamps
+        : [windowRange[0], windowRange[1]];
+      const effectiveSeries = series.length > 0
+        ? series
+        : labels.map(() => [null, null]);
+      const uplotData = [effectiveTimestamps, ...effectiveSeries];
 
-      // Scales: her benzersiz birim için ayrı Y scale
-      const scales = { x: { time: true } };
+      // Scales: x backend penceresine sabit; her benzersiz birim için ayrı Y
+      const scales = {
+        x: {
+          time: true,
+          range: () => [windowRange[0], windowRange[1]],
+        },
+      };
       for (const l of layout) {
         scales[l.key] = {
-          range: () => calcYRangeForScale(series, effectiveUnits, l.key),
+          range: () => calcYRangeForScale(
+            effectiveSeries, effectiveUnits, l.key,
+          ),
         };
       }
 
@@ -359,7 +390,7 @@ function chartPanel(chartId) {
         legend: { show: true },
         plugins: [
           wheelZoomPlugin(),
-          dblClickResetPlugin(uplotData),
+          dblClickResetPlugin(windowRange),
           perAxisZoomPanPlugin(),
         ],
       };

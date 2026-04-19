@@ -46,24 +46,13 @@
           <span class="text-text-primary">{{ page_title | default('Overview') }}</span>
         </div>
 
-        {# Sag taraf: zaman secici + butonlar #}
+        {# Sag taraf: global butonlar (zaman secici chart basina tanimli) #}
         <div class="flex items-center gap-3">
-          <button class="flex items-center gap-1.5 px-3 py-1.5 text-small text-text-secondary
-                         bg-bg-elevated border border-border-weak rounded-md
-                         hover:text-text-primary hover:border-border-medium transition-colors">
-            {% from 'components/icon.html' import icon_inline %}
-            <span>Last 30 min</span>
-            {{ icon_inline('chevron-down', class='w-3.5 h-3.5') }}
-          </button>
-
-          <button class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
-                  title="Refresh">
+          {% from 'components/icon.html' import icon_inline %}
+          <button onclick="location.reload()"
+                  class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+                  title="Sayfayi yenile">
             {{ icon_inline('refresh-cw', class='w-4 h-4') }}
-          </button>
-
-          <button class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
-                  title="Fullscreen">
-            {{ icon_inline('maximize-2', class='w-4 h-4') }}
           </button>
         </div>
       </header>
