@@ -185,9 +185,12 @@ async def overview(request: Request) -> HTMLResponse:
             labels: list[str] = []
             units: list[str] = []
             timestamps: list[int] = []
+            # Overview kompakt: downsampled (TimescaleDB time_bucket AVG) —
+            # 24h × 30K okuma → ~600 nokta. Canvas render 50x hızlanır.
+            # Detay sayfası (overview_chart_detail) ham okumaya devam eder.
             for tid in tag_ids:
-                readings = await db_instance.query_tag_readings(
-                    tid, chart_start, now,
+                readings = await db_instance.query_tag_readings_downsampled(
+                    tid, chart_start, now, target_points=600,
                 )
                 if readings:
                     tag_rec = tag_map.get(tid)

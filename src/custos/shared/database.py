@@ -383,6 +383,21 @@ class DatabaseInterface(abc.ABC):
     ) -> list[TagReading]:
         """Belirli bir tag'in zaman aralığındaki okumalarını sorgular."""
 
+    @abc.abstractmethod
+    async def query_tag_readings_downsampled(
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
+        target_points: int = 600,
+    ) -> list[TagReading]:
+        """Tag okumalarını time_bucket ile downsample ederek döndürür.
+
+        Overview sayfası gibi çok noktanın anlamsız olduğu yerler için.
+        Bucket boyutu (end-start)/target_points'tan hesaplanır (min 1 sn).
+        Boş bucket'lar döndürülmez; gerçek nokta sayısı target'tan az olabilir.
+        """
+
     # --- Tag CRUD ---
 
     @abc.abstractmethod
@@ -1212,6 +1227,42 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "VALUES ($1, $2, $3, $4)",
                 args,
             )
+
+    async def query_tag_readings_downsampled(
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
+        target_points: int = 600,
+    ) -> list[TagReading]:
+        """time_bucket AVG ile N ≤ target_points nokta döndürür.
+
+        Overview sayfası için optimize edilmiş: 24h × 30K okuma → ~600 nokta,
+        canvas render süresini ~50x azaltır. Quality flag bucket içinde MAX
+        olarak alınır (en kötü/en yüksek flag'i koru).
+        """
+        total_sec = max(1.0, (end - start).total_seconds())
+        bucket_sec = max(1, int(total_sec // max(1, target_points)))
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT time_bucket(make_interval(secs => $4), timestamp) AS bucket, "
+                "       AVG(value) AS avg_value, "
+                "       MAX(quality_flag) AS max_quality "
+                "FROM tag_readings "
+                "WHERE tag_id = $1 AND timestamp >= $2 AND timestamp <= $3 "
+                "GROUP BY bucket ORDER BY bucket ASC",
+                tag_id, start, end, bucket_sec,
+            )
+        return [
+            TagReading(
+                timestamp=row["bucket"],
+                tag_id=tag_id,
+                value=float(row["avg_value"]),
+                quality_flag=int(row["max_quality"]),
+            )
+            for row in rows
+        ]
 
     async def query_tag_readings(
         self,
