@@ -2,7 +2,8 @@
 {% from 'components/icon.html' import icon_inline %}
 {% macro chart_panel(title, chart_id, height=200, editable=false,
                      deletable=false, expandable=false,
-                     visible_axes=2, time_label='Last 30 min') %}
+                     visible_axes=2, time_label='Last 30 min',
+                     compact=false) %}
 <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
   <div class="flex items-center justify-between mb-3">
     <h3 class="text-panel-title text-text-primary">{{ title }}</h3>
@@ -52,6 +53,7 @@
        x-init="init()"
        data-chart-height="{{ height }}"
        data-visible-axes="{{ visible_axes }}"
+       data-compact="{{ 'true' if compact else 'false' }}"
        class="w-full">
   </div>
 </div>

@@ -28,7 +28,7 @@
       {{ chart_panel(slot.title, slot.chart_key,
                      height=220, editable=true, deletable=true,
                      expandable=true, visible_axes=2,
-                     time_label=time_label) }}
+                     time_label=time_label, compact=true) }}
     {% endfor %}
   </div>
   {% else %}
@@ -140,7 +140,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/charts.js?v=20260419h"></script>
+<script src="/static/js/charts.js?v=20260420a"></script>
 <script>
   // Sunucudan gelen grafik verileri
   window.custos = window.custos || {};

@@ -458,6 +458,13 @@ function chartPanel(chartId) {
       // veya 'per-tag' (her tag için ayrı renkli eksen, detay sayfası)
       const axisMode = el.dataset.axisMode || 'unit';
 
+      // Compact mode (overview kompakt): Y ekseni ve tick'leri çizilmez —
+      // chart alanı genişler ve render maliyeti düşer. Kullanıcı detay
+      // sayfasına (data-compact='false') girdiğinde tam axis görünür.
+      // X ekseni (zaman) her zaman gösterilir; scale'ler build edilir
+      // (çizgi yerleşimi için), sadece visual axis gizlenir.
+      const compact = el.dataset.compact === 'true';
+
       const effectiveUnits = labels.map((_, i) => units[i] || '');
       const layout = axisMode === 'per-tag'
         ? buildPerTagLayout(labels, effectiveUnits)
@@ -518,35 +525,40 @@ function chartPanel(chartId) {
         }
       }
 
-      // Axes: x ekseni + görünür Y eksenleri
+      // Axes: X ekseni her durumda çizilir; Y eksenleri compact modda
+      // gizli. Compact'te axes array'i sadece X içerir → uPlot ekstra
+      // label/tick render etmez, perAxisZoomPanPlugin de Y axis DOM'u
+      // bulamadığı için listener kurmaz (otomatik devre dışı).
       const axes = [{ ...BASE_AXIS, gap: 8 }];
-      if (axisMode === 'per-tag') {
-        // Her tag için sol tarafta renkli eksen; grid çakışmasın diye
-        // sadece ilk eksende grid görünür, diğerlerinde kapalı.
-        layout.forEach((l, i) => {
-          axes.push({
-            ...BASE_AXIS,
-            scale: l.key,
-            side: 3,  // hepsi sol
-            stroke: l.color,       // tick etiketi bu renkte
-            ticks: { stroke: l.color, width: 1 },
-            grid: { show: i === 0, stroke: '#2C3235', width: 1 },
-            gap: 3,
-            size: 50,
+      if (!compact) {
+        if (axisMode === 'per-tag') {
+          // Her tag için sol tarafta renkli eksen; grid çakışmasın diye
+          // sadece ilk eksende grid görünür, diğerlerinde kapalı.
+          layout.forEach((l, i) => {
+            axes.push({
+              ...BASE_AXIS,
+              scale: l.key,
+              side: 3,  // hepsi sol
+              stroke: l.color,       // tick etiketi bu renkte
+              ticks: { stroke: l.color, width: 1 },
+              grid: { show: i === 0, stroke: '#2C3235', width: 1 },
+              gap: 3,
+              size: 50,
+            });
           });
-        });
-      } else {
-        for (const l of layout) {
-          if (!l.visible) continue;
-          axes.push({
-            ...BASE_AXIS,
-            scale: l.key,
-            side: l.side,
-            gap: 5,
-            size: 55,
-            label: l.label || undefined,
-            labelSize: l.label ? 18 : 0,
-          });
+        } else {
+          for (const l of layout) {
+            if (!l.visible) continue;
+            axes.push({
+              ...BASE_AXIS,
+              scale: l.key,
+              side: l.side,
+              gap: 5,
+              size: 55,
+              label: l.label || undefined,
+              labelSize: l.label ? 18 : 0,
+            });
+          }
         }
       }
 
