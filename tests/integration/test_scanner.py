@@ -1,7 +1,7 @@
 """Modbus Auto-Scan entegrasyon testleri.
 
-Hem TimescaleDB hem de Modbus simülatörünün ayakta olmasını gerektirir.
-Simülatör: python -m custos.simulator (port 5020)
+Yalnızca TimescaleDB'nin ayakta olmasını gerektirir; her test kendi
+izole Modbus simülatörünü başlatır (üretim 5020 portuyla çakışmaz).
 """
 
 from __future__ import annotations
@@ -16,8 +16,10 @@ from custos.shared.database import ConnectionProfile, TimescaleDBDatabase
 # Simülatörü import et (test içinde başlatacağız)
 from custos.simulator.modbus_server import ModbusSimulator
 
-# Her test farklı port kullanır (TIME_WAIT port çakışmasını önler)
-_next_port = 5020
+# Her test farklı port kullanır (TIME_WAIT port çakışmasını önler).
+# 5040'tan başlıyor: üretim ortamında custos.simulator 5020 portunda
+# çalışabilir; tests/integration/test_walking_skeleton.py ise 5030 kullanır.
+_next_port = 5040
 
 
 @pytest.fixture

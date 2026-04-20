@@ -15,6 +15,16 @@ from custos.shared.database import (
     TimescaleDBDatabase,
 )
 
+# Bu testlerde kullanilan chart_key'ler. Migration 018 sonrasi
+# overview_chart_tags.chart_key -> overview_charts.chart_key FK
+# kisitina takilmamak icin fixture bu slotlari yaratir/temizler.
+_TEST_CHART_KEYS: tuple[str, ...] = (
+    "temp_chart",
+    "pressure_chart",
+    "rpm_chart",
+    "flow_vibration_chart",
+)
+
 
 @pytest.fixture
 def _check_db_available() -> None:
@@ -38,22 +48,32 @@ def _check_db_available() -> None:
 
 @pytest.fixture
 async def db() -> TimescaleDBDatabase:
-    """Test icin DB baglantisi olusturur ve temizler."""
+    """Test icin DB baglantisi olusturur, chart slotlarini hazirlar ve temizler."""
     s = Settings()
     database = TimescaleDBDatabase(s)
     await database.connect()
     pool = database._get_pool()
-    # Test oncesi temizlik
+    # Test oncesi temizlik + test chart slotlarini yarat (FK icin gerekli).
+    # sort_order bilinerek yuksek tutuldu ki production seed'in 0-5 araligiyla
+    # celismesin; teardown'da CASCADE ile chart_tag'lar da silinir.
     async with pool.acquire() as conn:
         await conn.execute(
-            "DELETE FROM overview_chart_tags WHERE tag_id LIKE 'TEST_CHART_%'"
+            "DELETE FROM overview_chart_tags WHERE tag_id LIKE 'TEST_CHART_%'",
         )
         await conn.execute("DELETE FROM tags WHERE tag_id LIKE 'TEST_CHART_%'")
+        for idx, ck in enumerate(_TEST_CHART_KEYS):
+            await conn.execute(
+                "INSERT INTO overview_charts (chart_key, title, sort_order) "
+                "VALUES ($1, $2, $3) "
+                "ON CONFLICT (chart_key) DO NOTHING",
+                ck, f"Test {ck}", 1000 + idx,
+            )
     yield database  # type: ignore[misc]
-    # Test sonrasi temizlik
+    # Test sonrasi temizlik: overview_charts silinince chart_tags FK CASCADE ile duser.
     async with pool.acquire() as conn:
         await conn.execute(
-            "DELETE FROM overview_chart_tags WHERE tag_id LIKE 'TEST_CHART_%'"
+            "DELETE FROM overview_charts WHERE chart_key = ANY($1::text[])",
+            list(_TEST_CHART_KEYS),
         )
         await conn.execute("DELETE FROM tags WHERE tag_id LIKE 'TEST_CHART_%'")
     await database.close()

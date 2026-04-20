@@ -17,45 +17,47 @@ from custos.shared.database import TagRecord, TimescaleDBDatabase
 from custos.shared.logging import configure_logging
 from custos.simulator.modbus_server import ModbusSimulator
 
-# AVM sensör kataloğundan ilk 5 tag (register 0-4) — walking skeleton kapsamı
+# AVM sensör kataloğundan ilk 5 tag (register 0-4) — walking skeleton kapsamı.
 # Değer aralıkları pattern clamp'leriyle eşleşir; gain uygulanmış gerçek değerde.
+# tag_id'ler WS_ ile prefixli: makinede paralel custos.critical çalışıyorsa
+# üretim T001 vb. kayıtlarıyla karışmaz, sorgu/cleanup yalnız bu test'e aittir.
 TAG_RANGES: dict[str, tuple[float, float]] = {
-    "T001": (5.0, 40.0),    # Supply Air Temp °C
-    "T002": (10.0, 40.0),   # Return Air Temp °C
-    "T003": (-10.0, 45.0),  # Outdoor Air Temp °C
-    "T004": (5.0, 35.0),    # Mixed Air Temp °C
-    "H001": (15.0, 95.0),   # Indoor Humidity %
+    "WS_T001": (5.0, 40.0),    # Supply Air Temp °C
+    "WS_T002": (10.0, 40.0),   # Return Air Temp °C
+    "WS_T003": (-10.0, 45.0),  # Outdoor Air Temp °C
+    "WS_T004": (5.0, 35.0),    # Mixed Air Temp °C
+    "WS_H001": (15.0, 95.0),   # Indoor Humidity %
 }
 
 # Test tag'leri — simülatörün ilk 5 register adresi
 # polling_interval_ms=1000, simulator update 500ms ile 5 saniyede ~5 okuma beklenir
 TEST_TAGS: list[TagRecord] = [
     TagRecord(
-        tag_id="T001", name="Supply Air Temp", modbus_host="127.0.0.1",
+        tag_id="WS_T001", name="WS Supply Air Temp", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=0,
         register_type="uint16", gain=0.1, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
-        tag_id="T002", name="Return Air Temp", modbus_host="127.0.0.1",
+        tag_id="WS_T002", name="WS Return Air Temp", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=1,
         register_type="uint16", gain=0.1, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
-        tag_id="T003", name="Outdoor Air Temp", modbus_host="127.0.0.1",
+        tag_id="WS_T003", name="WS Outdoor Air Temp", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=2,
         register_type="uint16", gain=0.1, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
-        tag_id="T004", name="Mixed Air Temp", modbus_host="127.0.0.1",
+        tag_id="WS_T004", name="WS Mixed Air Temp", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=3,
         register_type="uint16", gain=0.1, offset=0.0, unit="°C",
         polling_interval_ms=1000, polling_preset="normal",
     ),
     TagRecord(
-        tag_id="H001", name="Indoor Humidity", modbus_host="127.0.0.1",
+        tag_id="WS_H001", name="WS Indoor Humidity", modbus_host="127.0.0.1",
         modbus_port=5030, unit_id=1, register_address=4,
         register_type="uint16", gain=0.1, offset=0.0, unit="%",
         polling_interval_ms=1000, polling_preset="normal",
@@ -85,7 +87,7 @@ async def test_walking_skeleton() -> None:
     """Simülatör + Collector + DB uçtan uca çalışıyor mu?
 
     1. DB ayakta mı kontrol et
-    2. tag_readings tablosunu temizle
+    2. Yalnız bu test'in WS_* okumalarını temizle (üretim verisine dokunma)
     3. Simülatörü başlat
     4. 2 saniye bekle (warm-up)
     5. Collector'ı 5 saniye çalıştır
@@ -101,12 +103,18 @@ async def test_walking_skeleton() -> None:
         pytest.skip("TimescaleDB çalışmıyor — 'docker compose up -d' çalıştır")
 
     await db.connect()
+    test_tag_ids = list(TAG_RANGES.keys())
 
     try:
-        # Tablo temizliği — test izolasyonu
+        # Tablo temizliği — test izolasyonu (yalnız WS_* tag_id'lar).
+        # TRUNCATE yapma: makinede custos.critical paralel çalışıyorsa
+        # üretim okumalarını silmemek için hedefli DELETE kullanıyoruz.
         pool = db._get_pool()
         async with pool.acquire() as conn:
-            await conn.execute("TRUNCATE tag_readings")
+            await conn.execute(
+                "DELETE FROM tag_readings WHERE tag_id = ANY($1::text[])",
+                test_tag_ids,
+            )
 
         # Simülatörü başlat
         simulator = ModbusSimulator(host="127.0.0.1", port=5030)
@@ -155,7 +163,10 @@ async def test_walking_skeleton() -> None:
                     )
 
     finally:
-        # Temizlik
+        # Temizlik — yalnız WS_* satırları sil, üretim tag'lerine dokunma
         async with pool.acquire() as conn:
-            await conn.execute("TRUNCATE tag_readings")
+            await conn.execute(
+                "DELETE FROM tag_readings WHERE tag_id = ANY($1::text[])",
+                test_tag_ids,
+            )
         await db.close()
