@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from custos.analytics.archiver import ArchiveResult, ParquetArchiver
 from custos.analytics.push_sender import send_push_notifications
 from custos.analytics.scanner import ModbusScanner
 from custos.shared.database import (
@@ -2631,3 +2632,61 @@ async def alarm_start_checklist(
         url=f"/dashboard/maintenance/tasks/{created.id}",
         status_code=303,
     )
+
+
+# --- Parquet arşiv (F11 Paket E) ---
+
+# Eşzamanlı sadece 1 arşiv job'u çalışabilir. Scheduler ile manuel endpoint
+# aynı kilidi paylaşır ki disk I/O çakışması ve duplike dosya yazımı olmasın.
+_archive_lock = asyncio.Lock()
+
+
+def _get_archiver(request: Request) -> ParquetArchiver:
+    """Request state'ten archiver'ı döndürür, yoksa 503."""
+    archiver: ParquetArchiver | None = getattr(
+        request.app.state, "archiver", None,
+    )
+    if archiver is None:
+        raise HTTPException(
+            status_code=503, detail="Archiver başlatılmamış",
+        )
+    return archiver
+
+
+def _archive_result_to_dict(result: ArchiveResult) -> dict[str, Any]:
+    """ArchiveResult'u JSON-serileştirilebilir dict'e çevirir."""
+    return {
+        "year": result.year,
+        "month": result.month,
+        "raw_rows": result.raw_rows,
+        "raw_file_bytes": result.raw_file_bytes,
+        "agg_1min_rows": result.agg_1min_rows,
+        "agg_1min_file_bytes": result.agg_1min_file_bytes,
+        "agg_1hour_rows": result.agg_1hour_rows,
+        "agg_1hour_file_bytes": result.agg_1hour_file_bytes,
+        "duration_seconds": round(result.duration_seconds, 3),
+        "output_dir": str(result.output_dir),
+    }
+
+
+@router.post("/api/archive/run")
+async def archive_run(request: Request, year: int, month: int) -> JSONResponse:
+    """Belirtilen ayı elle arşivler. Aynı anda sadece 1 job (asyncio.Lock).
+
+    Kilit alınamazsa 409 döndürülür — bu koşulda scheduler veya başka bir
+    manuel çağrı arşivi yazıyordur, saniyeler-dakikalar içinde tekrar denenir.
+    """
+    if not 1 <= month <= 12:
+        return JSONResponse(
+            {"detail": f"Geçersiz ay: {month} (1..12 olmalı)"},
+            status_code=400,
+        )
+    archiver = _get_archiver(request)
+    if _archive_lock.locked():
+        return JSONResponse(
+            {"detail": "Başka bir arşiv job'u zaten çalışıyor"},
+            status_code=409,
+        )
+    async with _archive_lock:
+        result = await archiver.archive_month(year, month)
+    return JSONResponse(_archive_result_to_dict(result))

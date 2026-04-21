@@ -20,6 +20,7 @@ dependencies = [
     "scikit-learn",
     "numpy",
     "pywebpush",
+    "pyarrow>=15.0,<20.0",
 ]
 
 [project.optional-dependencies]
@@ -74,6 +75,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "pywebpush.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pyarrow.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

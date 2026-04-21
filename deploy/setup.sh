@@ -53,6 +53,12 @@ if [[ -d "$(dirname "$0")/../src" ]]; then
 fi
 chown -R "$CUSTOS_USER:$CUSTOS_USER" "$INSTALL_DIR"
 
+# Parquet arşiv dizini (F11 Paket E) — custos yazabilir, grup okuyabilir.
+ARCHIVE_DIR="/var/custos/archive"
+mkdir -p "$ARCHIVE_DIR"
+chown "$CUSTOS_USER:$CUSTOS_USER" "$ARCHIVE_DIR"
+chmod 750 "$ARCHIVE_DIR"
+
 # --- 6. Python venv + pip install ---
 echo "[5/8] Python sanal ortami olusturuluyor..."
 sudo -u "$CUSTOS_USER" python${PYTHON_VERSION} -m venv "$INSTALL_DIR/.venv"

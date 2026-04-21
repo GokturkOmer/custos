@@ -8,8 +8,10 @@ yapılmaz.
 from __future__ import annotations
 
 import abc
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
+from typing import Any
 
 import asyncpg
 import structlog
@@ -436,6 +438,48 @@ class DatabaseInterface(abc.ABC):
             quality_flag : MAX(quality_flag) bucket içinde
 
         Boş bucket'lar döndürülmez; gerçek nokta sayısı target'tan az olabilir.
+        """
+
+    # --- Arşiv streaming (F11 Paket E) ---
+
+    @abc.abstractmethod
+    def stream_raw_readings(
+        self,
+        start: datetime,
+        end: datetime,
+        batch_size: int = 10000,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Ham tag_readings satırlarını batch-batch streaming olarak döndürür.
+
+        Server-side cursor ile belleğe tüm veriyi yüklemeden iterasyon yapılır.
+        Parquet arşiv job'u için tasarlanmıştır. Her batch dict listesi döner:
+        anahtarlar: ``timestamp``, ``tag_id``, ``value``, ``quality_flag``.
+        """
+
+    @abc.abstractmethod
+    def stream_1min_aggregates(
+        self,
+        start: datetime,
+        end: datetime,
+        batch_size: int = 10000,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """tag_readings_1min continuous aggregate satırlarını streaming döndürür.
+
+        Her batch dict listesi: ``bucket``, ``tag_id``, ``avg_value``,
+        ``min_value``, ``max_value``, ``stddev_value``, ``max_quality``,
+        ``sample_count``.
+        """
+
+    @abc.abstractmethod
+    def stream_1hour_aggregates(
+        self,
+        start: datetime,
+        end: datetime,
+        batch_size: int = 10000,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """tag_readings_1hour continuous aggregate satırlarını streaming döndürür.
+
+        1min ile aynı şema.
         """
 
     # --- Tag CRUD ---
@@ -1425,6 +1469,124 @@ class TimescaleDBDatabase(DatabaseInterface):
             )
             for row in rows
         ]
+
+    # --- Arşiv streaming (F11 Paket E) ---
+
+    async def stream_raw_readings(
+        self,
+        start: datetime,
+        end: datetime,
+        batch_size: int = 10000,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Ham tag_readings satırlarını server-side cursor ile batch streaming döndürür.
+
+        Milyonlarca satır içeren aylık arşiv için belleğe yüklemeden iterasyon.
+        Cursor ``async with conn.transaction()`` içinde açılır (asyncpg şartı);
+        satır satır iterate edilip ``batch_size`` dolunca yield edilir.
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            batch: list[dict[str, Any]] = []
+            async for r in conn.cursor(
+                "SELECT timestamp, tag_id, value, quality_flag "
+                "FROM tag_readings "
+                "WHERE timestamp >= $1 AND timestamp < $2 "
+                "ORDER BY timestamp ASC",
+                start,
+                end,
+                prefetch=batch_size,
+            ):
+                batch.append({
+                    "timestamp": r["timestamp"],
+                    "tag_id": r["tag_id"],
+                    "value": float(r["value"]),
+                    "quality_flag": int(r["quality_flag"]),
+                })
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
+
+    async def stream_1min_aggregates(
+        self,
+        start: datetime,
+        end: datetime,
+        batch_size: int = 10000,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """tag_readings_1min CA satırlarını streaming döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            batch: list[dict[str, Any]] = []
+            async for r in conn.cursor(
+                "SELECT bucket, tag_id, avg_value, min_value, max_value, "
+                "       stddev_value, max_quality, sample_count "
+                "FROM tag_readings_1min "
+                "WHERE bucket >= $1 AND bucket < $2 "
+                "ORDER BY bucket ASC",
+                start,
+                end,
+                prefetch=batch_size,
+            ):
+                batch.append({
+                    "bucket": r["bucket"],
+                    "tag_id": r["tag_id"],
+                    "avg_value": float(r["avg_value"]),
+                    "min_value": float(r["min_value"]),
+                    "max_value": float(r["max_value"]),
+                    "stddev_value": (
+                        float(r["stddev_value"])
+                        if r["stddev_value"] is not None
+                        else None
+                    ),
+                    "max_quality": int(r["max_quality"]),
+                    "sample_count": int(r["sample_count"]),
+                })
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
+
+    async def stream_1hour_aggregates(
+        self,
+        start: datetime,
+        end: datetime,
+        batch_size: int = 10000,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """tag_readings_1hour CA satırlarını streaming döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            batch: list[dict[str, Any]] = []
+            async for r in conn.cursor(
+                "SELECT bucket, tag_id, avg_value, min_value, max_value, "
+                "       stddev_value, max_quality, sample_count "
+                "FROM tag_readings_1hour "
+                "WHERE bucket >= $1 AND bucket < $2 "
+                "ORDER BY bucket ASC",
+                start,
+                end,
+                prefetch=batch_size,
+            ):
+                batch.append({
+                    "bucket": r["bucket"],
+                    "tag_id": r["tag_id"],
+                    "avg_value": float(r["avg_value"]),
+                    "min_value": float(r["min_value"]),
+                    "max_value": float(r["max_value"]),
+                    "stddev_value": (
+                        float(r["stddev_value"])
+                        if r["stddev_value"] is not None
+                        else None
+                    ),
+                    "max_quality": int(r["max_quality"]),
+                    "sample_count": int(r["sample_count"]),
+                })
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
 
     async def query_tag_readings(
         self,
