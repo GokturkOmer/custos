@@ -42,6 +42,7 @@ from custos.shared.database import (
     TagRecord,
     Threshold,
 )
+from custos.shared.query_guard import QueryGuardError
 from custos.shared.vapid import get_vapid_keys, is_push_enabled
 
 logger = structlog.get_logger(logger_name="dashboard")
@@ -117,6 +118,17 @@ def _resolution_hint_for(window: timedelta) -> str:
     if sec <= 86400.0:
         return "dakika"
     return "saat"
+
+
+# 3 yıl — bunun üzerindeki pencerelerde kullanıcıya "uzun pencere" info
+# rozeti gösterilir (F11 Paket H). 3650 gün (~10 yıl) ise guard'ın reject
+# eşiği; ondan önce kullanıcıya sinyal verip farkındalık yaratıyoruz.
+_LONG_WINDOW_DAYS = 3 * 365
+
+
+def _is_long_window(window: timedelta) -> bool:
+    """3 yıldan uzun pencere mi (chart_panel info rozeti için)."""
+    return window.total_seconds() > _LONG_WINDOW_DAYS * 86400.0
 
 
 def get_static_files_app() -> StaticFiles:
@@ -219,15 +231,23 @@ async def overview(request: Request) -> HTMLResponse:
         for oc in overview_charts:
             chart_start = now - timedelta(minutes=oc.time_window_minutes)
             chart_specs.append((oc, chart_start))
+            chart_tag_count = len(tags_by_chart.get(oc.chart_key, []))
             for tid in tags_by_chart.get(oc.chart_key, []):
                 query_specs.append((oc.chart_key, tid))
+                # Guard toplu yük hesabı için chart başına tag_count'u geç —
+                # teklide etki yok, ama büyük chart'ta katman override eder.
                 query_tasks.append(db_instance.query_readings_auto(
-                    tid, chart_start, now, target_points=_CHART_TARGET_POINTS,
+                    tid, chart_start, now,
+                    target_points=_CHART_TARGET_POINTS,
+                    tag_count=chart_tag_count,
                 ))
 
-        all_readings = (
-            await asyncio.gather(*query_tasks) if query_tasks else []
-        )
+        try:
+            all_readings = (
+                await asyncio.gather(*query_tasks) if query_tasks else []
+            )
+        except QueryGuardError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         # chart_key -> tag_id -> readings
         readings_by_chart: dict[str, dict[str, list[Any]]] = {}
@@ -241,12 +261,14 @@ async def overview(request: Request) -> HTMLResponse:
             window_end_ts = int(now.timestamp())
             window = now - chart_start
             resolution = _resolution_hint_for(window)
+            long_window = _is_long_window(window)
             chart_slots.append({
                 "chart_key": oc.chart_key,
                 "title": oc.title,
                 "sort_order": oc.sort_order,
                 "time_window_minutes": oc.time_window_minutes,
                 "resolution": resolution,
+                "long_window_hint": long_window,
             })
             tag_ids = tags_by_chart.get(oc.chart_key, [])
             if not tag_ids:
@@ -258,6 +280,7 @@ async def overview(request: Request) -> HTMLResponse:
                     "window_start": window_start_ts,
                     "window_end": window_end_ts,
                     "resolution": resolution,
+                    "long_window_hint": long_window,
                 }
                 continue
 
@@ -290,6 +313,7 @@ async def overview(request: Request) -> HTMLResponse:
                 "window_start": window_start_ts,
                 "window_end": window_end_ts,
                 "resolution": resolution,
+                "long_window_hint": long_window,
             }
 
         # Threshold adlarini cek
@@ -518,18 +542,26 @@ async def overview_chart_detail(
     chart_start = now - timedelta(minutes=chart.time_window_minutes)
     window = now - chart_start
     resolution = _resolution_hint_for(window)
+    long_window = _is_long_window(window)
 
     # Tum tag sorgulari paralel — query_readings_auto pencereye gore
     # ham/dakika/saat katmanindan secer, cikti homojen list[TagReading].
+    # Guard chart baslik tag_count'a gore toplu yuk degerlendirmesi yapar.
+    chart_tag_count = len(chart_tags)
     readings_tasks = [
         db.query_readings_auto(
-            ct.tag_id, chart_start, now, target_points=_CHART_TARGET_POINTS,
+            ct.tag_id, chart_start, now,
+            target_points=_CHART_TARGET_POINTS,
+            tag_count=chart_tag_count,
         )
         for ct in chart_tags
     ]
-    all_readings = (
-        await asyncio.gather(*readings_tasks) if readings_tasks else []
-    )
+    try:
+        all_readings = (
+            await asyncio.gather(*readings_tasks) if readings_tasks else []
+        )
+    except QueryGuardError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     series: list[list[float]] = []
     labels: list[str] = []
@@ -559,6 +591,7 @@ async def overview_chart_detail(
         "window_start": int(chart_start.timestamp()),
         "window_end": int(now.timestamp()),
         "resolution": resolution,
+        "long_window_hint": long_window,
     }
 
     time_windows = [
@@ -575,6 +608,7 @@ async def overview_chart_detail(
         time_windows=time_windows,
         time_label=_format_time_window_label(chart.time_window_minutes),
         resolution_hint=resolution,
+        long_window_hint=long_window,
     )
     return templates.TemplateResponse(
         request, "pages/overview_chart_detail.html", ctx,

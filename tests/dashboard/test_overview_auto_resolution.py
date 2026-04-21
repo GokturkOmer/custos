@@ -129,10 +129,11 @@ class _GatedMockDB:
         start: datetime,
         end: datetime,
         target_points: int = 600,
+        tag_count: int = 1,
     ) -> list[TagReading]:
         self.auto_calls.append({
             "tag_id": tag_id, "start": start, "end": end,
-            "target_points": target_points,
+            "target_points": target_points, "tag_count": tag_count,
         })
         if self.gate is not None:
             # Beklenen sayıya ulaşınca aç — paralel çalışıyorsa hepsi geçer.

@@ -3,11 +3,19 @@
 {% macro chart_panel(title, chart_id, height=200, editable=false,
                      deletable=false, expandable=false,
                      visible_axes=2, time_label='Last 30 min',
-                     compact=false, resolution_hint=None) %}
+                     compact=false, resolution_hint=None,
+                     long_window_hint=False) %}
 <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
   <div class="flex items-center justify-between mb-3">
     <h3 class="text-panel-title text-text-primary">{{ title }}</h3>
     <div class="flex items-center gap-2">
+      {% if long_window_hint %}
+      <span class="text-small text-status-warn px-1.5 py-0.5 rounded-sm bg-bg-elevated"
+            title="3 yıldan uzun pencere — guard otomatik saatlik agregata düşürdü"
+            data-long-window-hint="true">
+        Uzun pencere — saatlik agregat
+      </span>
+      {% endif %}
       {% if resolution_hint %}
       <span class="text-small text-text-disabled px-1.5 py-0.5 rounded-sm bg-bg-elevated font-mono"
             title="Veri katmanı: {{ resolution_hint }} (auto-resolution)"

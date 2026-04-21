@@ -17,6 +17,11 @@ import asyncpg
 import structlog
 
 from custos.shared.config import Settings
+from custos.shared.query_guard import (
+    Layer,
+    QueryGuardError,
+    evaluate_query,
+)
 
 logger = structlog.get_logger(logger_name="database")
 
@@ -431,6 +436,7 @@ class DatabaseInterface(abc.ABC):
         start: datetime,
         end: datetime,
         target_points: int = DEFAULT_TARGET_POINTS,
+        tag_count: int = 1,
     ) -> list[TagReading]:
         """Pencere büyüklüğüne göre doğru katmandan okur (auto-resolution).
 
@@ -453,6 +459,11 @@ class DatabaseInterface(abc.ABC):
             quality_flag : MAX(quality_flag) bucket içinde
 
         Boş bucket'lar döndürülmez; gerçek nokta sayısı target'tan az olabilir.
+
+        Guard (F11 Paket H): `tag_count × time_range_days` yükü eşiği aşarsa
+        bir üst katmana zorlanır; 1hour + `time_range_days` > `query_guard_1hour_max_days`
+        ise `QueryGuardError` yükselir. `tag_count` toplu sorgularda çağıran
+        tarafından geçilir.
         """
 
     # --- Arşiv streaming (F11 Paket E) ---
@@ -1388,16 +1399,40 @@ class TimescaleDBDatabase(DatabaseInterface):
         start: datetime,
         end: datetime,
         target_points: int = DEFAULT_TARGET_POINTS,
+        tag_count: int = 1,
     ) -> list[TagReading]:
         """Pencere büyüklüğüne göre ham / 1min / 1hour katmanından okur.
 
         Eşikler inclusive: tam 1 saat ham'dan, tam 1 gün 1min'den döner.
         Çıktı homojen `list[TagReading]` — tüketici katman farkını bilmez.
+
+        Query guard (F11 Paket H): `tag_count × time_range_days` yüküne göre
+        aşırı geniş sorgu bir üst katmana zorlanır ya da `QueryGuardError`
+        ile reddedilir. `tag_count` toplu sorgularda çağıran tarafından
+        geçilir (default 1 — tek tag).
         """
         window_sec = (end - start).total_seconds()
         if window_sec <= 3600.0:
+            initial_layer: Layer = "raw"
+        elif window_sec <= 86400.0:
+            initial_layer = "1min"
+        else:
+            initial_layer = "1hour"
+
+        time_range_days = window_sec / 86400.0
+        decision = evaluate_query(
+            tag_count=tag_count,
+            time_range_days=time_range_days,
+            requested_layer=initial_layer,
+            settings_obj=self._settings,
+        )
+        if not decision.allowed:
+            raise QueryGuardError(decision.reason)
+
+        layer: Layer = decision.forced_aggregate or initial_layer
+        if layer == "raw":
             return await self._query_raw_downsampled(tag_id, start, end, target_points)
-        if window_sec <= 86400.0:
+        if layer == "1min":
             return await self._query_1min_downsampled(tag_id, start, end, target_points)
         return await self._query_1hour_downsampled(tag_id, start, end, target_points)
 

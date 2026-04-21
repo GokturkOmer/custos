@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     # Aşım init veya activation'da hata olarak reddedilir.
     collector_fast_polling_budget: int = 10
 
+    # Query guard eşikleri (F11 Paket H). Pilot saatinde aşırı geniş sorgular
+    # (200 tag × 2 yıl × ham gibi) sistemin cevap süresini patlatmasın diye
+    # `query_readings_auto` içinde katman override / reject ile uygulanır.
+    # raw ve 1min için eşik `tag_count × time_range_days` yüküne bakar;
+    # 1hour katmanında sadece uzun pencere reddedilir.
+    query_guard_raw_max_tag_days: float = 7.0
+    query_guard_1min_max_tag_days: float = 200.0
+    query_guard_1hour_max_days: float = 3650.0  # ~10 yıl
+
     @property
     def database_url(self) -> str:
         """PostgreSQL bağlantı URL'sini döndürür (client_encoding=utf8 dahil)."""

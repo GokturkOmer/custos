@@ -29,7 +29,8 @@
                      height=220, editable=true, deletable=true,
                      expandable=true, visible_axes=2,
                      time_label=time_label, compact=true,
-                     resolution_hint=slot.resolution) }}
+                     resolution_hint=slot.resolution,
+                     long_window_hint=slot.long_window_hint|default(false)) }}
     {% endfor %}
   </div>
   {% else %}
