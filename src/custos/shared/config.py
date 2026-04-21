@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # Sessiz saat hesabı için yerel zaman dilimi (IANA formatı)
     custos_timezone: str = "Europe/Istanbul"
 
+    # Collector per-host paralel okuma üst sınırı (Semaphore). Modbus slave'lerin
+    # tipik max concurrent connection sınırı 8-32; 5 güvenli başlangıç.
+    collector_per_host_concurrency: int = 5
+
+    # Fast polling bütçesi — polling_interval_ms <= 1000 olan aktif tag sayısı.
+    # Aşım init veya activation'da hata olarak reddedilir.
+    collector_fast_polling_budget: int = 10
+
     @property
     def database_url(self) -> str:
         """PostgreSQL bağlantı URL'sini döndürür (client_encoding=utf8 dahil)."""

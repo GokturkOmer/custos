@@ -25,6 +25,7 @@ from custos.analytics.archiver import ArchiveResult, ParquetArchiver
 from custos.analytics.disk_telemetry import DiskMonitor, DiskUsage, get_disk_usage
 from custos.analytics.push_sender import send_push_notifications
 from custos.analytics.scanner import ModbusScanner
+from custos.shared.config import settings
 from custos.shared.database import (
     AssetInstance,
     AuditLogEntry,
@@ -65,6 +66,35 @@ POLLING_PRESETS: dict[str, int] = {
     "normal": 1000,
     "fast": 100,
 }
+
+# Fast polling eşiği (ms). Bu değerin altındaki interval bütçeye sayılır.
+# Collector'daki _FAST_POLLING_THRESHOLD_MS ile aynı.
+_FAST_POLLING_THRESHOLD_MS = 1000
+
+
+async def _count_active_fast_tags(
+    db: DatabaseInterface, exclude_tag_id: str | None = None
+) -> int:
+    """Aktif + fast polling'li tag sayısını sayar.
+
+    `exclude_tag_id` verilirse o tag sayımdan düşülür (update kendi kendini
+    bloklamasın). Activation/update öncesi bütçe kontrolünde kullanılır.
+    """
+    all_active = await db.list_tags(status="active")
+    return sum(
+        1
+        for t in all_active
+        if t.polling_interval_ms <= _FAST_POLLING_THRESHOLD_MS
+        and t.tag_id != exclude_tag_id
+    )
+
+
+def _budget_error_detail(current: int, budget: int) -> str:
+    """Bütçe aşımı için kullanıcıya gösterilecek hata mesajı."""
+    return (
+        f"Fast polling bütçesi dolu ({current}/{budget}). "
+        f"Mevcut bir fast tag'i Slow'a çekin veya bütçeyi artırın."
+    )
 
 # Overview sayfası için sabit timedelta'lar (her çağrıda nesne oluşturmamak için)
 _timedelta_24h = timedelta(hours=24)
@@ -673,11 +703,15 @@ async def sensors_live_values(request: Request) -> HTMLResponse:
 @router.get("/sensors/new", response_class=HTMLResponse)
 async def sensor_new_form(request: Request) -> HTMLResponse:
     """Yeni tag ekleme formu."""
+    db = _get_db(request)
+    fast_used = await _count_active_fast_tags(db)
     ctx = _base_context(
         page_title="Yeni Tag Ekle",
         active_nav="/dashboard/sensors",
         tag=None,
         edit_mode=False,
+        fast_polling_used=fast_used,
+        fast_polling_budget=settings.collector_fast_polling_budget,
     )
     return templates.TemplateResponse(request, "pages/sensor_form.html", ctx)
 
@@ -710,6 +744,17 @@ async def sensor_create(
     # Preset'e göre interval hesapla
     if polling_preset != "custom":
         polling_interval_ms = POLLING_PRESETS.get(polling_preset, 10000)
+
+    # Fast polling bütçesi kontrolü — yeni tag default'ta "active" ve fast ise
+    # bütçeyi aşıp aşmadığını kontrol et.
+    if polling_interval_ms <= _FAST_POLLING_THRESHOLD_MS:
+        current_fast = await _count_active_fast_tags(db)
+        budget = settings.collector_fast_polling_budget
+        if current_fast + 1 > budget:
+            raise HTTPException(
+                status_code=400,
+                detail=_budget_error_detail(current_fast, budget),
+            )
 
     tag = TagRecord(
         tag_id=tag_id,
@@ -744,11 +789,15 @@ async def sensor_edit_form(request: Request, tag_id: str) -> HTMLResponse:
     if tag is None:
         raise HTTPException(status_code=404, detail="Tag bulunamadı")
 
+    # Bütçe göstergesi — düzenlenen tag zaten fast ise sayıma dahil edilmez
+    fast_used = await _count_active_fast_tags(db, exclude_tag_id=tag_id)
     ctx = _base_context(
         page_title=f"Düzenle: {tag.name}",
         active_nav="/dashboard/sensors",
         tag=tag,
         edit_mode=True,
+        fast_polling_used=fast_used,
+        fast_polling_budget=settings.collector_fast_polling_budget,
     )
     return templates.TemplateResponse(request, "pages/sensor_form.html", ctx)
 
@@ -782,6 +831,18 @@ async def sensor_update(
     # Preset'e göre interval hesapla
     if polling_preset != "custom":
         polling_interval_ms = POLLING_PRESETS.get(polling_preset, 10000)
+
+    # Fast polling bütçesi kontrolü — güncelleme sonucunda tag "active + fast"
+    # olacaksa bütçe aşımı var mı? Aynı tag_id sayımdan hariç tutulur ki kendi
+    # kendini bloklamasın (zaten sayımda ise).
+    if status == "active" and polling_interval_ms <= _FAST_POLLING_THRESHOLD_MS:
+        current_fast = await _count_active_fast_tags(db, exclude_tag_id=tag_id)
+        budget = settings.collector_fast_polling_budget
+        if current_fast + 1 > budget:
+            raise HTTPException(
+                status_code=400,
+                detail=_budget_error_detail(current_fast, budget),
+            )
 
     updates: dict[str, object] = {
         "name": name,

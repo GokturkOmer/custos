@@ -14,6 +14,7 @@ Modbus write fonksiyonları ASLA çağrılmaz.
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,14 +25,26 @@ from custos.shared.database import DatabaseInterface, TagReading, TagRecord
 
 logger = structlog.get_logger(logger_name="collector")
 
-# Fast polling budget sınırı (<=1000ms interval'e sahip tag sayısı)
-_FAST_POLLING_BUDGET = 10
+# Varsayılan değerler — Settings override etmezse kullanılır.
+_DEFAULT_FAST_POLLING_BUDGET = 10
+_DEFAULT_PER_HOST_CONCURRENCY = 5
+
+# Fast polling eşiği (ms). Bu değerin altındaki polling "fast" sayılır.
+_FAST_POLLING_THRESHOLD_MS = 1000
 
 # Tag listesi yenileme aralığı (tick sayısı)
 _TAG_REFRESH_INTERVAL = 60
 
 # Minimum base tick (ms) — çok küçük tick'ler CPU israfına yol açar
 _MIN_BASE_TICK_MS = 50
+
+
+class FastPollingBudgetError(ValueError):
+    """Fast polling bütçesi aşıldığında fırlatılan istisna.
+
+    Collector başlatılırken veya tag aktivasyonunda bütçe kontrolü
+    başarısız olursa bu hata atılır.
+    """
 
 
 def _gcd(a: int, b: int) -> int:
@@ -68,32 +81,62 @@ class ModbusCollector:
         self,
         tags: list[TagRecord],
         database: DatabaseInterface,
+        per_host_concurrency: int = _DEFAULT_PER_HOST_CONCURRENCY,
+        fast_polling_budget: int = _DEFAULT_FAST_POLLING_BUDGET,
     ) -> None:
         self._tags = [t for t in tags if t.status == "active"]
         self._database = database
         self._clients: dict[tuple[str, int], AsyncModbusTcpClient] = {}
         self._shutdown_event = asyncio.Event()
+        self._per_host_concurrency = max(1, per_host_concurrency)
+        self._fast_polling_budget = fast_polling_budget
 
         # Per-tag polling durumu
         self._next_due: dict[str, float] = {}
         self._base_tick_ms = _compute_base_tick_ms(self._tags)
         self._tick_count = 0
 
-        # Fast polling budget kontrolü
-        self._check_fast_polling_budget()
+        # Tick metrikleri — yük testi ve gözlemlenebilirlik için
+        self._total_tick_count = 0
+        self._slow_tick_count = 0
 
-    def _check_fast_polling_budget(self) -> None:
-        """Fast polling budget kontrolü yapar, aşılırsa uyarır."""
-        fast_count = sum(
-            1 for t in self._tags if t.polling_interval_ms <= 1000
+        # Fast polling budget kontrolü — aşım varsa init'te raise edilir.
+        self._enforce_fast_polling_budget()
+
+    @property
+    def slow_tick_ratio(self) -> float:
+        """Toplam tick'lerin kaçı base_tick_ms'yi aştı? 0.0-1.0 arasında."""
+        if self._total_tick_count == 0:
+            return 0.0
+        return self._slow_tick_count / self._total_tick_count
+
+    @property
+    def total_tick_count(self) -> int:
+        """Toplam tick sayısı — yük testi metriği için."""
+        return self._total_tick_count
+
+    def _count_fast_tags(self, tags: list[TagRecord] | None = None) -> int:
+        """Fast polling (polling_interval_ms <= eşik) tag sayısını döndürür."""
+        source = tags if tags is not None else self._tags
+        return sum(
+            1 for t in source if t.polling_interval_ms <= _FAST_POLLING_THRESHOLD_MS
         )
-        if fast_count > _FAST_POLLING_BUDGET:
-            # structlog senkron kullanım (init'te async yok)
-            structlog.get_logger(logger_name="collector").warning(
-                "Fast polling budget aşıldı",
-                fast_tag_sayısı=fast_count,
-                budget=_FAST_POLLING_BUDGET,
+
+    def _enforce_fast_polling_budget(self) -> None:
+        """Init-time bütçe kontrolü — aşımda FastPollingBudgetError atar."""
+        fast_count = self._count_fast_tags()
+        if fast_count > self._fast_polling_budget:
+            msg = (
+                f"Fast polling bütçesi aşıldı: {fast_count} fast tag aktif, "
+                f"bütçe {self._fast_polling_budget}. Collector başlatılamaz. "
+                f"Mevcut bir fast tag'i Slow'a çekin veya bütçeyi artırın."
             )
+            structlog.get_logger(logger_name="collector").error(
+                "Fast polling budget aşıldı (init)",
+                fast_tag_sayısı=fast_count,
+                budget=self._fast_polling_budget,
+            )
+            raise FastPollingBudgetError(msg)
 
     def _init_schedule(self) -> None:
         """Tag'lerin ilk okuma zamanlarını ayarlar."""
@@ -197,8 +240,30 @@ class ModbusCollector:
                 quality_flag=1,
             )
 
+    async def _read_host_group(
+        self,
+        tags: list[TagRecord],
+    ) -> list[TagReading]:
+        """Tek bir (host, port) için tag'leri paralel okur.
+
+        `Semaphore` ile aynı anda en fazla `per_host_concurrency` okuma
+        yapılır. Async Modbus client tek TCP socket üstünden sıraya alır;
+        bütçeyi sınırlamak slave'i (8-32 concurrent connection tipik) korur.
+        """
+        sem = asyncio.Semaphore(self._per_host_concurrency)
+
+        async def _one(t: TagRecord) -> TagReading:
+            async with sem:
+                return await self._read_tag(t)
+
+        return await asyncio.gather(*[_one(t) for t in tags])
+
     async def _run_tick(self) -> None:
-        """Tek bir tick: süresi gelen tag'leri oku, batch yaz."""
+        """Tek bir tick: süresi gelen tag'leri oku, batch yaz.
+
+        Paralelleştirme: due_tags (host, port) ile gruplanır, her grup
+        bounded concurrency ile okunur, hostlar arası da paralel çalışır.
+        """
         now = asyncio.get_event_loop().time()
 
         # Süresi gelen tag'leri bul
@@ -210,13 +275,22 @@ class ModbusCollector:
         if not due_tags:
             return
 
-        # Tag'leri oku
-        readings: list[TagReading] = []
+        # Host bazlı gruplama — her grup ayrı TCP bağlantısı kullanır
+        by_host: dict[tuple[str, int], list[TagRecord]] = defaultdict(list)
         for tag in due_tags:
-            reading = await self._read_tag(tag)
-            readings.append(reading)
-            # Sonraki okuma zamanını ayarla
+            by_host[(tag.modbus_host, tag.modbus_port)].append(tag)
+
+        # Sonraki okuma zamanını `now` snapshot'ına göre ayarla.
+        # I/O öncesi set ediyoruz: okuma süresi tick boyutuna kıyasla
+        # uzun sürerse bir sonraki tick tekrar tetiklenmez.
+        for tag in due_tags:
             self._next_due[tag.tag_id] = now + (tag.polling_interval_ms / 1000.0)
+
+        # Her host grubunu paralel başlat, hepsini bir arada bekle
+        host_results = await asyncio.gather(
+            *[self._read_host_group(tags) for tags in by_host.values()]
+        )
+        readings: list[TagReading] = [r for host in host_results for r in host]
 
         # Batch yazma
         try:
@@ -228,6 +302,7 @@ class ModbusCollector:
                 toplam=len(readings),
                 başarılı=ok_count,
                 hatalı=fail_count,
+                host_sayısı=len(by_host),
             )
         except Exception:
             await logger.aerror(
@@ -275,15 +350,15 @@ class ModbusCollector:
         # Base tick'i yeniden hesapla
         self._base_tick_ms = _compute_base_tick_ms(self._tags)
 
-        # Fast polling budget kontrolü
-        fast_count = sum(
-            1 for t in self._tags if t.polling_interval_ms <= 1000
-        )
-        if fast_count > _FAST_POLLING_BUDGET:
-            await logger.awarning(
-                "Fast polling budget aşıldı",
+        # Fast polling budget kontrolü — runtime'da crash etmiyoruz, çünkü API
+        # katmanı aktivasyonda reddi yapıyor. DB'ye direkt insert gibi bir
+        # kaçak olduysa burada error log + devam.
+        fast_count = self._count_fast_tags()
+        if fast_count > self._fast_polling_budget:
+            await logger.aerror(
+                "Fast polling budget runtime'da aşıldı (API atlanmış olabilir)",
                 fast_tag_sayısı=fast_count,
-                budget=_FAST_POLLING_BUDGET,
+                budget=self._fast_polling_budget,
             )
 
     async def start(self) -> None:
@@ -311,7 +386,9 @@ class ModbusCollector:
             elapsed = asyncio.get_event_loop().time() - cycle_start
             sleep_time = max(0.0, (self._base_tick_ms / 1000.0) - elapsed)
 
+            self._total_tick_count += 1
             if elapsed > (self._base_tick_ms / 1000.0):
+                self._slow_tick_count += 1
                 await logger.awarning(
                     "Tick yavaşladı",
                     süre_ms=round(elapsed * 1000, 1),

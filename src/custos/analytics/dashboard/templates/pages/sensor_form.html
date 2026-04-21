@@ -185,6 +185,30 @@
                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
         </div>
       </div>
+
+      {# Fast polling bütçe göstergesi — "normal" veya "fast" seçildiğinde görünür. #}
+      {% if fast_polling_budget is defined %}
+      <div x-show="preset === 'normal' || preset === 'fast' || preset === 'custom'"
+           x-transition
+           class="text-small pt-1">
+        {% set remaining = fast_polling_budget - fast_polling_used %}
+        {% if remaining <= 0 %}
+          <span class="text-accent-danger">
+            Fast polling bütçesi dolu ({{ fast_polling_used }}/{{ fast_polling_budget }}).
+            Kaydetmeyi denerseniz reddedilir.
+          </span>
+        {% elif remaining <= 2 %}
+          <span class="text-accent-warning">
+            Fast polling bütçesi: {{ fast_polling_used }}/{{ fast_polling_budget }} kullanıldı
+            ({{ remaining }} kaldı).
+          </span>
+        {% else %}
+          <span class="text-text-tertiary">
+            Fast polling bütçesi: {{ fast_polling_used }}/{{ fast_polling_budget }} kullanıldı.
+          </span>
+        {% endif %}
+      </div>
+      {% endif %}
     </fieldset>
 
     {# Status (sadece edit modunda) #}

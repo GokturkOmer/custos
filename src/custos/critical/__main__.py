@@ -13,7 +13,7 @@ import signal
 
 import structlog
 
-from custos.critical.collector import ModbusCollector
+from custos.critical.collector import FastPollingBudgetError, ModbusCollector
 from custos.shared.config import settings
 from custos.shared.database import create_database
 from custos.shared.logging import configure_logging
@@ -38,8 +38,21 @@ async def main() -> None:
 
     await logger.ainfo("Tag'ler yüklendi", tag_sayısı=len(tags))
 
-    # Collector oluştur
-    collector = ModbusCollector(tags=tags, database=database)
+    # Collector oluştur — Settings'ten config parametrelerini geçir.
+    try:
+        collector = ModbusCollector(
+            tags=tags,
+            database=database,
+            per_host_concurrency=settings.collector_per_host_concurrency,
+            fast_polling_budget=settings.collector_fast_polling_budget,
+        )
+    except FastPollingBudgetError:
+        await logger.aerror(
+            "Collector başlatılamadı: fast polling bütçesi aşıldı",
+            exc_info=True,
+        )
+        await database.close()
+        return
 
     # Signal handler kur
     loop = asyncio.get_running_loop()
