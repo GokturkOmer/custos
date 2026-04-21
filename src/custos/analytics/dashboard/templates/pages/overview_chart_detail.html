@@ -14,6 +14,13 @@
         {{ icon_inline('arrow-left', class='w-5 h-5') }}
       </a>
       <h1 class="text-heading text-text-primary font-semibold">{{ chart.title }}</h1>
+      {% if resolution_hint %}
+      <span class="text-small text-text-disabled px-1.5 py-0.5 rounded-sm bg-bg-elevated font-mono ml-2"
+            title="Veri katmanı: {{ resolution_hint }} (auto-resolution)"
+            data-resolution-hint="{{ resolution_hint }}">
+        {{ resolution_hint }}
+      </span>
+      {% endif %}
     </div>
     <form method="post"
           action="/dashboard/overview/charts/{{ chart.chart_key }}/time-window"

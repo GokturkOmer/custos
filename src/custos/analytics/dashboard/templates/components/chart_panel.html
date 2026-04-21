@@ -3,11 +3,18 @@
 {% macro chart_panel(title, chart_id, height=200, editable=false,
                      deletable=false, expandable=false,
                      visible_axes=2, time_label='Last 30 min',
-                     compact=false) %}
+                     compact=false, resolution_hint=None) %}
 <div class="bg-bg-surface rounded-sm border border-border-weak p-4">
   <div class="flex items-center justify-between mb-3">
     <h3 class="text-panel-title text-text-primary">{{ title }}</h3>
     <div class="flex items-center gap-2">
+      {% if resolution_hint %}
+      <span class="text-small text-text-disabled px-1.5 py-0.5 rounded-sm bg-bg-elevated font-mono"
+            title="Veri katmanı: {{ resolution_hint }} (auto-resolution)"
+            data-resolution-hint="{{ resolution_hint }}">
+        {{ resolution_hint }}
+      </span>
+      {% endif %}
       <span class="text-text-disabled p-1 cursor-help"
             title="Plot alanı:&#10;  Ctrl+Tekerlek → yatay zoom&#10;  Sürükle → yatay zoom (box-select)&#10;  Shift+sürükle → yatay pan&#10;  Çift tık → X reset&#10;Y ekseni üzerinde:&#10;  Ctrl+Tekerlek → dikey zoom&#10;  Shift+sürükle → dikey pan&#10;  Çift tık → auto-range"
             aria-label="Etkileşim ipuçları">

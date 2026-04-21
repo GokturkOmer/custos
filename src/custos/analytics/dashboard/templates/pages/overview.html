@@ -28,7 +28,8 @@
       {{ chart_panel(slot.title, slot.chart_key,
                      height=220, editable=true, deletable=true,
                      expandable=true, visible_axes=2,
-                     time_label=time_label, compact=true) }}
+                     time_label=time_label, compact=true,
+                     resolution_hint=slot.resolution) }}
     {% endfor %}
   </div>
   {% else %}

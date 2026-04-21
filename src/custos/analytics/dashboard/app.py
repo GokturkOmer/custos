@@ -67,6 +67,24 @@ POLLING_PRESETS: dict[str, int] = {
 _timedelta_24h = timedelta(hours=24)
 _timedelta_30m = timedelta(minutes=30)
 
+# Dashboard'da chart başına kullanılan target_points — uPlot için ~600 nokta
+# canvas render'ı 50x hızlandırır (bkz. DEFAULT_TARGET_POINTS).
+_CHART_TARGET_POINTS = 600
+
+
+def _resolution_hint_for(window: timedelta) -> str:
+    """Pencere süresinden auto-resolution katman adını döndürür.
+
+    Eşikler `query_readings_auto` ile aynıdır (database.py): ≤1 saat ham,
+    ≤1 gün dakika CA, >1 gün saat CA. Badge için tüketici dostu TR etiket.
+    """
+    sec = window.total_seconds()
+    if sec <= 3600.0:
+        return "ham"
+    if sec <= 86400.0:
+        return "dakika"
+    return "saat"
+
 
 def get_static_files_app() -> StaticFiles:
     """Statik dosya uygulamasını döndürür."""
@@ -159,17 +177,45 @@ async def overview(request: Request) -> HTMLResponse:
 
         tag_map = {t.tag_id: t for t in all_tags}
         now = datetime.now(UTC)
+
+        # Tum chart x tag sorgularini once tek listeye topla, sonra gather ile
+        # paralel calistir. Spec listesi index uzerinden sonuclari geri dagitir.
+        chart_specs: list[tuple[OverviewChart, datetime]] = []
+        query_specs: list[tuple[str, str]] = []  # (chart_key, tag_id)
+        query_tasks: list[Any] = []
         for oc in overview_charts:
+            chart_start = now - timedelta(minutes=oc.time_window_minutes)
+            chart_specs.append((oc, chart_start))
+            for tid in tags_by_chart.get(oc.chart_key, []):
+                query_specs.append((oc.chart_key, tid))
+                query_tasks.append(db_instance.query_readings_auto(
+                    tid, chart_start, now, target_points=_CHART_TARGET_POINTS,
+                ))
+
+        all_readings = (
+            await asyncio.gather(*query_tasks) if query_tasks else []
+        )
+
+        # chart_key -> tag_id -> readings
+        readings_by_chart: dict[str, dict[str, list[Any]]] = {}
+        for (chart_key, tid), readings in zip(
+            query_specs, all_readings, strict=True,
+        ):
+            readings_by_chart.setdefault(chart_key, {})[tid] = readings
+
+        for oc, chart_start in chart_specs:
+            window_start_ts = int(chart_start.timestamp())
+            window_end_ts = int(now.timestamp())
+            window = now - chart_start
+            resolution = _resolution_hint_for(window)
             chart_slots.append({
                 "chart_key": oc.chart_key,
                 "title": oc.title,
                 "sort_order": oc.sort_order,
                 "time_window_minutes": oc.time_window_minutes,
+                "resolution": resolution,
             })
             tag_ids = tags_by_chart.get(oc.chart_key, [])
-            chart_start = now - timedelta(minutes=oc.time_window_minutes)
-            window_start_ts = int(chart_start.timestamp())
-            window_end_ts = int(now.timestamp())
             if not tag_ids:
                 charts[oc.chart_key] = {
                     "timestamps": [],
@@ -178,6 +224,7 @@ async def overview(request: Request) -> HTMLResponse:
                     "units": [],
                     "window_start": window_start_ts,
                     "window_end": window_end_ts,
+                    "resolution": resolution,
                 }
                 continue
 
@@ -185,13 +232,12 @@ async def overview(request: Request) -> HTMLResponse:
             labels: list[str] = []
             units: list[str] = []
             timestamps: list[int] = []
-            # Overview kompakt: downsampled (TimescaleDB time_bucket AVG) —
-            # 24h × 30K okuma → ~600 nokta. Canvas render 50x hızlanır.
-            # Detay sayfası (overview_chart_detail) ham okumaya devam eder.
+            # Overview kompakt: query_readings_auto (TimescaleDB time_bucket AVG +
+            # continuous aggregates). Pencereye gore otomatik katman secimi —
+            # ham (≤1s) / dakika CA (≤1g) / saat CA (>1g). Cikti hep ~600 nokta.
+            tag_readings = readings_by_chart.get(oc.chart_key, {})
             for tid in tag_ids:
-                readings = await db_instance.query_tag_readings_downsampled(
-                    tid, chart_start, now, target_points=600,
-                )
+                readings = tag_readings.get(tid, [])
                 if readings:
                     tag_rec = tag_map.get(tid)
                     unit = tag_rec.unit if tag_rec else ""
@@ -210,6 +256,7 @@ async def overview(request: Request) -> HTMLResponse:
                 "units": units,
                 "window_start": window_start_ts,
                 "window_end": window_end_ts,
+                "resolution": resolution,
             }
 
         # Threshold adlarini cek
@@ -420,13 +467,27 @@ async def overview_chart_detail(
 
     now = datetime.now(UTC)
     chart_start = now - timedelta(minutes=chart.time_window_minutes)
+    window = now - chart_start
+    resolution = _resolution_hint_for(window)
+
+    # Tum tag sorgulari paralel — query_readings_auto pencereye gore
+    # ham/dakika/saat katmanindan secer, cikti homojen list[TagReading].
+    readings_tasks = [
+        db.query_readings_auto(
+            ct.tag_id, chart_start, now, target_points=_CHART_TARGET_POINTS,
+        )
+        for ct in chart_tags
+    ]
+    all_readings = (
+        await asyncio.gather(*readings_tasks) if readings_tasks else []
+    )
+
     series: list[list[float]] = []
     labels: list[str] = []
     units: list[str] = []
     tag_meta: list[dict[str, str]] = []
     timestamps: list[int] = []
-    for ct in chart_tags:
-        readings = await db.query_tag_readings(ct.tag_id, chart_start, now)
+    for ct, readings in zip(chart_tags, all_readings, strict=True):
         tag_rec = tag_map.get(ct.tag_id)
         unit = tag_rec.unit if tag_rec else ""
         unit_suffix = f" ({unit})" if unit else ""
@@ -448,6 +509,7 @@ async def overview_chart_detail(
         "units": units,
         "window_start": int(chart_start.timestamp()),
         "window_end": int(now.timestamp()),
+        "resolution": resolution,
     }
 
     time_windows = [
@@ -463,6 +525,7 @@ async def overview_chart_detail(
         tag_meta=tag_meta,
         time_windows=time_windows,
         time_label=_format_time_window_label(chart.time_window_minutes),
+        resolution_hint=resolution,
     )
     return templates.TemplateResponse(
         request, "pages/overview_chart_detail.html", ctx,
