@@ -16,12 +16,14 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from custos.analytics.archiver import ArchiveResult, ParquetArchiver
+from custos.analytics.assistant.retriever import AssistantRetriever
+from custos.analytics.assistant.service import get_assistant_retriever
 from custos.analytics.disk_telemetry import DiskMonitor, DiskUsage, get_disk_usage
 from custos.analytics.push_sender import send_push_notifications
 from custos.analytics.scanner import ModbusScanner
@@ -59,6 +61,10 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 # çağrısını argüman default'unda yasaklar; module-level singleton ile sarmalıyoruz.
 # Type: Any çünkü Form(...) aslında FieldInfo döner ama imza yerine list[str] alanı.
 _EMPTY_FORM_STR_LIST: Any = Form(default_factory=list)
+
+# FastAPI Depends() argüman default'unda ruff B008 uyarısı verdiği için
+# module-level singleton ile sarmalıyoruz (aynı Form(...) sarması gibi).
+_ASSISTANT_RETRIEVER_DEP: Any = Depends(get_assistant_retriever)
 
 
 # Polling preset → ms eşleştirmesi
@@ -162,6 +168,7 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
             {"href": "/dashboard/kpi", "icon": "trending-up", "label": "KPI"},
             {"href": "/dashboard/alarms", "icon": "alert-triangle", "label": "Alarms"},
             {"href": "/dashboard/maintenance", "icon": "tool", "label": "Maintenance"},
+            {"href": "/dashboard/assistant", "icon": "message-circle", "label": "Asistan"},
             {"href": "/dashboard/logs", "icon": "file-text", "label": "Logs"},
             {"href": "/dashboard/settings", "icon": "settings", "label": "Settings"},
         ],
@@ -2931,3 +2938,41 @@ async def archive_run(request: Request, year: int, month: int) -> JSONResponse:
     async with _archive_lock:
         result = await archiver.archive_month(year, month)
     return JSONResponse(_archive_result_to_dict(result))
+
+
+# --- Teknik Asistan Chatbot (F8b) ---
+
+
+@router.get("/assistant", response_class=HTMLResponse)
+async def assistant_page(request: Request) -> HTMLResponse:
+    """Teknik asistan chatbot sayfası — boş chat ile render.
+
+    Sohbet geçmişi istemci tarafında DOM'da tutulur (sayfa yenilenince
+    sıfırlanır). Çok turlu diyalog yok — brief v1.5 §4.9.
+    """
+    ctx = _base_context(
+        active_nav="/dashboard/assistant",
+        page_title="Asistan",
+    )
+    return templates.TemplateResponse(request, "pages/assistant.html", ctx)
+
+
+@router.post("/assistant/ask", response_class=HTMLResponse)
+async def assistant_ask(
+    request: Request,
+    query: str = Form(...),
+    retriever: AssistantRetriever = _ASSISTANT_RETRIEVER_DEP,
+) -> HTMLResponse:
+    """HTMX form post — kullanıcı sorusunu retriever'a gönderir, tek
+    mesaj partialini döner. HTMX bunu sohbet konteynerine append eder.
+    """
+    trimmed = query.strip()
+    answer = retriever.answer(trimmed)
+    ctx = {
+        "request": request,
+        "question": trimmed,
+        "answer": answer,
+    }
+    return templates.TemplateResponse(
+        request, "partials/assistant_message.html", ctx
+    )

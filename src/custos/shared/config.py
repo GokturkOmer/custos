@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     query_guard_1min_max_tag_days: float = 200.0
     query_guard_1hour_max_days: float = 3650.0  # ~10 yıl
 
+    # Teknik asistan chatbot (F8b) ayarları.
+    # knowledge_dir: Bilgi tabanı kök dizini — Markdown + YAML dokümanlar burada.
+    # score_threshold: Semantic search'te minimum cosine benzerlik; altındaysa
+    #   "bilgi bulamadım" döner. 0.35 brief §4.9'daki multilingual model için
+    #   makul başlangıç değeridir (pilot sırasında ayarlanabilir).
+    # top_k: Search'ten dönen en yakın chunk sayısı. Kaynak link üretimi için
+    #   şimdilik en yüksek skorlu olan kullanılır; 3 future-proof.
+    custos_assistant_knowledge_dir: str = "data/knowledge"
+    custos_assistant_score_threshold: float = 0.35
+    custos_assistant_top_k: int = 3
+
     @property
     def database_url(self) -> str:
         """PostgreSQL bağlantı URL'sini döndürür (client_encoding=utf8 dahil)."""
