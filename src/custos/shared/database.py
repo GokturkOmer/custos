@@ -18,6 +18,10 @@ from custos.shared.config import Settings
 
 logger = structlog.get_logger(logger_name="database")
 
+# Overview chart ve auto-resolution query için varsayılan hedef nokta sayısı.
+# uPlot canvas render'ı ~600 nokta ile 24h × 30K okumayı ~50x hızlandırıyor.
+DEFAULT_TARGET_POINTS = 600
+
 
 @dataclass(frozen=True)
 class TagReading:
@@ -389,12 +393,48 @@ class DatabaseInterface(abc.ABC):
         tag_id: str,
         start: datetime,
         end: datetime,
-        target_points: int = 600,
+        target_points: int = DEFAULT_TARGET_POINTS,
     ) -> list[TagReading]:
-        """Tag okumalarını time_bucket ile downsample ederek döndürür.
+        """[DEPRECATED F11] `query_readings_auto` kullan.
 
-        Overview sayfası gibi çok noktanın anlamsız olduğu yerler için.
+        Bu metot sadece ham `tag_readings` tablosu üzerinde çalışır; büyük
+        pencerelerde yavaştır (1 gün+ için milyon satır taraması). Paket D
+        dashboard geçişinde çağrıları `query_readings_auto`'ya taşınacak,
+        v1.1 cleanup'ında silinecek.
+
+        Tag okumalarını time_bucket ile downsample ederek döndürür.
         Bucket boyutu (end-start)/target_points'tan hesaplanır (min 1 sn).
+        Boş bucket'lar döndürülmez; gerçek nokta sayısı target'tan az olabilir.
+        """
+
+    @abc.abstractmethod
+    async def query_readings_auto(
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
+        target_points: int = DEFAULT_TARGET_POINTS,
+    ) -> list[TagReading]:
+        """Pencere büyüklüğüne göre doğru katmandan okur (auto-resolution).
+
+        Katman seçimi (inclusive sınırlar):
+            (end - start) <= 1 saat  → ham `tag_readings` + time_bucket downsample
+            (end - start) <= 1 gün   → `tag_readings_1min` continuous aggregate
+            (end - start)  > 1 gün   → `tag_readings_1hour` continuous aggregate
+
+        Bucket boyutu her katmanda `ceil(window / target_points)` formülü
+        ile hesaplanır, sonra katmanın aday listesine yuvarlanır:
+            ham   : serbest saniye (min 1 sn)
+            1min  : 1 / 5 / 10 / 15 dakika
+            1hour : 1 / 3 / 6 / 12 saat
+
+        Ham katman dahil TÜM katmanlar downsample eder — tüketiciye 1 Hz
+        ham okuma vaat edilmez. Çıktı homojen `list[TagReading]`:
+            timestamp    : bucket başlangıcı
+            tag_id       : sorgulanan tag
+            value        : AVG(value) bucket içinde
+            quality_flag : MAX(quality_flag) bucket içinde
+
         Boş bucket'lar döndürülmez; gerçek nokta sayısı target'tan az olabilir.
         """
 
@@ -911,6 +951,18 @@ _ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset({
 })
 
 
+def _pick_bucket(desired: int, candidates: list[int]) -> int:
+    """Aday listesinden `desired`'a eşit veya büyük en küçük değeri seç.
+
+    Hepsinden büyükse maksimumu döndür (clamp). F11 Paket C auto-resolution
+    query için bucket seçim yardımcısı — 1/5/10/15 dk ya da 1/3/6/12 saat.
+    """
+    for c in candidates:
+        if desired <= c:
+            return c
+    return candidates[-1]
+
+
 def _row_to_connection_profile(row: asyncpg.Record) -> ConnectionProfile:
     """asyncpg satırını ConnectionProfile'a dönüştürür."""
     return ConnectionProfile(
@@ -1233,16 +1285,53 @@ class TimescaleDBDatabase(DatabaseInterface):
         tag_id: str,
         start: datetime,
         end: datetime,
-        target_points: int = 600,
+        target_points: int = DEFAULT_TARGET_POINTS,
     ) -> list[TagReading]:
-        """time_bucket AVG ile N ≤ target_points nokta döndürür.
+        """[DEPRECATED F11] `query_readings_auto` kullan.
 
-        Overview sayfası için optimize edilmiş: 24h × 30K okuma → ~600 nokta,
-        canvas render süresini ~50x azaltır. Quality flag bucket içinde MAX
-        olarak alınır (en kötü/en yüksek flag'i koru).
+        Sadece ham tag_readings üzerinde time_bucket AVG. Büyük pencerelerde
+        yavaştır — auto-resolution yerine bunu çağırmak aggregate'lerin
+        sağladığı kazancı kaybeder. Paket D'de tüketici geçiyor, v1.1'de siliniyor.
+
+        Bucket değeri (end-start)/target_points, min 1 sn. Quality flag
+        bucket içinde MAX (en kötü/en yüksek flag korunur).
+        """
+        return await self._query_raw_downsampled(tag_id, start, end, target_points)
+
+    async def query_readings_auto(
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
+        target_points: int = DEFAULT_TARGET_POINTS,
+    ) -> list[TagReading]:
+        """Pencere büyüklüğüne göre ham / 1min / 1hour katmanından okur.
+
+        Eşikler inclusive: tam 1 saat ham'dan, tam 1 gün 1min'den döner.
+        Çıktı homojen `list[TagReading]` — tüketici katman farkını bilmez.
+        """
+        window_sec = (end - start).total_seconds()
+        if window_sec <= 3600.0:
+            return await self._query_raw_downsampled(tag_id, start, end, target_points)
+        if window_sec <= 86400.0:
+            return await self._query_1min_downsampled(tag_id, start, end, target_points)
+        return await self._query_1hour_downsampled(tag_id, start, end, target_points)
+
+    async def _query_raw_downsampled(
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
+        target_points: int,
+    ) -> list[TagReading]:
+        """Ham tag_readings üzerinde time_bucket AVG + MAX(quality).
+
+        Bucket = ceil((end-start)/target_points) saniye, min 1 sn.
         """
         total_sec = max(1.0, (end - start).total_seconds())
-        bucket_sec = max(1, int(total_sec // max(1, target_points)))
+        safe_target = max(1, target_points)
+        # ceil(total_sec / safe_target)
+        bucket_sec = max(1, -(-int(total_sec) // safe_target))
         pool = self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -1257,6 +1346,79 @@ class TimescaleDBDatabase(DatabaseInterface):
         return [
             TagReading(
                 timestamp=row["bucket"],
+                tag_id=tag_id,
+                value=float(row["avg_value"]),
+                quality_flag=int(row["max_quality"]),
+            )
+            for row in rows
+        ]
+
+    async def _query_1min_downsampled(
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
+        target_points: int,
+    ) -> list[TagReading]:
+        """tag_readings_1min CA üzerinde re-bucket + AVG(avg_value).
+
+        Bucket adayları: 1, 5, 10, 15 dakika. `ceil(window_min/target)`
+        hesaplanır, aday listeden en küçük eşit-veya-büyük seçilir.
+        """
+        window_min = max(1, int(-(-int((end - start).total_seconds()) // 60)))
+        safe_target = max(1, target_points)
+        desired = max(1, -(-window_min // safe_target))
+        bucket_min = _pick_bucket(desired, [1, 5, 10, 15])
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT time_bucket(make_interval(mins => $4), bucket) AS bkt, "
+                "       AVG(avg_value) AS avg_value, "
+                "       MAX(max_quality) AS max_quality "
+                "FROM tag_readings_1min "
+                "WHERE tag_id = $1 AND bucket >= $2 AND bucket <= $3 "
+                "GROUP BY bkt ORDER BY bkt ASC",
+                tag_id, start, end, bucket_min,
+            )
+        return [
+            TagReading(
+                timestamp=row["bkt"],
+                tag_id=tag_id,
+                value=float(row["avg_value"]),
+                quality_flag=int(row["max_quality"]),
+            )
+            for row in rows
+        ]
+
+    async def _query_1hour_downsampled(
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
+        target_points: int,
+    ) -> list[TagReading]:
+        """tag_readings_1hour CA üzerinde re-bucket + AVG(avg_value).
+
+        Bucket adayları: 1, 3, 6, 12 saat.
+        """
+        window_h = max(1, int(-(-int((end - start).total_seconds()) // 3600)))
+        safe_target = max(1, target_points)
+        desired = max(1, -(-window_h // safe_target))
+        bucket_h = _pick_bucket(desired, [1, 3, 6, 12])
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT time_bucket(make_interval(hours => $4), bucket) AS bkt, "
+                "       AVG(avg_value) AS avg_value, "
+                "       MAX(max_quality) AS max_quality "
+                "FROM tag_readings_1hour "
+                "WHERE tag_id = $1 AND bucket >= $2 AND bucket <= $3 "
+                "GROUP BY bkt ORDER BY bkt ASC",
+                tag_id, start, end, bucket_h,
+            )
+        return [
+            TagReading(
+                timestamp=row["bkt"],
                 tag_id=tag_id,
                 value=float(row["avg_value"]),
                 quality_flag=int(row["max_quality"]),
