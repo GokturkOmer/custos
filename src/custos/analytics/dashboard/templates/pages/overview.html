@@ -54,6 +54,14 @@
   </div>
   {% endif %}
 
+  {# Disk Doluluk widget — 30s HTMX polling ile güncellenir (F11 Paket F) #}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4"
+       hx-get="/dashboard/api/disk-usage"
+       hx-trigger="every 30s"
+       hx-swap="innerHTML">
+    {% include 'partials/disk_usage_widget.html' %}
+  </div>
+
   {# Yaklaşan Bakım widget — sadece pending task varsa görünür #}
   {% if upcoming_maint %}
   <div class="bg-bg-surface rounded-sm border border-border-weak p-4">

@@ -17,6 +17,7 @@ from custos.analytics.anomaly_detector import AnomalyDetector
 from custos.analytics.archive_scheduler import ArchiveScheduler
 from custos.analytics.archiver import ParquetArchiver
 from custos.analytics.dashboard.app import _archive_lock, get_static_files_app, router
+from custos.analytics.disk_telemetry import DiskMonitor
 from custos.analytics.kpi_engine import KpiEngine
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
 from custos.analytics.threshold_engine import ThresholdEngine
@@ -46,6 +47,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     maint_scheduler_task: asyncio.Task[None] | None = None
     archive_scheduler: ArchiveScheduler | None = None
     archive_scheduler_task: asyncio.Task[None] | None = None
+    disk_monitor: DiskMonitor | None = None
+    disk_monitor_task: asyncio.Task[None] | None = None
     try:
         await db.connect()
         application.state.db = db
@@ -79,10 +82,24 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         )
         archive_scheduler_task = asyncio.create_task(archive_scheduler.start())
         application.state.archive_scheduler = archive_scheduler
+
+        # Disk telemetri — 5 dakikada bir doluluk, %85 üstünde push (F11 Paket F)
+        disk_monitor = DiskMonitor(db=db, mount_point=str(_ARCHIVE_DIR.parent))
+        disk_monitor_task = asyncio.create_task(disk_monitor.start())
+        application.state.disk_monitor = disk_monitor
     except Exception:
         await logger.aerror("DB bağlantısı kurulamadı", exc_info=True)
         application.state.db = None
     yield
+    # Disk monitor'ı durdur
+    if disk_monitor is not None:
+        await disk_monitor.stop()
+    if disk_monitor_task is not None and not disk_monitor_task.done():
+        disk_monitor_task.cancel()
+        try:
+            await disk_monitor_task
+        except asyncio.CancelledError:
+            pass
     # Archive scheduler'ı durdur
     if archive_scheduler is not None:
         await archive_scheduler.stop()

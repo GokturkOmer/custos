@@ -1,0 +1,47 @@
+{% from 'components/icon.html' import icon_inline %}
+
+{# Disk doluluk widget'ı — overview ve settings için ortak partial. #}
+{% if disk_info %}
+  {% set pct = disk_info.used_percent %}
+  {% set color = disk_info.color %}
+  {% if color == 'ok' %}
+    {% set bar_cls = 'bg-status-ok' %}
+    {% set text_cls = 'text-status-ok' %}
+  {% elif color == 'warn' %}
+    {% set bar_cls = 'bg-status-warn' %}
+    {% set text_cls = 'text-status-warn' %}
+  {% else %}
+    {% set bar_cls = 'bg-status-crit' %}
+    {% set text_cls = 'text-status-crit' %}
+  {% endif %}
+  <a href="/dashboard/settings#retention"
+     class="block group"
+     title="Veri Saklama ayarlarına git">
+    <div class="flex items-center justify-between mb-1.5">
+      <span class="text-small text-text-secondary group-hover:text-text-primary">
+        {{ icon_inline('hard-drive', class='w-4 h-4 inline-block mr-1') }}
+        Disk Doluluk
+      </span>
+      <span class="text-small font-mono {{ text_cls }}">
+        {{ '%.1f' | format(disk_info.used_gb) }} GB
+        / {{ '%.1f' | format(disk_info.total_gb) }} GB
+        (%{{ pct }})
+      </span>
+    </div>
+    <div class="w-full bg-bg-elevated rounded-sm h-2 overflow-hidden">
+      <div class="h-2 {{ bar_cls }} transition-all"
+           style="width: {{ pct if pct <= 100 else 100 }}%"></div>
+    </div>
+    <p class="text-small text-text-disabled mt-1">
+      {{ disk_info.mount_point }}
+      {% if color == 'crit' %}
+      — <span class="{{ text_cls }}">Disk doluluğu yüksek!</span>
+      {% endif %}
+    </p>
+  </a>
+{% else %}
+  <div class="text-small text-text-disabled">
+    {{ icon_inline('hard-drive', class='w-4 h-4 inline-block mr-1') }}
+    Disk kullanımı ölçülemedi (mount point bulunamadı)
+  </div>
+{% endif %}

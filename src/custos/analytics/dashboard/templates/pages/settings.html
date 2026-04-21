@@ -141,7 +141,113 @@
     </div>
   </div>
 
-  {# C) Bağlantı Profilleri (kısa yol) #}
+  {# C) Veri Saklama (F11 Paket F) #}
+  <div id="retention"
+       class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Veri Saklama</h2>
+    </div>
+    <div class="p-4 space-y-6">
+      {# Disk doluluk özeti #}
+      <div>
+        {% include 'partials/disk_usage_widget.html' %}
+      </div>
+
+      {# Ham retention seçici #}
+      <form method="post" action="/dashboard/settings/retention" class="space-y-3">
+        <div>
+          <p class="text-body text-text-primary font-medium mb-1">
+            Ham veri saklama süresi
+          </p>
+          <p class="text-small text-text-secondary mb-3">
+            <code class="text-xs">tag_readings</code> tablosu bu süre sonunda
+            TimescaleDB tarafından otomatik silinir. Dakikalık ve saatlik
+            özetler saklanmaya devam eder.
+          </p>
+          {% set current_mode = 'off' if not auto_clean_enabled else (retention_days | string) %}
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            {% for choice in [('30', '30 gün'), ('60', '60 gün'),
+                              ('180', '180 gün'), ('365', '1 yıl'),
+                              ('off', 'Sınırsız')] %}
+              <label class="flex items-center justify-center px-3 py-2
+                            border rounded-md cursor-pointer transition-colors
+                            {% if current_mode == choice[0] %}
+                              bg-accent-primary/10 border-accent-primary text-accent-primary
+                            {% else %}
+                              bg-bg-elevated border-border-weak text-text-secondary
+                              hover:text-text-primary hover:border-border-medium
+                            {% endif %}">
+                <input type="radio" name="retention_mode" value="{{ choice[0] }}"
+                       {% if current_mode == choice[0] %}checked{% endif %}
+                       class="sr-only">
+                <span class="text-small font-medium">{{ choice[1] }}</span>
+              </label>
+            {% endfor %}
+          </div>
+          {% if not auto_clean_enabled %}
+          <div class="mt-3 p-3 bg-status-warn/10 border border-status-warn/30
+                      rounded-md text-small text-status-warn">
+            {{ icon_inline('alert-triangle', class='w-4 h-4 inline-block mr-1') }}
+            Auto-clean kapalı. Disk dolunca sadece uyarı alırsınız, veri silinmez.
+          </div>
+          {% endif %}
+          <p class="text-small text-text-disabled mt-2">
+            Son güncelleme: {{ retention_updated_at.strftime('%d/%m/%Y %H:%M') if retention_updated_at else '—' }}
+          </p>
+        </div>
+        <div class="flex justify-end">
+          <button type="submit"
+                  class="px-4 py-1.5 text-small font-medium text-white
+                         bg-accent-primary rounded-md hover:bg-accent-primary-hover
+                         transition-colors">
+            Kaydet
+          </button>
+        </div>
+      </form>
+
+      <div class="border-t border-border-weak pt-4 space-y-1">
+        <div class="flex items-center justify-between text-small">
+          <span class="text-text-secondary">Dakikalık özet</span>
+          <span class="text-text-primary font-mono">3 yıl</span>
+        </div>
+        <div class="flex items-center justify-between text-small">
+          <span class="text-text-secondary">Saatlik özet</span>
+          <span class="text-text-primary font-mono">Sınırsız</span>
+        </div>
+      </div>
+
+      {# Arşiv #}
+      <div class="border-t border-border-weak pt-4 space-y-3">
+        <div>
+          <p class="text-body text-text-primary font-medium mb-1">
+            {{ icon_inline('archive', class='w-4 h-4 inline-block mr-1') }}
+            Aylık Parquet Arşivi
+          </p>
+          <p class="text-small text-text-secondary">
+            Her ayın 1'inde 02:00 TRT'de otomatik arşiv çalışır.
+            {% if archive_dir %}
+            Hedef dizin: <code class="text-xs">{{ archive_dir }}</code>
+            {% endif %}
+          </p>
+        </div>
+        <div class="flex items-center gap-3">
+          <button type="button"
+                  onclick="runArchive()"
+                  id="archive-btn"
+                  class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                         bg-bg-elevated text-text-secondary border border-border-weak rounded-md
+                         hover:text-text-primary hover:border-border-medium
+                         disabled:opacity-50 transition-colors">
+            {{ icon_inline('archive', class='w-4 h-4') }}
+            <span>Şimdi arşivle ({{ archive_prev_year }}-{{ '%02d' | format(archive_prev_month) }})</span>
+          </button>
+          <span id="archive-status" class="text-small text-text-secondary"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# D) Bağlantı Profilleri (kısa yol) #}
   <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
     <div class="px-4 py-3 border-b border-border-weak">
       <h2 class="text-panel-title text-text-primary font-semibold">Bağlantı Profilleri</h2>
@@ -157,4 +263,37 @@
     </div>
   </div>
 </div>
+
+<script>
+  // Manuel arşiv tetikleyici — Paket E endpoint'ini çağırır.
+  async function runArchive() {
+    const btn = document.getElementById('archive-btn');
+    const status = document.getElementById('archive-status');
+    const year = {{ archive_prev_year }};
+    const month = {{ archive_prev_month }};
+    btn.disabled = true;
+    status.textContent = 'Arşivleniyor...';
+    try {
+      const res = await fetch(
+        `/dashboard/api/archive/run?year=${year}&month=${month}`,
+        {method: 'POST'}
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        status.textContent = 'Hata: ' + (data.detail || res.status);
+        return;
+      }
+      const data = await res.json();
+      const mb = (data.raw_file_bytes + data.agg_1min_file_bytes +
+                  data.agg_1hour_file_bytes) / (1024 * 1024);
+      status.textContent =
+        `Tamam — ${data.raw_rows.toLocaleString()} satır, ${mb.toFixed(1)} MB ` +
+        `(${data.duration_seconds}s)`;
+    } catch (e) {
+      status.textContent = 'Bağlantı hatası';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+</script>
 {% endblock %}

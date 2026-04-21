@@ -13,6 +13,7 @@ import unicodedata
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -21,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from custos.analytics.archiver import ArchiveResult, ParquetArchiver
+from custos.analytics.disk_telemetry import DiskMonitor, DiskUsage, get_disk_usage
 from custos.analytics.push_sender import send_push_notifications
 from custos.analytics.scanner import ModbusScanner
 from custos.shared.database import (
@@ -333,6 +335,21 @@ async def overview(request: Request) -> HTMLResponse:
         },
     ]
 
+    # Disk doluluk (F11 Paket F) — widget ilk render'da hemen görünsün,
+    # sonraki tazelemeleri HTMX polling (/api/disk-usage) sağlar.
+    disk_info_init: dict[str, Any] | None = None
+    monitor_init: DiskMonitor | None = getattr(
+        request.app.state, "disk_monitor", None,
+    )
+    mount_init = (
+        monitor_init._mount_point if monitor_init is not None else "/var/custos"
+    )
+    try:
+        usage_init = await asyncio.to_thread(get_disk_usage, mount_init)
+        disk_info_init = _disk_usage_to_dict(usage_init)
+    except FileNotFoundError:
+        disk_info_init = None
+
     ctx = _base_context(
         page_title="Overview",
         active_nav="/dashboard/overview",
@@ -342,6 +359,7 @@ async def overview(request: Request) -> HTMLResponse:
         alarms=alarms,
         upcoming_maint=upcoming_maint,
         maint_asset_names=maint_asset_names,
+        disk_info=disk_info_init,
     )
     return templates.TemplateResponse(request, "pages/overview.html", ctx)
 
@@ -1870,7 +1888,7 @@ _APP_START_TIME = datetime.now(UTC)
 
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request) -> HTMLResponse:
-    """Settings sayfası — sistem bilgisi ve bildirim ayarları."""
+    """Settings sayfası — sistem bilgisi, bildirim + veri saklama ayarları."""
     db = _get_db(request)
 
     # Sistem bilgisi
@@ -1902,6 +1920,34 @@ async def settings_page(request: Request) -> HTMLResponse:
     push_enabled = is_push_enabled()
     subscriptions = await db.list_push_subscriptions()
 
+    # Veri saklama (F11 Paket F) — config + mevcut disk durumu
+    retention = await db.get_retention_config()
+    disk_info: dict[str, Any] | None = None
+    archive_dir_str: str | None = None
+    archiver_obj: ParquetArchiver | None = getattr(
+        request.app.state, "archiver", None,
+    )
+    if archiver_obj is not None:
+        archive_dir_str = str(archiver_obj.archive_dir)
+    monitor: DiskMonitor | None = getattr(
+        request.app.state, "disk_monitor", None,
+    )
+    mount = monitor._mount_point if monitor is not None else "/var/custos"
+    try:
+        usage = await asyncio.to_thread(get_disk_usage, mount)
+        disk_info = _disk_usage_to_dict(usage)
+    except FileNotFoundError:
+        disk_info = None
+
+    # Son arşiv: TRT takvim ayına göre bir önceki ayı arşivle butonu için
+    # default year/month üretimi (endpoint çağrısında kullanılacak).
+    now_utc = datetime.now(UTC)
+    local_now = now_utc.astimezone(ZoneInfo("Europe/Istanbul"))
+    if local_now.month == 1:
+        prev_year, prev_month = local_now.year - 1, 12
+    else:
+        prev_year, prev_month = local_now.year, local_now.month - 1
+
     ctx = _base_context(
         page_title="Settings",
         active_nav="/dashboard/settings",
@@ -1913,8 +1959,108 @@ async def settings_page(request: Request) -> HTMLResponse:
         model_count=model_count,
         push_enabled=push_enabled,
         subscription_count=len(subscriptions),
+        retention_days=retention.raw_retention_days,
+        auto_clean_enabled=retention.auto_clean_enabled,
+        retention_updated_at=retention.updated_at,
+        disk_info=disk_info,
+        archive_dir=archive_dir_str,
+        archive_prev_year=prev_year,
+        archive_prev_month=prev_month,
     )
     return templates.TemplateResponse(request, "pages/settings.html", ctx)
+
+
+def _disk_usage_to_dict(usage: DiskUsage) -> dict[str, Any]:
+    """DiskUsage'ı JSON/template dostu dict'e çevirir.
+
+    ``used_percent`` 1 ondalık basamak; total/used/free GB cinsinden yuvarlanır
+    (UI ``xxx GB / yyy GB`` gösterimi için).
+    """
+    gb = 1024 ** 3
+    pct = usage.used_percent
+    if pct < 70.0:
+        color = "ok"
+    elif pct < 85.0:
+        color = "warn"
+    else:
+        color = "crit"
+    return {
+        "mount_point": usage.mount_point,
+        "total_gb": round(usage.total_bytes / gb, 1),
+        "used_gb": round(usage.used_bytes / gb, 1),
+        "free_gb": round(usage.free_bytes / gb, 1),
+        "used_percent": round(pct, 1),
+        "color": color,
+    }
+
+
+@router.post("/settings/retention", response_class=HTMLResponse)
+async def update_retention_settings(
+    request: Request,
+    retention_mode: str = Form(...),
+) -> RedirectResponse:
+    """Veri saklama formu submit — ham retention süresi + auto-clean off.
+
+    ``retention_mode`` değerleri: '30', '60', '180', '365', 'off'.
+    Geçersiz değer 400 döner. 'off' seçiliyse auto_clean_enabled=False,
+    diğer hallerde raw_retention_days = int(mode).
+    """
+    db = _get_db(request)
+    valid = {"30", "60", "180", "365", "off"}
+    if retention_mode not in valid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz retention_mode: {retention_mode}",
+        )
+    if retention_mode == "off":
+        cfg = await db.update_retention_config(
+            auto_clean_enabled=False, updated_by="user",
+        )
+        detail = (
+            f"Auto-clean kapatıldı (raw_retention_days={cfg.raw_retention_days})"
+        )
+    else:
+        days = int(retention_mode)
+        cfg = await db.update_retention_config(
+            raw_retention_days=days,
+            auto_clean_enabled=True,
+            updated_by="user",
+        )
+        detail = f"Retention {days} güne ayarlandı, auto-clean açık"
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="settings",
+            action="retention_updated",
+            entity_type="retention_config",
+            entity_id="1",
+            detail=detail,
+        ),
+    )
+    return RedirectResponse(url="/dashboard/settings", status_code=303)
+
+
+@router.get("/api/disk-usage", response_class=HTMLResponse)
+async def api_disk_usage(request: Request) -> HTMLResponse:
+    """Disk doluluk partial'ı — HTMX polling ile Overview widget'ına gider.
+
+    Mount point DiskMonitor'den okunur; yoksa default ``/var/custos``.
+    Path erişilemezse "ölçülemedi" durumu render edilir.
+    """
+    monitor: DiskMonitor | None = getattr(
+        request.app.state, "disk_monitor", None,
+    )
+    mount = monitor._mount_point if monitor is not None else "/var/custos"
+    disk_info: dict[str, Any] | None = None
+    try:
+        usage = await asyncio.to_thread(get_disk_usage, mount)
+        disk_info = _disk_usage_to_dict(usage)
+    except FileNotFoundError:
+        disk_info = None
+    ctx = {"request": request, "disk_info": disk_info}
+    return templates.TemplateResponse(
+        request, "partials/disk_usage_widget.html", ctx,
+    )
 
 
 @router.post("/settings/notifications", response_class=HTMLResponse)

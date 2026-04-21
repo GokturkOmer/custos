@@ -341,6 +341,21 @@ class AlarmChecklistMapping:
     created_at: datetime | None = None
 
 
+@dataclass
+class RetentionConfig:
+    """Runtime retention ayarları — singleton (id=1) satırının Python temsili.
+
+    ``auto_clean_enabled=False`` iken TimescaleDB retention policy'si
+    ``tag_readings`` ve ``features`` hypertable'larından kaldırılır; kullanıcı
+    disk dolana kadar uyarı alır, veri silinmez.
+    """
+
+    raw_retention_days: int
+    auto_clean_enabled: bool
+    updated_at: datetime
+    updated_by: str
+
+
 class DatabaseInterface(abc.ABC):
     """Veritabanı erişim arayüzü.
 
@@ -985,6 +1000,31 @@ class DatabaseInterface(abc.ABC):
         self, threshold_id: int, since: datetime,
     ) -> int:
         """Bir threshold'un verilen zamandan sonra tetiklenme sayısı."""
+
+    # --- Retention Config (F11 Paket F) ---
+
+    @abc.abstractmethod
+    async def get_retention_config(self) -> RetentionConfig:
+        """Singleton retention ayarlarını döndürür."""
+
+    @abc.abstractmethod
+    async def update_retention_config(
+        self,
+        raw_retention_days: int | None = None,
+        auto_clean_enabled: bool | None = None,
+        updated_by: str = "user",
+    ) -> RetentionConfig:
+        """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
+
+        - ``auto_clean_enabled=False`` → ``tag_readings`` / ``features``
+          hypertable'larından retention policy kaldırılır.
+        - ``auto_clean_enabled=True`` → policy yeniden kurulur; varsa önce
+          remove edilir (idempotent).
+        - ``raw_retention_days`` değişmişse ve auto-clean açıksa policy
+          yeni aralıkla tekrar eklenir.
+
+        DB satırı + policy güncellemesi tek transaction içinde yapılır.
+        """
 
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
@@ -3213,6 +3253,101 @@ class TimescaleDBDatabase(DatabaseInterface):
             )
         assert row is not None
         return int(row["cnt"])
+
+    # --- Retention Config (F11 Paket F) ---
+
+    async def get_retention_config(self) -> RetentionConfig:
+        """Singleton retention ayarlarını döndürür (id=1)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT raw_retention_days, auto_clean_enabled, "
+                "       updated_at, updated_by "
+                "FROM retention_config WHERE id = 1",
+            )
+        # Migration 026 INSERT garantiler ki satır her zaman var; defansif
+        # fallback yine de ekleniyor — downgrade/upgrade sırasında
+        # migration tamamlanmadan connect edilirse diye.
+        if row is None:
+            msg = "retention_config singleton satırı eksik — migration 026 uygulandı mı?"
+            raise RuntimeError(msg)
+        return RetentionConfig(
+            raw_retention_days=int(row["raw_retention_days"]),
+            auto_clean_enabled=bool(row["auto_clean_enabled"]),
+            updated_at=row["updated_at"],
+            updated_by=row["updated_by"],
+        )
+
+    async def update_retention_config(
+        self,
+        raw_retention_days: int | None = None,
+        auto_clean_enabled: bool | None = None,
+        updated_by: str = "user",
+    ) -> RetentionConfig:
+        """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
+
+        Akış:
+            1. Mevcut satırı oku.
+            2. Yeni değerleri uygula (None olmayanlar).
+            3. Tek transaction içinde: satırı güncelle + policy'yi senkronla.
+
+        Policy senkronu:
+            auto_clean_enabled=False → tag_readings + features retention policy
+                remove_retention_policy ile kaldırılır (idempotent).
+            auto_clean_enabled=True  → önce remove, sonra add (yeni aralıkla).
+
+        ``add_retention_policy`` transaction içinde çalışmaya uygun — background
+        worker job kaydı oluşturur; TimescaleDB docs'ına göre güvenli.
+        """
+        if raw_retention_days is not None and raw_retention_days <= 0:
+            msg = f"raw_retention_days pozitif olmalı, alınan: {raw_retention_days}"
+            raise ValueError(msg)
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            # Satırı güncelle — parametreler yoksa mevcut değerler korunur
+            row = await conn.fetchrow(
+                "UPDATE retention_config SET "
+                "    raw_retention_days = COALESCE($1, raw_retention_days), "
+                "    auto_clean_enabled = COALESCE($2, auto_clean_enabled), "
+                "    updated_by = $3, "
+                "    updated_at = NOW() "
+                "WHERE id = 1 "
+                "RETURNING raw_retention_days, auto_clean_enabled, "
+                "          updated_at, updated_by",
+                raw_retention_days, auto_clean_enabled, updated_by,
+            )
+            assert row is not None, "retention_config satırı güncellenemedi"
+            new_days = int(row["raw_retention_days"])
+            new_auto = bool(row["auto_clean_enabled"])
+
+            # TimescaleDB policy senkronu — her iki hypertable da (tag_readings
+            # ham veri, features türev) aynı kullanıcı tercihini takip eder.
+            for hypertable in ("tag_readings", "features"):
+                await conn.execute(
+                    f"SELECT remove_retention_policy("
+                    f"    '{hypertable}', if_exists => true);",
+                )
+                if new_auto:
+                    # INTERVAL değeri server-side oluşturulur; new_days int
+                    # olduğu için SQL injection riski yok.
+                    await conn.execute(
+                        f"SELECT add_retention_policy("
+                        f"    '{hypertable}', INTERVAL '{new_days} days');",
+                    )
+
+        await logger.ainfo(
+            "Retention config güncellendi",
+            raw_retention_days=new_days,
+            auto_clean_enabled=new_auto,
+            updated_by=updated_by,
+        )
+        return RetentionConfig(
+            raw_retention_days=new_days,
+            auto_clean_enabled=new_auto,
+            updated_at=row["updated_at"],
+            updated_by=row["updated_by"],
+        )
 
 
 def _row_to_overview_chart_tag(row: asyncpg.Record) -> OverviewChartTag:
