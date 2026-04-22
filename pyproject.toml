@@ -24,6 +24,7 @@ dependencies = [
     "sentence-transformers>=3.0,<4.0",
     "faiss-cpu>=1.8,<2.0",
     "pyyaml>=6.0,<7.0",
+    "lxml>=6.1.0",  # Transitive guard — CVE-2026-41066 XXE fix (6.0.4 HIGH)
 ]
 
 [project.optional-dependencies]

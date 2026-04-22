@@ -63,6 +63,8 @@ chmod 750 "$ARCHIVE_DIR"
 echo "[5/8] Python sanal ortami olusturuluyor..."
 sudo -u "$CUSTOS_USER" python${PYTHON_VERSION} -m venv "$INSTALL_DIR/.venv"
 sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip -q
+# setuptools >=78.1.1 — PYSEC-2025-49 path traversal RCE fix (A3 denetim bulgusu)
+sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/pip" install --upgrade 'setuptools>=78.1.1' -q
 sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR" -q
 echo "  Bagimliklar yuklendi."
 
