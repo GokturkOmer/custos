@@ -1,0 +1,94 @@
+{% from 'components/icon.html' import icon_inline %}
+
+{# Bulk import commit sonucu partial'ı — modal içindeki feedback alanına
+   HTMX ile enjekte edilir. Başarıda yeşil banner + sayaçlar, hatada
+   kırmızı banner + hata listesi. Başarıda HX-Trigger ile sensor tablosu
+   yenilenir (sensors.html hx-trigger="bulk-import-completed from:body"). #}
+
+{% if parse_error %}
+  <div class="border border-status-error/50 bg-status-error/10 rounded-md p-3 mt-3">
+    <div class="flex items-start gap-2">
+      {{ icon_inline('alert-circle', class='w-4 h-4 text-status-error mt-0.5') }}
+      <div>
+        <div class="text-small font-semibold text-status-error">
+          Dosya okunamadı
+        </div>
+        <div class="text-small text-text-secondary mt-1">
+          {{ parse_error }}
+        </div>
+        {% if filename %}
+        <div class="text-small text-text-disabled mt-1 font-mono">
+          {{ filename }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% elif commit.ok %}
+  {# Başarılı yükleme #}
+  <div class="border border-status-ok/50 bg-status-ok/10 rounded-md p-3 mt-3">
+    <div class="flex items-start gap-2">
+      {{ icon_inline('check-circle', class='w-4 h-4 text-status-ok mt-0.5') }}
+      <div class="flex-1">
+        <div class="text-small font-semibold text-status-ok">
+          Yükleme tamamlandı
+        </div>
+        <div class="text-small text-text-secondary mt-1">
+          <span class="font-semibold">{{ commit.inserted }}</span> yeni tag eklendi
+          {% if commit.updated > 0 %}
+          · <span class="font-semibold">{{ commit.updated }}</span> tag güncellendi
+          {% endif %}
+          {% if commit.skipped > 0 %}
+          · <span class="font-semibold">{{ commit.skipped }}</span> tag atlandı (zaten var)
+          {% endif %}
+        </div>
+        {% if filename %}
+        <div class="text-small text-text-disabled mt-1 font-mono">
+          {{ filename }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% else %}
+  {# Hata — reject çarpışması, doğrulama hatası, veya DB hatası #}
+  <div class="border border-status-error/50 bg-status-error/10 rounded-md p-3 mt-3">
+    <div class="flex items-start gap-2">
+      {{ icon_inline('alert-circle', class='w-4 h-4 text-status-error mt-0.5') }}
+      <div class="flex-1">
+        <div class="text-small font-semibold text-status-error">
+          Yükleme iptal edildi — hiçbir satır yazılmadı
+        </div>
+        <div class="text-small text-text-secondary mt-1">
+          Aşağıdaki sorunları düzeltip tekrar deneyin.
+        </div>
+      </div>
+    </div>
+  </div>
+  {% if commit.errors %}
+  <div class="mt-2 border border-status-error/40 bg-status-error/5 rounded-md overflow-hidden">
+    <div class="max-h-48 overflow-y-auto">
+      <table class="w-full text-small">
+        <thead class="bg-bg-elevated">
+          <tr>
+            <th class="px-3 py-1 text-left font-semibold text-text-secondary">Satır</th>
+            <th class="px-3 py-1 text-left font-semibold text-text-secondary">Alan</th>
+            <th class="px-3 py-1 text-left font-semibold text-text-secondary">Mesaj</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% for err in commit.errors %}
+          <tr>
+            <td class="px-3 py-1 font-mono text-text-primary">
+              {{ err.row_num if err.row_num > 0 else '—' }}
+            </td>
+            <td class="px-3 py-1 font-mono text-text-secondary">{{ err.field }}</td>
+            <td class="px-3 py-1 text-text-primary">{{ err.message }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+{% endif %}

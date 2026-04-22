@@ -5,17 +5,30 @@
 {% block title %}Sensors — Custos{% endblock %}
 
 {% block content %}
-<div class="space-y-4">
-  {# Başlık + Yeni Tag Ekle butonu #}
+<div class="space-y-4" x-data="{ bulkImportOpen: false }"
+     @keydown.escape.window="bulkImportOpen = false"
+     @bulk-import-completed.window="bulkImportOpen = false">
+  {# Başlık + aksiyon butonları #}
   <div class="flex items-center justify-between">
     <h1 class="text-heading text-text-primary font-semibold">Sensors</h1>
-    <a href="/dashboard/sensors/new"
-       class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
-              bg-accent-primary text-white rounded-md
-              hover:bg-accent-primary/90 transition-colors">
-      {{ icon_inline('plus', class='w-4 h-4') }}
-      Yeni Tag Ekle
-    </a>
+    <div class="flex items-center gap-2">
+      <button type="button"
+              @click="bulkImportOpen = true"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                     text-text-secondary bg-bg-elevated border border-border-weak rounded-md
+                     hover:text-text-primary hover:border-border-medium transition-colors"
+              title="CSV ya da YAML dosyasından toplu tag yükle">
+        {{ icon_inline('upload', class='w-4 h-4') }}
+        Dosyadan İçe Aktar
+      </button>
+      <a href="/dashboard/sensors/new"
+         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                bg-accent-primary text-white rounded-md
+                hover:bg-accent-primary/90 transition-colors">
+        {{ icon_inline('plus', class='w-4 h-4') }}
+        Yeni Tag Ekle
+      </a>
+    </div>
   </div>
 
   {# Tag tablosu #}
@@ -36,11 +49,24 @@
         </thead>
         <tbody class="divide-y divide-border-weak"
                hx-get="/dashboard/sensors/live-values"
-               hx-trigger="every 5s"
+               hx-trigger="every 5s, bulk-import-completed from:body"
                hx-swap="innerHTML">
           {% include 'partials/sensor_live_rows.html' %}
         </tbody>
       </table>
+    </div>
+  </div>
+
+  {# Bulk import modal (Alpine state ile aç/kapa) #}
+  <div x-show="bulkImportOpen"
+       x-cloak
+       x-transition.opacity
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+       @click.self="bulkImportOpen = false">
+    <div class="bg-bg-surface border border-border-weak rounded-lg max-w-3xl w-full
+                max-h-[90vh] overflow-y-auto shadow-xl"
+         @click.stop>
+      {% include 'components/bulk_import_modal.html' %}
     </div>
   </div>
 </div>
