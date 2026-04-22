@@ -1,0 +1,98 @@
+# F9 AVM Template Pack — Sirkülasyon Pompası
+#
+# HVAC soğuk su veya ısıtma devresi sirkülasyon pompası. AVM'de chiller
+# ↔ kolektör, kolektör ↔ AHU veya kolektör ↔ FCU hattında kullanılır.
+# Çoğunlukla VFD kontrollü, tek veya yedekli (A+B) çalışır.
+
+slug: circulation_pump
+name: Sirkülasyon Pompası
+description: HVAC devresi sirkülasyon pompası (soğuk su veya ısıtma)
+icon: activity
+
+roles:
+  - role_key: suction_pressure
+    label: Emme Basıncı
+    unit_hint: bar
+    required: true
+    sort_order: 1
+  - role_key: discharge_pressure
+    label: Basma Basıncı
+    unit_hint: bar
+    required: true
+    sort_order: 2
+  - role_key: flow_rate
+    label: Debi
+    unit_hint: m³/h
+    required: false
+    sort_order: 3
+  - role_key: motor_current
+    label: Motor Akımı
+    unit_hint: A
+    required: true
+    sort_order: 4
+  - role_key: rpm
+    label: Motor Devri
+    unit_hint: rpm
+    required: false
+    sort_order: 5
+  - role_key: vibration
+    label: Titreşim (gövde)
+    unit_hint: mm/s
+    required: false
+    sort_order: 6
+  - role_key: winding_temp
+    label: Sargı Sıcaklığı
+    unit_hint: °C
+    required: false
+    sort_order: 7
+
+kpis:
+  - name: differential_pressure
+    formula: discharge_pressure - suction_pressure
+    unit: bar
+    description: Basma-emme basınç farkı
+  - name: specific_flow
+    formula: flow_rate / motor_current
+    unit: m³/(h·A)
+    description: Akım başına debi — verim göstergesi (düşüş = aşınma/tıkanma)
+
+alarm_defaults:
+  - role_key: suction_pressure
+    direction: low
+    set_point: 0.5
+    severity: crit
+    debounce_seconds: 30
+    hysteresis: 0.05
+    description: Emme basıncı düşük — kavitasyon/kuru çalışma riski
+  - role_key: motor_current
+    direction: high
+    set_point: 30.0
+    severity: warn
+    debounce_seconds: 60
+    hysteresis: 1.0
+    description: Motor akımı yüksek — aşırı yük veya tıkanma
+  - role_key: vibration
+    direction: high
+    set_point: 7.1
+    severity: warn
+    debounce_seconds: 120
+    hysteresis: 0.5
+    description: Titreşim ISO 10816 zone C üzerinde
+  - role_key: winding_temp
+    direction: high
+    set_point: 120.0
+    severity: crit
+    debounce_seconds: 30
+    hysteresis: 2.0
+    description: Sargı sıcaklığı F sınıfı limit üzerinde
+
+maintenance_defaults:
+  - title: Salmastra / mekanik salmastra kaçak kontrolü
+    period_days: 30
+    description: Aylık gözle kontrol, gerektiğinde torklama
+  - title: Yatak yağlama
+    period_days: 180
+    description: Üretici önerilerine göre 6 ay - 1 yıl arası
+  - title: Akuplman aşınma + balans kontrolü
+    period_days: 365
+    description: Yıllık mekanik bakım

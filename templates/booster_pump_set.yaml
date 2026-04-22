@@ -1,0 +1,104 @@
+# F9 AVM Template Pack — Booster Pump Set
+#
+# Kullanma suyu basınçlandırma pompa seti. AVM içi musluk/WC/duş için
+# bina giriş basıncını stabil tutmak üzere 2-4 adet pompa paralel. VFD
+# kontrollü, lead-lag değişimi ile eşit aşınma hedefi.
+
+slug: booster_pump_set
+name: Booster Pump Set
+description: Kullanma suyu basınçlandırma pompa seti (AVM şebeke basıncı)
+icon: activity
+
+roles:
+  - role_key: suction_pressure
+    label: Emme Basıncı
+    unit_hint: bar
+    required: true
+    sort_order: 1
+  - role_key: discharge_pressure
+    label: Basma Basıncı
+    unit_hint: bar
+    required: true
+    sort_order: 2
+  - role_key: flow_rate
+    label: Toplam Debi
+    unit_hint: m³/h
+    required: false
+    sort_order: 3
+  - role_key: pump1_status
+    label: Pompa 1 Durumu
+    unit_hint: off/low/high
+    required: true
+    sort_order: 4
+  - role_key: pump2_status
+    label: Pompa 2 Durumu
+    unit_hint: off/low/high
+    required: true
+    sort_order: 5
+  - role_key: pump3_status
+    label: Pompa 3 Durumu
+    unit_hint: off/low/high
+    required: false
+    sort_order: 6
+  - role_key: pump1_run_hours
+    label: Pompa 1 Toplam Çalışma Saati
+    unit_hint: h
+    required: false
+    sort_order: 7
+  - role_key: pump2_run_hours
+    label: Pompa 2 Toplam Çalışma Saati
+    unit_hint: h
+    required: false
+    sort_order: 8
+  - role_key: vibration
+    label: Titreşim (gövde)
+    unit_hint: mm/s
+    required: false
+    sort_order: 9
+
+kpis:
+  - name: differential_pressure
+    formula: discharge_pressure - suction_pressure
+    unit: bar
+    description: Basma-emme basınç farkı (pompa seti çıkışı)
+
+alarm_defaults:
+  - role_key: discharge_pressure
+    direction: low
+    set_point: 3.5
+    severity: warn
+    debounce_seconds: 60
+    hysteresis: 0.1
+    description: Basma basıncı düşük — pompa setpoint altına düştü
+  - role_key: discharge_pressure
+    direction: high
+    set_point: 7.5
+    severity: crit
+    debounce_seconds: 10
+    hysteresis: 0.2
+    description: Basma basıncı aşırı yüksek — PRV veya VFD kontrolü
+  - role_key: suction_pressure
+    direction: low
+    set_point: 1.0
+    severity: crit
+    debounce_seconds: 30
+    hysteresis: 0.1
+    description: Emme basıncı düşük — şebeke kesilmiş veya kuru çalışma riski
+  - role_key: vibration
+    direction: high
+    set_point: 7.1
+    severity: warn
+    debounce_seconds: 120
+    hysteresis: 0.5
+    description: Titreşim ISO 10816 zone C üzerinde — dengesizlik/yatak
+
+maintenance_defaults:
+  - title: Pompa seti gözle kontrol + kaçak
+    period_days: 30
+    description: Aylık salmastra, flanş, vana kaçak kontrolü
+  - title: Genleşme tankı ön basınç kontrolü
+    period_days: 180
+    description: 6 ayda bir tank ön basıncı (ön-şarj) ölçümü
+  - title: Motor yatak yağlama + akuplman kontrol
+    period_days: 365
+    description: Yıllık yatak yağlama, akuplman aşınma kontrolü

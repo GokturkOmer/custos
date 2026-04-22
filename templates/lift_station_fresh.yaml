@@ -1,0 +1,98 @@
+# F9 AVM Template Pack — Terfi Sistemi B (Temiz Su / Yangın)
+#
+# AVM temiz su deposu + yangın pompa seti. Tipik yapı: 1 ana jokey
+# pompa (sürekli basınç) + 1-2 elektrikli yangın pompası + 1 dizel
+# pompa (yedek). NFPA 20 / TS EN 12845 uyumu kritik. Tank seviyesi
+# ve hat basıncı sürekli izlenir.
+
+slug: lift_station_fresh
+name: Terfi Sistemi B (Temiz Su / Yangın)
+description: Temiz su deposu + yangın pompa seti (jokey + ana pompa)
+icon: activity
+
+roles:
+  - role_key: tank_level
+    label: Temiz Su Deposu Seviyesi
+    unit_hint: "%"
+    required: true
+    sort_order: 1
+  - role_key: discharge_pressure
+    label: Yangın Hattı Basıncı
+    unit_hint: bar
+    required: true
+    sort_order: 2
+  - role_key: jockey_pump_status
+    label: Jokey Pompa Durumu
+    unit_hint: off/on
+    required: true
+    sort_order: 3
+  - role_key: main_pump_status
+    label: Ana Yangın Pompası Durumu
+    unit_hint: off/on
+    required: true
+    sort_order: 4
+  - role_key: diesel_pump_status
+    label: Dizel Yedek Pompa Durumu
+    unit_hint: off/on
+    required: false
+    sort_order: 5
+  - role_key: jockey_run_hours
+    label: Jokey Pompa Toplam Çalışma Saati
+    unit_hint: h
+    required: false
+    sort_order: 6
+  - role_key: main_run_hours
+    label: Ana Pompa Toplam Çalışma Saati
+    unit_hint: h
+    required: false
+    sort_order: 7
+
+kpis:
+  - name: tank_margin
+    formula: tank_level - 30
+    unit: "%"
+    description: Minimum stok rezerv marjı (yangın için %30 dip rezervi var sayımı)
+
+alarm_defaults:
+  - role_key: tank_level
+    direction: low
+    set_point: 50.0
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 2.0
+    description: Tank seviyesi düşük — takviye beslemesi kontrolü
+  - role_key: tank_level
+    direction: low
+    set_point: 30.0
+    severity: crit
+    debounce_seconds: 60
+    hysteresis: 2.0
+    description: Tank kritik — yangın rezervi tehlikede
+  - role_key: discharge_pressure
+    direction: low
+    set_point: 5.0
+    severity: crit
+    debounce_seconds: 10
+    hysteresis: 0.2
+    description: Yangın hattı basıncı düşük — jokey pompa arızası olabilir
+  - role_key: discharge_pressure
+    direction: high
+    set_point: 10.0
+    severity: warn
+    debounce_seconds: 30
+    hysteresis: 0.2
+    description: Yangın hattı basıncı yüksek — PRV veya kaçak kontrolü
+
+maintenance_defaults:
+  - title: Haftalık jokey + ana pompa çalıştırma testi
+    period_days: 7
+    description: NFPA 20 / TS EN 12845 gereği haftalık çalıştırma + gözle kontrol
+  - title: Aylık ana pompa yük testi
+    period_days: 30
+    description: Aylık kapasite testi (nominal debi ve basınç doğrulama)
+  - title: Dizel pompa yakıt + akü + yağ kontrolü
+    period_days: 30
+    description: Dizel yedek pompa donanım kontrolü
+  - title: Yıllık NFPA 25 kapsamlı test
+    period_days: 365
+    description: Yıllık performans testi, flow testi, rapor

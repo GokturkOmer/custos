@@ -1,0 +1,83 @@
+# F9 AVM Template Pack — Terfi Sistemi A (Atık Su / Kanalizasyon)
+#
+# AVM bodrum / otopark / foseptik noktasında biriken atık suyu üst
+# kanalizasyon hattına pompalayan sistem. Tipik olarak 2 pompa (1 çalışan
+# + 1 yedek), seviye şamandırası ile devreye girer. Tıkanma ve yüksek
+# seviye uyarısı kritik — su baskını riski.
+
+slug: lift_station_waste
+name: Terfi Sistemi A (Atık Su)
+description: Atık su / kanalizasyon terfi pompa istasyonu
+icon: activity
+
+roles:
+  - role_key: sump_level
+    label: Kuyu Seviyesi
+    unit_hint: "%"
+    required: true
+    sort_order: 1
+  - role_key: pump1_status
+    label: Pompa 1 Durumu
+    unit_hint: off/on
+    required: true
+    sort_order: 2
+  - role_key: pump2_status
+    label: Pompa 2 Durumu (Yedek)
+    unit_hint: off/on
+    required: true
+    sort_order: 3
+  - role_key: pump1_run_hours
+    label: Pompa 1 Toplam Çalışma Saati
+    unit_hint: h
+    required: false
+    sort_order: 4
+  - role_key: pump2_run_hours
+    label: Pompa 2 Toplam Çalışma Saati
+    unit_hint: h
+    required: false
+    sort_order: 5
+  - role_key: high_level_alarm
+    label: Yüksek Seviye Şamandıra Switch
+    unit_hint: 0/1
+    required: false
+    sort_order: 6
+
+kpis:
+  - name: pump_hours_balance
+    formula: pump1_run_hours - pump2_run_hours
+    unit: h
+    description: Yedek değişim dengesi — yüksek fark = lead-lag sıra bozuk
+
+alarm_defaults:
+  - role_key: sump_level
+    direction: high
+    set_point: 80.0
+    severity: warn
+    debounce_seconds: 30
+    hysteresis: 5.0
+    description: Kuyu seviyesi yüksek — pompa tıkanmış veya yetersiz olabilir
+  - role_key: sump_level
+    direction: high
+    set_point: 95.0
+    severity: crit
+    debounce_seconds: 10
+    hysteresis: 2.0
+    description: Kritik seviye — su baskını riski, hemen müdahale
+  - role_key: high_level_alarm
+    direction: high
+    set_point: 0.5
+    severity: crit
+    debounce_seconds: 5
+    hysteresis: 0.0
+    description: Şamandıra switch tetik — acil kontrol
+
+maintenance_defaults:
+  - title: Kuyu tıkanıklık kontrolü + temizlik
+    period_days: 90
+    description: 3 ayda bir kuyu içi gözle kontrol, birikim temizliği
+  - title: Pompa çek-valf ve vana kontrolü
+    period_days: 180
+    description: Çek-valf kaçak, küresel vana tıkanıklık kontrolü
+  - title: Şamandıra ve seviye sensörü kalibrasyon
+    period_days: 365
+    description: Yıllık seviye sensörü doğruluk + şamandıra mekanik test
