@@ -20,7 +20,7 @@ Brief v1.6'nın W1–W7 haftalık dağılımı korunuyor; F11 (Historian) paketl
 | **W3** | 30 Nis–6 May | F9 AVM Template Pack | **B** (continuous aggregates) + **C** (auto-resolution query) | ~1.5 gün (F9 sabah, F11 öğleden sonra) |
 | **W4** | 7–13 May | F10 AVM Deploy | **D** (dashboard auto-res) + **E** (Parquet arşiv) + **F** (retention UI) | ~2.5 gün (F10 gündüz, F11 akşam) |
 | **W5** | 14–20 May | Saha entegrasyon 1 (Regin + Modbus map) | **I** (collector batch read) | ~3–4 gün |
-| **W6** | 21–27 May | Saha entegrasyon 2 (tuning + binding) | **H** (query guard) + tüm F11 regression test | ~0.5 + 1 gün test |
+| **W6** | 21–27 May | Saha entegrasyon 2 (tuning + binding) + **kullanıcı kılavuzu** | Denetim Adım 7 (deploy dry-run) | ~1 gün kılavuz + 1 gün dry-run |
 | **W7** | 28 May–4 Haz | Son test + buffer | buffer F11 gecikmesini tolere eder | — |
 | **5 Haz** | — | **Pilot Go-Live** | — | — |
 
@@ -76,10 +76,39 @@ Brief v1.6'nın W1–W7 haftalık dağılımı korunuyor; F11 (Historian) paketl
 - Yük testi: 200 tag × gerçek profil (saha keşfi sonrası register haritasına göre)
 - Bağımlılık: Saha keşfinden register komşuluk bilgisi (W4 öncesi lazım)
 
+**F9 — AVM Template Pack (hibrit genişletilmiş kapsam)** _(W3, 6–7 gün)_
+
+Kullanıcı 22 Nisan kararı ile C (hibrit) seçti ama kapsamı genişletti: tüm şablonlar şimdi + instance'lar saha sonrası.
+
+- YAML loader + seed runner altyapısı (~1 gün) — `templates/` dizini ilk kez
+- **9 şablon** (~5 gün):
+  - Chiller
+  - Enerji Analizörü
+  - AHU (klima santrali)
+  - FCU (fan coil)
+  - Cooling Tower
+  - Booster Pump Set
+  - Sirkülasyon Pompası
+  - Terfi Sistemi A (ör. atık su) — şablon + 4 instance toplam iki terfi türü
+  - Terfi Sistemi B (ör. temiz su / yangın)
+- Dashboard entegrasyonu + seed + test (~1 gün)
+
+Not: 6–7 gün × 6 saat/gün = 36–42 saat. W3'e (5 iş günü × 6 saat = 30 saat) tam sığmaz, **W4'e kısa taşma** beklenir. F10 ile overlap olabilir; tolere edilir.
+
+**Kullanıcı kılavuzu** _(W6, 1–2 gün)_
+- Dashboard tur (sensors/alarms/kpis/overview/maintenance/assistant)
+- Alarm yönetimi (durum geçişleri, kontrol listesi başlatma)
+- Overview chart düzenleme (tag seçimi, zaman pencereleri, multi-axis)
+- Bakım workflow'u (checklist, schedule, task tamamlama)
+- Uzaktan destek prosedürü (VPN + temel teşhis adımları)
+- PDF + kısa yüz yüze eğitim formatında teslim (pilot kabul madde 5)
+
 ### Kritik bağımlılıklar
 
 1. **`pyarrow` ekleme onayı** — ✅ alındı (20 Nisan)
-2. **Gerçek tag sayısı / polling mix + register adres haritası** — arkadaştan bekleniyor, W4 öncesi lazım (Paket I gruplama algoritması için register komşuluk bilgisi kritik)
+2. **Gerçek tag sayısı / polling mix + register adres haritası** — arkadaştan bekleniyor, W4 öncesi lazım (Paket I gruplama algoritması için register komşuluk bilgisi kritik). Saha keşfi check-list kişisel belge olarak hazırlandı (repo dışı) — Mayıs ortasına kadar ortağa iletilmeli.
+3. **Mini PC (Intel N100/N200 + 2 TB NVMe)** — sahaya giderken alınacak, öncesi test yapılmayacak. Endurance/chaos/deploy dry-run tamamı ayrı WSL2 Ubuntu instance'ında yapılacak. DOA riski bilinçli kabul edildi.
+4. **Kullanıcı kılavuzu PDF'i + VPN uzaktan destek testi** — W6 işi, pilot kabul madde 5 gereği.
 3. **2 TB NVMe SSD siparişi** — pilot teslimine en geç W5 başı lazım
 
 ### Kesme önceliği (gecikme olursa feda sırası)
@@ -116,7 +145,7 @@ Her başvuru bağımsız; hepsi aynı anda ilerleyebilir. Ücretsiz olanlar (MS/
 AVM pilotundan öğrenilen dersler fabrika brief'ini şekillendirir. Go-live ~Eylül–Ekim tahmini.
 
 **Akış 3 — v1.1 teknik backlog** _(Eylül–Aralık)_
-Donmuş kalemler (cloud sync, çoklu-müşteri dashboard, BACnet/IP, SMS bildirim, LLM chatbot upgrade) önceliklendirilir. Pilotlardan gelen gerçek talep baz alınır.
+Donmuş kalemler (cloud sync, çoklu-müşteri dashboard, BACnet/IP, SMS bildirim, LLM chatbot upgrade, **pyproject.toml bağımlılık beyaz liste denetimi**) önceliklendirilir. Pilotlardan gelen gerçek talep baz alınır.
 
 **Akış 4 — "Custos Benchmark" ikinci ürün** _(Kasım–Aralık)_
 Kullanıcının mevcut paralel projesi ile kesişim konuşulacak. Başlangıç: ayrı brief taslağı, hedef pazar tanımı, teknik altyapı farkı (cross-tenant anonim aggregate katmanı).
@@ -170,3 +199,5 @@ Bu iş planı v1'dir. Değişiklik durumları:
 ### Değişiklik notları
 
 - **22 Nisan 2026:** F11 Paket I (Batch Modbus Read) W5 haftasına eklendi. Gerekçe: AVM pilotunda 200 tag öngörüldü; mevcut collector tag başına ayrı `read_holding_registers` çağrısı atıyor, PLC başına saniyede yüzlerce TCP round-trip Modbus slave'i (8–32 concurrent connection tipik) yorar. Komşu register'lar tek çağrıda okunursa ~10x daha az PLC yükü. "Sadece okur, asla yazmaz" prensibinin okuma tarafındaki uzantısı. Kesme önceliği: asla kesilmez (saha cihazları güvenliği).
+- **22 Nisan 2026 (2):** F9 kapsam netleşti (C hibrit, genişletilmiş): 9 şablon + YAML altyapısı W3'te, 6–7 gün. Terfi 2 şablon × 4 instance. W6'ya kullanıcı kılavuzu eklendi. Saha keşfi check-list hazırlandı (kişisel belge, repo dışı — ortağa iletilecek). Mini PC sahaya giderken alınacak kararı kayıt altına alındı (test'ler ayrı WSL'de). Kapasite: 6 saat/gün × 44 gün = 264 saat, kalan işlerin tahmini 33–36 gün karşılığı — sıkı ama yeterli, buffer W7'de.
+- **22 Nisan 2026 (3):** v1.1 backlog'una **pyproject.toml bağımlılık beyaz liste denetimi** eklendi (Bölüm B Akış 3). Gerekçe: denetim Adım 1 kod seviyesinde mimari kuralları kapsar ama pyproject.toml'a yasak paket eklenmesini yakalamaz. Pilot sonrası ekip büyümesiyle risk artar. Araç önerisi: `scripts/dependency_policy.py` + `[tool.custos.dependencies]` allowlist.
