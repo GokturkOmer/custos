@@ -1,0 +1,13 @@
+# Custos uygulama log rotasyonu
+# /var/log/custos altindaki dosyalar icin (structlog file handler placeholder).
+# Systemd journal zaten journald tarafindan ayri rotate edilir.
+/var/log/custos/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 custos custos
+    sharedscripts
+}
