@@ -45,6 +45,8 @@ async def main() -> None:
             database=database,
             per_host_concurrency=settings.collector_per_host_concurrency,
             fast_polling_budget=settings.collector_fast_polling_budget,
+            batch_read_enabled=settings.collector_batch_read_enabled,
+            batch_gap_tolerance=settings.collector_batch_gap_tolerance,
         )
     except FastPollingBudgetError:
         await logger.aerror(

@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     # Aşım init veya activation'da hata olarak reddedilir.
     collector_fast_polling_budget: int = 10
 
+    # Batch Modbus read (F11 Paket I). Komşu register'ları tek
+    # read_holding_registers çağrısında okur, PLC round-trip'i ~10x azaltır.
+    # Acil geri dönüş için feature flag: False -> eski per-tag yol.
+    collector_batch_read_enabled: bool = True
+
+    # Batch gruplama gap toleransı (register adres boşluğu). 0 -> sadece
+    # tam ardışık adresler birleşir; 8 -> aradaki 8 register'lık boşluk
+    # tek batch'te okunur (dummy register'lar decode edilmez, atlanır).
+    # Saha'da register haritasına göre tune edilir, re-deploy gerekmez.
+    collector_batch_gap_tolerance: int = 8
+
     # Query guard eşikleri (F11 Paket H). Pilot saatinde aşırı geniş sorgular
     # (200 tag × 2 yıl × ham gibi) sistemin cevap süresini patlatmasın diye
     # `query_readings_auto` içinde katman override / reject ile uygulanır.

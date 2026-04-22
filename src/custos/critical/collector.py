@@ -566,6 +566,9 @@ class ModbusCollector:
             "Collector başlatılıyor",
             tag_sayısı=len(self._tags),
             base_tick_ms=self._base_tick_ms,
+            batch_read_enabled=self._batch_read_enabled,
+            batch_gap_tolerance=self._batch_gap_tolerance,
+            per_host_concurrency=self._per_host_concurrency,
         )
 
         self._init_schedule()
