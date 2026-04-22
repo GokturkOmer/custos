@@ -102,3 +102,8 @@ asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["src"]
+
+[tool.coverage.report]
+# Geçici eşik: 22 Nisan 2026 baseline %66. Hedef pilot öncesi %75.
+# Yükseltme planı (denetim A2 raporu): W3 → 70, W5 → 75. Düşürme = regression.
+fail_under = 65

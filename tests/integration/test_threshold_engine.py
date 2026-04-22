@@ -202,3 +202,82 @@ async def test_engine_ignores_disabled_threshold(
 
     active = await db.get_active_alarm_for_threshold(threshold.id)
     assert active is None  # Pasif olduğu için değerlendirilmedi
+
+
+@pytest.mark.usefixtures("_check_db_available")
+async def test_engine_low_direction_breach_and_clear(
+    db: TimescaleDBDatabase,
+) -> None:
+    """Low direction (alt eşik) breach + hysteresis clear yolu çalışmalı.
+
+    Mevcut testler high direction kapsıyor; low direction _is_breach ve
+    _can_clear_with_hysteresis dallarını ayrıca kapsar.
+    """
+    await _setup_tag_with_reading(db, "TEST_ENG5", 5.0)  # 10 altı = breach
+    threshold = await db.insert_threshold(
+        Threshold(
+            tag_id="TEST_ENG5",
+            name="Low Pressure Test",
+            direction="low",
+            set_point=10.0,
+            debounce_seconds=0,
+            hysteresis=2.0,  # 10 + 2 = 12 üstüne çıkmalı temizlemek için
+        ),
+    )
+    assert threshold.id is not None
+
+    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
+    await engine._check_cycle()
+    await engine._check_cycle()
+
+    active = await db.get_active_alarm_for_threshold(threshold.id)
+    assert active is not None
+    assert active.trigger_value == 5.0
+
+    # 11.0: breach yok ama hysteresis bandında (10+2=12 altında) → temizlenmemeli
+    await _setup_tag_with_reading(db, "TEST_ENG5", 11.0)
+    await engine._check_cycle()
+    still = await db.get_active_alarm_for_threshold(threshold.id)
+    assert still is not None  # Hysteresis bandında
+
+    # 13.0: hysteresis bandının üstü → temizlenmeli
+    await _setup_tag_with_reading(db, "TEST_ENG5", 13.0)
+    await engine._check_cycle()
+    cleared = await db.get_active_alarm_for_threshold(threshold.id)
+    assert cleared is None
+
+
+@pytest.mark.usefixtures("_check_db_available")
+async def test_engine_clears_debounce_tracker_when_reading_disappears(
+    db: TimescaleDBDatabase,
+) -> None:
+    """Debounce başladıktan sonra reading silinirse tracker temizlenmeli.
+
+    State machine D→A→D geçişi: ilk cycle breach (tracker'a yazıldı),
+    okuma silindi (Durum: tag için reading None) → tracker'dan düşmeli.
+    """
+    pool = db._get_pool()
+    await _setup_tag_with_reading(db, "TEST_ENG6", 90.0)
+    threshold = await db.insert_threshold(
+        Threshold(
+            tag_id="TEST_ENG6",
+            name="Tracker Cleanup Test",
+            direction="high",
+            set_point=80.0,
+            debounce_seconds=60,  # Hiç dolmayacak — tracker'da kalsın
+        ),
+    )
+    assert threshold.id is not None
+
+    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
+    await engine._check_cycle()
+    assert threshold.id in engine._debounce_tracker  # İlk breach kaydedildi
+
+    # Reading'i sil (tag'in mevcut okuması yok artık)
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM tag_readings WHERE tag_id = $1", "TEST_ENG6")
+
+    await engine._check_cycle()
+    assert threshold.id not in engine._debounce_tracker  # Tracker temizlendi
+    active = await db.get_active_alarm_for_threshold(threshold.id)
+    assert active is None  # Alarm da tetiklenmemiş olmalı
