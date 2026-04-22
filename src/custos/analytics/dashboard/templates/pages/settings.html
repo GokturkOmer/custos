@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% from 'components/icon.html' import icon_inline %}
+{% from 'components/status_badge.html' import status_badge %}
 
 {% block title %}Settings — Custos{% endblock %}
 
@@ -260,6 +261,84 @@
         {{ icon_inline('cpu', class='w-4 h-4') }}
         Bağlantı Profillerini Yönet
       </a>
+    </div>
+  </div>
+
+  {# E) AVM Template Pack (F9) #}
+  <div id="avm-pack" class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak flex items-center justify-between">
+      <h2 class="text-panel-title text-text-primary font-semibold">AVM Template Pack</h2>
+      {% if avm_pack_total > 0 %}
+      <span class="text-small
+                   {% if avm_pack_seeded == avm_pack_total %}text-status-ok
+                   {% elif avm_pack_seeded == 0 %}text-status-warn
+                   {% else %}text-text-secondary{% endif %}">
+        {{ avm_pack_seeded }} / {{ avm_pack_total }} yüklü
+      </span>
+      {% endif %}
+    </div>
+    <div class="p-4 space-y-4">
+      {% if avm_pack_total == 0 %}
+      <p class="text-small text-text-disabled">
+        YAML şablonları yüklenmedi — ``templates/`` dizinini ve loader günlüklerini kontrol edin.
+      </p>
+      {% else %}
+      <p class="text-small text-text-secondary">
+        YAML dizininden okunan {{ avm_pack_total }} AVM şablonu. Seed butonu tüm şablonları
+        veritabanına idempotent biçimde yazar (slug bazında upsert).
+      </p>
+
+      {% if avm_pack_missing %}
+      <div class="text-small text-status-warn">
+        Eksik seed: {{ avm_pack_missing | join(', ') }}
+      </div>
+      {% endif %}
+
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="bg-bg-elevated">
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Slug</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">İsim</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Rol</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">KPI</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Alarm</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Bakım</th>
+              <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border-weak">
+            {% for entry in avm_pack_entries %}
+            <tr class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2 text-cell text-text-primary font-mono text-small">{{ entry.slug }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">{{ entry.name }}</td>
+              <td class="px-3 py-2 text-cell text-text-secondary font-mono">{{ entry.role_count }}</td>
+              <td class="px-3 py-2 text-cell text-text-secondary font-mono">{{ entry.kpi_count }}</td>
+              <td class="px-3 py-2 text-cell text-text-secondary font-mono">{{ entry.alarm_count }}</td>
+              <td class="px-3 py-2 text-cell text-text-secondary font-mono">{{ entry.maintenance_count }}</td>
+              <td class="px-3 py-2 text-cell">
+                {% if entry.seeded %}
+                  {{ status_badge('Yüklü', 'ok') }}
+                {% else %}
+                  {{ status_badge('Beklemede', 'warn') }}
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <form method="post" action="/dashboard/settings/avm-pack/seed">
+        <button type="submit"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                       bg-accent-primary/10 text-accent-primary border border-accent-primary/30 rounded-md
+                       hover:bg-accent-primary/20 transition-colors">
+          {{ icon_inline('layers', class='w-4 h-4') }}
+          AVM Template Pack'i seed et
+        </button>
+      </form>
+      {% endif %}
     </div>
   </div>
 </div>

@@ -27,6 +27,12 @@ from custos.analytics.assistant.service import get_assistant_retriever
 from custos.analytics.disk_telemetry import DiskMonitor, DiskUsage, get_disk_usage
 from custos.analytics.push_sender import send_push_notifications
 from custos.analytics.scanner import ModbusScanner
+from custos.analytics.templates import (
+    TemplateLoadError,
+    TemplateSchema,
+    default_template_dir,
+    load_templates,
+)
 from custos.shared.config import settings
 from custos.shared.database import (
     AssetInstance,
@@ -1193,18 +1199,48 @@ async def templates_list(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/templates.html", ctx)
 
 
+def _get_avm_template_pack(request: Request) -> dict[str, TemplateSchema]:
+    """App.state'teki AVM Template Pack dict'ini döndürür.
+
+    Lifespan tarafından doldurulmuşsa onu kullanır. Lifespan çalışmamışsa
+    (test senaryoları) lazy olarak YAML dizininden yükler ve cache'ler.
+    YAML yüklenemezse boş dict döner — endpoint'ler uygun HTTP durumu
+    döndürür.
+    """
+    pack: dict[str, TemplateSchema] | None = getattr(
+        request.app.state, "avm_template_pack", None,
+    )
+    if pack is None:
+        try:
+            pack = {
+                entry.schema.slug: entry.schema
+                for entry in load_templates(default_template_dir())
+            }
+        except TemplateLoadError:
+            pack = {}
+        request.app.state.avm_template_pack = pack
+    return pack
+
+
 @router.get("/templates/{template_id:int}", response_class=HTMLResponse)
 async def template_detail(request: Request, template_id: int) -> HTMLResponse:
-    """Template detayı — roller ve KPI tanımları."""
+    """Template detayı — roller, KPI tanımları ve (F9) AVM pack advisory preview."""
     db = _get_db(request)
     tmpl = await db.get_asset_template(template_id)
     if tmpl is None:
         raise HTTPException(status_code=404, detail="Template bulunamadı")
 
+    # F9: YAML'da tanımlı advisory alarm + bakım önerilerini slug ile eşleştir.
+    # Preview sadece AVM pack şablonlarında görünür; diğer template'ler None.
+    pack = _get_avm_template_pack(request)
+    avm_schema = pack.get(tmpl.slug)
     ctx = _base_context(
         page_title=f"Template: {tmpl.name}",
         active_nav="/dashboard/templates",
         tmpl=tmpl,
+        avm_alarm_defaults=avm_schema.alarm_defaults if avm_schema else [],
+        avm_maintenance_defaults=avm_schema.maintenance_defaults if avm_schema else [],
+        avm_pack_member=avm_schema is not None,
     )
     return templates.TemplateResponse(request, "pages/template_detail.html", ctx)
 
@@ -2050,6 +2086,27 @@ async def settings_page(request: Request) -> HTMLResponse:
     else:
         prev_year, prev_month = local_now.year, local_now.month - 1
 
+    # F9: AVM Template Pack durumu — YAML'da tanımlı slug'ların kaçı DB'de seed edilmiş.
+    # `avm_template_pack` lifespan sırasında yüklenir; boş dict seed'siz durum.
+    pack = _get_avm_template_pack(request)
+    db_slugs = {t.slug for t in await db.list_asset_templates()}
+    avm_pack_total = len(pack)
+    avm_pack_seeded = sum(1 for slug in pack if slug in db_slugs)
+    avm_pack_missing = sorted(slug for slug in pack if slug not in db_slugs)
+    avm_pack_entries = [
+        {
+            "slug": slug,
+            "name": schema.name,
+            "description": schema.description,
+            "seeded": slug in db_slugs,
+            "role_count": len(schema.roles),
+            "kpi_count": len(schema.kpis),
+            "alarm_count": len(schema.alarm_defaults),
+            "maintenance_count": len(schema.maintenance_defaults),
+        }
+        for slug, schema in sorted(pack.items())
+    ]
+
     ctx = _base_context(
         page_title="Settings",
         active_nav="/dashboard/settings",
@@ -2068,6 +2125,10 @@ async def settings_page(request: Request) -> HTMLResponse:
         archive_dir=archive_dir_str,
         archive_prev_year=prev_year,
         archive_prev_month=prev_month,
+        avm_pack_total=avm_pack_total,
+        avm_pack_seeded=avm_pack_seeded,
+        avm_pack_missing=avm_pack_missing,
+        avm_pack_entries=avm_pack_entries,
     )
     return templates.TemplateResponse(request, "pages/settings.html", ctx)
 
@@ -2163,6 +2224,36 @@ async def api_disk_usage(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "partials/disk_usage_widget.html", ctx,
     )
+
+
+@router.post("/settings/avm-pack/seed", response_class=HTMLResponse)
+async def seed_avm_template_pack(request: Request) -> RedirectResponse:
+    """AVM Template Pack'i manuel seed eder (F9).
+
+    Dashboard'dan tıklama ile idempotent biçimde ``upsert_asset_template``
+    çağrılır. YAML yüklenemezse 503. Tamamlandığında settings sayfasına
+    redirect, audit log kaydı düşülür.
+    """
+    db = _get_db(request)
+    pack = _get_avm_template_pack(request)
+    if not pack:
+        raise HTTPException(
+            status_code=503,
+            detail="AVM Template Pack yüklü değil — loader hatası veya YAML eksik",
+        )
+
+    count = 0
+    for schema in pack.values():
+        await db.upsert_asset_template(schema.to_asset_template())
+        count += 1
+
+    await db.insert_audit_log(AuditLogEntry(
+        category="seed",
+        action="avm_template_pack",
+        detail=f"{count} AVM şablonu dashboard üzerinden upsert edildi",
+    ))
+    await logger.ainfo("AVM Template Pack seed tamamlandı", count=count)
+    return RedirectResponse(url="/dashboard/settings#avm-pack", status_code=303)
 
 
 @router.post("/settings/notifications", response_class=HTMLResponse)

@@ -20,6 +20,12 @@ from custos.analytics.dashboard.app import _archive_lock, get_static_files_app, 
 from custos.analytics.disk_telemetry import DiskMonitor
 from custos.analytics.kpi_engine import KpiEngine
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
+from custos.analytics.templates import (
+    TemplateLoadError,
+    TemplateSchema,
+    default_template_dir,
+    load_templates,
+)
 from custos.analytics.threshold_engine import ThresholdEngine
 from custos.shared.config import settings
 from custos.shared.database import DatabaseInterface, create_database
@@ -53,6 +59,27 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         await db.connect()
         application.state.db = db
         await logger.ainfo("Uygulama başlatıldı, DB bağlantısı kuruldu")
+
+        # AVM Template Pack — YAML şablonlarını memory'de tut (F9 Paket E).
+        # Dashboard template detayında advisory alarm/bakım preview'ı için.
+        # Yüklenemezse boş dict (seed yapılmamış olabilir).
+        try:
+            avm_pack: dict[str, TemplateSchema] = {
+                entry.schema.slug: entry.schema
+                for entry in load_templates(default_template_dir())
+            }
+            application.state.avm_template_pack = avm_pack
+            await logger.ainfo(
+                "AVM Template Pack yüklendi",
+                count=len(avm_pack),
+                slugs=sorted(avm_pack.keys()),
+            )
+        except TemplateLoadError as exc:
+            application.state.avm_template_pack = {}
+            await logger.awarning(
+                "AVM Template Pack yüklenemedi — dashboard preview boş",
+                error=str(exc),
+            )
 
         # Threshold engine'i başlat
         engine = ThresholdEngine(db=db)

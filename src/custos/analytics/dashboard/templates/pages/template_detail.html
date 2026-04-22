@@ -65,6 +65,14 @@
     </div>
   </div>
 
+  {# F9 AVM Pack üyesi ise rozet #}
+  {% if avm_pack_member %}
+  <div class="flex items-center gap-2 text-small text-accent-primary">
+    {{ icon_inline('layers', class='w-4 h-4') }}
+    <span>AVM Template Pack üyesi — aşağıdaki alarm ve bakım önerileri YAML'dan yüklendi.</span>
+  </div>
+  {% endif %}
+
   {# KPI tanımları #}
   {% if tmpl.kpi_definitions %}
   <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
@@ -97,6 +105,80 @@
   {% else %}
   <div class="bg-bg-surface border border-border-weak rounded-lg p-4">
     <p class="text-small text-text-disabled">Bu template için KPI tanımı bulunmuyor.</p>
+  </div>
+  {% endif %}
+
+  {# F9 advisory alarm önerileri — DB'ye yazılmaz, binding sırasında kullanıcı aktarır #}
+  {% if avm_alarm_defaults %}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak flex items-center justify-between">
+      <h2 class="text-body font-semibold text-text-primary">Önerilen Alarm Eşikleri ({{ avm_alarm_defaults | length }})</h2>
+      <span class="text-small text-text-disabled">Advisory — instance oluştururken kullanıcı aktarır</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Rol</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Yön</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Eşik</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Şiddet</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Debounce</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Histerisi</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Açıklama</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% for alarm in avm_alarm_defaults %}
+          <tr class="hover:bg-bg-elevated transition-colors">
+            <td class="px-3 py-2 text-cell text-text-primary font-mono text-small">{{ alarm.role_key }}</td>
+            <td class="px-3 py-2 text-cell text-text-primary">{{ 'yüksek' if alarm.direction == 'high' else 'düşük' }}</td>
+            <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ alarm.set_point }}</td>
+            <td class="px-3 py-2 text-cell">
+              {% if alarm.severity == 'crit' %}
+                {{ status_badge('Kritik', 'crit') }}
+              {% else %}
+                {{ status_badge('Uyarı', 'warn') }}
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-cell text-text-secondary">{{ alarm.debounce_seconds }} s</td>
+            <td class="px-3 py-2 text-cell text-text-secondary">{{ alarm.hysteresis }}</td>
+            <td class="px-3 py-2 text-cell text-text-secondary">{{ alarm.description or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {# F9 advisory bakım önerileri — F8a schedule'a manuel aktarım #}
+  {% if avm_maintenance_defaults %}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak flex items-center justify-between">
+      <h2 class="text-body font-semibold text-text-primary">Önerilen Periyodik Bakımlar ({{ avm_maintenance_defaults | length }})</h2>
+      <span class="text-small text-text-disabled">Advisory — F8a schedule'a manuel aktarım</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Başlık</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Periyot (gün)</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Açıklama</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% for m in avm_maintenance_defaults %}
+          <tr class="hover:bg-bg-elevated transition-colors">
+            <td class="px-3 py-2 text-cell text-text-primary">{{ m.title }}</td>
+            <td class="px-3 py-2 text-cell text-text-secondary font-mono">{{ m.period_days }}</td>
+            <td class="px-3 py-2 text-cell text-text-secondary">{{ m.description or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
   {% endif %}
 </div>
