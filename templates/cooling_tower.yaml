@@ -1,0 +1,87 @@
+# F9 AVM Template Pack — Cooling Tower
+#
+# Soğutma kulesi. Chiller kondenseri tarafından ısınmış suyu atmosferle
+# buharlaşma yoluyla soğutur. AVM'de genellikle çatıda, chiller sayısı
+# kadar (veya N+1 yedekli) konumlanır.
+
+slug: cooling_tower
+name: Cooling Tower (Soğutma Kulesi)
+description: Açık çevrim soğutma kulesi — chiller kondenser soğutması
+icon: cloud
+
+roles:
+  - role_key: water_in_temp
+    label: Giriş Su Sıcaklığı (Chiller → CT)
+    unit_hint: °C
+    required: true
+    sort_order: 1
+  - role_key: water_out_temp
+    label: Çıkış Su Sıcaklığı (CT → Chiller)
+    unit_hint: °C
+    required: true
+    sort_order: 2
+  - role_key: fan_status
+    label: Fan Durumu
+    unit_hint: off/low/high
+    required: true
+    sort_order: 3
+  - role_key: makeup_valve_status
+    label: Takviye Su Valf Durumu
+    unit_hint: on/off
+    required: false
+    sort_order: 4
+  - role_key: basin_level
+    label: Havuz Su Seviyesi
+    unit_hint: "%"
+    required: false
+    sort_order: 5
+  - role_key: ambient_air_temp
+    label: Dış Hava Sıcaklığı
+    unit_hint: °C
+    required: false
+    sort_order: 6
+  - role_key: ambient_wet_bulb
+    label: Yaş Termometre Sıcaklığı
+    unit_hint: °C
+    required: false
+    sort_order: 7
+
+kpis:
+  - name: cooling_range
+    formula: water_in_temp - water_out_temp
+    unit: °C
+    description: Soğutma aralığı (CT'de düşürülen sıcaklık)
+  - name: approach_temp
+    formula: water_out_temp - ambient_wet_bulb
+    unit: °C
+    description: Yaklaşım sıcaklığı — CT performans göstergesi (düşük = iyi)
+
+alarm_defaults:
+  - role_key: water_out_temp
+    direction: high
+    set_point: 32.0
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 0.5
+    description: Çıkış su sıcaklığı yüksek — fan/su dağıtım/fouling
+  - role_key: basin_level
+    direction: low
+    set_point: 30.0
+    severity: warn
+    debounce_seconds: 60
+    hysteresis: 2.0
+    description: Havuz seviyesi düşük — takviye su valfi kontrolü
+
+maintenance_defaults:
+  - title: Dolgu ve dağıtım borusu temizlik
+    period_days: 180
+    description: Kireçlenme, yosun ve tortu temizliği
+  - title: Biocide/kimyasal dozaj kontrolü
+    period_days: 30
+    description: Aylık kimyasal dozaj seviye ve pompa kontrolü
+  - title: Fan balans + kayış + yatak kontrolü
+    period_days: 180
+    description: 6 ayda bir mekanik kontrol, yağlama
+  - title: Lejyonella numune
+    period_days: 90
+    description: 3 ayda bir mikrobiyolojik test (yerel yönetmelik)

@@ -1,0 +1,114 @@
+# F9 AVM Template Pack — AHU (Air Handling Unit)
+#
+# Klima santrali. AVM ortak alan (mağazalar, koridorlar) için taze hava
+# + iklimlendirme. Büyük bir binada 4-10 adet AHU olabilir; her biri
+# ayrı instance'tır.
+
+slug: ahu
+name: AHU (Klima Santrali)
+description: Taze hava üfleme ve karıştırma fonksiyonlu klima santrali
+icon: wind
+
+roles:
+  - role_key: supply_air_temp
+    label: Üfleme Hava Sıcaklığı
+    unit_hint: °C
+    required: true
+    sort_order: 1
+  - role_key: return_air_temp
+    label: Dönüş Hava Sıcaklığı
+    unit_hint: °C
+    required: true
+    sort_order: 2
+  - role_key: supply_air_humidity
+    label: Üfleme Hava Nemi
+    unit_hint: "%"
+    required: false
+    sort_order: 3
+  - role_key: return_air_humidity
+    label: Dönüş Hava Nemi
+    unit_hint: "%"
+    required: false
+    sort_order: 4
+  - role_key: supply_fan_status
+    label: Üfleme Fan Durumu
+    unit_hint: on/off
+    required: true
+    sort_order: 5
+  - role_key: return_fan_status
+    label: Dönüş Fan Durumu
+    unit_hint: on/off
+    required: false
+    sort_order: 6
+  - role_key: filter_dp
+    label: Filtre Fark Basıncı
+    unit_hint: Pa
+    required: false
+    sort_order: 7
+  - role_key: cooling_coil_valve
+    label: Soğutma Serpantini Valf Açıklığı
+    unit_hint: "%"
+    required: false
+    sort_order: 8
+  - role_key: heating_coil_valve
+    label: Isıtma Serpantini Valf Açıklığı
+    unit_hint: "%"
+    required: false
+    sort_order: 9
+  - role_key: damper_position
+    label: Karışım Damper Açıklığı
+    unit_hint: "%"
+    required: false
+    sort_order: 10
+  - role_key: outside_air_temp
+    label: Dış Hava Sıcaklığı
+    unit_hint: °C
+    required: false
+    sort_order: 11
+
+kpis:
+  - name: delta_t_air
+    formula: return_air_temp - supply_air_temp
+    unit: °C
+    description: Üfleme-dönüş hava sıcaklık farkı
+  - name: delta_humidity_air
+    formula: return_air_humidity - supply_air_humidity
+    unit: "%"
+    description: Üfleme-dönüş nem farkı
+
+alarm_defaults:
+  - role_key: filter_dp
+    direction: high
+    set_point: 250.0
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 10.0
+    description: Filtre ΔP eşiği — filtre tıkanmış olabilir, kontrol/değişim
+  - role_key: supply_air_temp
+    direction: high
+    set_point: 26.0
+    severity: warn
+    debounce_seconds: 180
+    hysteresis: 0.5
+    description: Üfleme hava sıcak — soğutma kapasitesi veya valf kontrolü
+  - role_key: supply_air_temp
+    direction: low
+    set_point: 12.0
+    severity: warn
+    debounce_seconds: 180
+    hysteresis: 0.5
+    description: Üfleme hava çok soğuk — setpoint kontrolü
+
+maintenance_defaults:
+  - title: Filtre görsel kontrol ve ΔP notu
+    period_days: 30
+    description: Aylık filtre kontrolü + fark basınç değer notu
+  - title: Filtre değişimi
+    period_days: 180
+    description: 6 ayda bir ön + ince filtre değişimi (ΔP'ye göre daha sık)
+  - title: Serpantin temizlik + kondens tava kontrolü
+    period_days: 180
+    description: Soğutma serpantin temizlik + kondens tahliye tıkanıklığı
+  - title: Kayış gerginliği + fan yatak yağlama
+    period_days: 90
+    description: Üfleme ve dönüş fanı mekanik kontrol

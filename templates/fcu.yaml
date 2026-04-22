@@ -1,0 +1,67 @@
+# F9 AVM Template Pack — FCU (Fan Coil Unit)
+#
+# Fan coil cihazı. AVM'de genellikle mağaza içi veya ofis klimalaması
+# için noktasal çözüm. Bir binada 50-200 adet olabilir; F9 şablonu
+# tekil bir FCU'yu temsil eder, toplu yönetim W5+ dashboard filtre işi.
+
+slug: fcu
+name: FCU (Fan Coil)
+description: Fan coil cihazı — noktasal iklimlendirme (oda/zon bazlı)
+icon: wind
+
+roles:
+  - role_key: room_temp
+    label: Oda Sıcaklığı
+    unit_hint: °C
+    required: true
+    sort_order: 1
+  - role_key: setpoint
+    label: Hedef Sıcaklık (Setpoint)
+    unit_hint: °C
+    required: true
+    sort_order: 2
+  - role_key: fan_status
+    label: Fan Durumu
+    unit_hint: off/low/med/high
+    required: true
+    sort_order: 3
+  - role_key: valve_position
+    label: Valf Açıklığı
+    unit_hint: "%"
+    required: false
+    sort_order: 4
+  - role_key: room_humidity
+    label: Oda Nemi
+    unit_hint: "%"
+    required: false
+    sort_order: 5
+
+kpis:
+  - name: setpoint_deviation
+    formula: room_temp - setpoint
+    unit: °C
+    description: Oda ile hedef sıcaklık arasındaki fark (+ sıcak, - soğuk)
+
+alarm_defaults:
+  - role_key: room_temp
+    direction: high
+    set_point: 28.0
+    severity: warn
+    debounce_seconds: 600
+    hysteresis: 0.5
+    description: Oda sıcaklığı yüksek — FCU soğutma yetersiz veya arızalı
+  - role_key: room_temp
+    direction: low
+    set_point: 17.0
+    severity: warn
+    debounce_seconds: 600
+    hysteresis: 0.5
+    description: Oda sıcaklığı düşük — setpoint veya sezon modu hatalı olabilir
+
+maintenance_defaults:
+  - title: Filtre temizlik/değişim
+    period_days: 90
+    description: 3 ayda bir filtre temizliği veya değişimi
+  - title: Kondens tahliye + tava temizlik
+    period_days: 180
+    description: Kondens tıkanıklığı + tava sızıntı kontrolü
