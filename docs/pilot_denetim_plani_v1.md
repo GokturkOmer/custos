@@ -17,13 +17,16 @@ Pilot kabul kriteri "14 gün kesintisiz çalışma" — bu testi sahada ilk kez 
 
 | # | Adım | Süre | Ne zaman | Kritik mi? |
 |---|---|---|---|---|
-| 1 | Mimari kural denetim scripti | 2–3 saat | Bu hafta (W2) | **Evet** |
-| 2 | Test coverage ölçümü | 2 saat | Bu hafta (W2) | **Evet** |
-| 3 | Dependency zafiyet taraması | 30 dk | Bu hafta (W2) | Evet |
-| 4 | Bağımsız kod incelemesi (subagent) | 4–6 saat | W3 | Evet |
-| 5 | Uzun süreli dayanıklılık testi | **Pasif 7–14 gün** | W3 başı → W5 | **Evet** |
-| 6 | Chaos/recovery testleri | 1 gün | W5 | Evet |
-| 7 | Deploy dry-run (temiz VM/PC) | 1 gün | W6 başı | **Evet** |
+| 1 | Mimari kural denetim scripti | 2–3 saat | W2 ✅ TAMAM | **Evet** |
+| 2 | Test coverage ölçümü | 2 saat | W2 ✅ TAMAM (baseline %66.50, fail_under=65) | **Evet** |
+| 3 | Dependency zafiyet taraması | 30 dk | W2 ✅ TAMAM (2 HIGH açık — fix kararı bekliyor) | Evet |
+| 4 | Bağımsız kod incelemesi (subagent) | 4–6 saat | **W6** (feature-complete sonrası) | Evet |
+| 5 | Uzun süreli dayanıklılık testi | **Pasif 7 gün** | **W7 başı (28 May - 3 Haz)** — feature freeze sonrası | **Evet** |
+| 6 | Chaos/recovery testleri | 1 gün | W6 | Evet |
+| 7 | Deploy dry-run (temiz WSL2 instance) | 1 gün | W7 başı | **Evet** |
+| + | Coverage boost (A4 bulgularına göre) | 1–2 gün | W7 (A4 sonrası) | Opsiyonel — regression guard `fail_under=65` zaten var |
+
+**Revize akış gerekçesi (22 Nisan 2026):** "Önce fix/borç → sonra test" prensibi. F9 + F10 + Paket I + saha entegrasyonu feature-complete olmadan A4/A5/A6/A7 yapmak eksik denetim demektir. Feature freeze 27 Mayıs akşam, ardından denetim yoğunluğu W6-W7'de.
 
 ---
 
@@ -265,10 +268,10 @@ Adım 1 ve 2 tamam (script ve coverage raporu agent'a context olarak verilir).
 ## Adım 5 — Uzun süreli dayanıklılık testi ⭐
 
 ### Amaç
-Pilot kabul kriteri "**14 gün kesintisiz**" — bunu ilk kez sahada görmek istemeyiz. Simülatörle 7–14 gün çalıştır; memory leak, pool exhaustion, tick miss drift, disk tüketimini ölç.
+Pilot kabul kriteri "**14 gün kesintisiz**" — test ortamında 7 gün yeterli doğrulama (memory leak/pool exhaustion/tick miss ilk 48-72 saatte görünür, gün 3-7 monoton). Pilotta zaten 14 gün gerçek yük altında koşacak (5-19 Haziran).
 
 ### Süre
-**Pasif 7–14 gün** (aktif çalışma 2–3 saat: kurulum + izleme + rapor).
+**Pasif 7 gün** — **feature-complete sonrası, 28 Mayıs başlangıç, 3 Haziran bitiş** (4 Haz Go/No-Go günü rapor hazır). Aktif çalışma 2–3 saat (kurulum + izleme + rapor).
 
 ### Önkoşul
 - Simülatör 200 tag gerçek profiliyle güncellenmiş (W5'te saha keşfinden gelen register haritası)
@@ -302,19 +305,19 @@ Pilot kabul kriteri "**14 gün kesintisiz**" — bunu ilk kez sahada görmek ist
   - Tick miss oranı **gün geçtikçe artıyor** → queue birikimi
   - Disk **retention'a rağmen büyüyor** → retention job çalışmıyor
 
-- [ ] **5.6** — 7. günde ara rapor. Sorun yoksa 14. güne kadar devam.
+- [ ] **5.6** — 3. günde ara kontrol (RSS memory trendi, pool durumu). Kırmızı bayrak varsa hemen fix.
 
-- [ ] **5.7** — 14. günde final rapor: `docs/endurance_test_report_2026_05_XX.md`.
+- [ ] **5.7** — 7. günde (3 Haziran) final rapor: `_personal/pilot/endurance_test_report_2026_06_03.md`.
 
 ### Başarı kriteri
-- 14 gün kesintisiz, 0 crash
+- **7 gün kesintisiz**, 0 crash
 - RSS memory düz (ilk 24 saatlik warm-up hariç)
 - DB connection count stabil
 - Tick miss oranı **< %1** (ilk gün ile son gün aynı seviye)
-- Disk retention'a uygun hareket ediyor (büyüme → sabit → azalma dönüşleri görünüyor)
+- Disk retention'a uygun hareket ediyor (7 gün compression policy tam cycle görünür)
 
 ### Beklenen çıktı
-14 günlük CSV + grafik + rapor.
+7 günlük CSV + grafik + rapor (kişisel, `_personal/pilot/` içinde).
 
 ---
 
@@ -431,17 +434,19 @@ Güncellenen `deploy/README_PILOT.md` + dry-run raporu.
 
 ---
 
-## Genel takvim
+## Genel takvim (22 Nisan 2026 revize)
 
 ```
-W2 (23–29 Nis):   [Adım 1] [Adım 2] [Adım 3]          ← hızlı, hemen değer
-W3 (30 Nis–6 May): [Adım 4] [Adım 5 başla ————————→
-W4 (7–13 May):    ——————————————————————————————
-W5 (14–20 May):   [Adım 5 biter] [Adım 6]
-W6 (21–27 May):   [Adım 7] + chaos/dry-run bulgu fix
-W7 (28 May–4 Haz): SON BUFFER — bulunan son sorunlar kapatılır
-5 Haziran:        PILOT GO-LIVE
+W2 (23–29 Nis):         [Adım 1 ✅] [Adım 2 ✅] [Adım 3 ✅]  ← W2 denetim tamam
+W3-W5 (30 Nis–20 May):  Feature işleri — F9 + F10 + Paket I + Saha 1
+W6 (21–27 May):         Saha 2 + [Adım 4 subagent] + [Adım 6 chaos] + kılavuz
+Feature freeze:         27 Mayıs akşam
+W7 (28 May–3 Haz):      [Adım 5 — 7 gün endurance pasif] + [Adım 7 dry-run] + A4 fix + (ops.) coverage boost
+4 Haziran:              Adım 5 final rapor + Go/No-Go
+5 Haziran:              PILOT GO-LIVE
 ```
+
+Gerekçe: **"Önce fix/teknik borç → sonra test"**. Yazılmamış kod üzerinde denetim yapmak boşa iş; feature-complete koda A4+A5+A6+A7 daha doğru bulgu verir.
 
 ---
 
