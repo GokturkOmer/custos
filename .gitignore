@@ -24,3 +24,9 @@ postgres-data/
 
 # Tailwind standalone binary
 tools/tailwindcss
+
+# Kişisel klasör (pazarlama, sunumlar, prompt'lar, website kaynağı — repo dışı)
+_personal/
+
+# Backup dosyaları
+*.bak
