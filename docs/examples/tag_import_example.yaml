@@ -1,0 +1,89 @@
+# Custos bulk tag import — örnek YAML formatı.
+# Üst seviyede `tags:` anahtarı altında liste ya da doğrudan kök liste
+# olarak verilebilir. Modbus konvansiyonel adresleme (40001+) kabul
+# edilir; sistem içinde 0-based protokol adresine indirgenir.
+tags:
+  - tag_id: CHIL1_TEMP_OUT
+    name: Chiller 1 - Cikis Sicakligi
+    modbus_host: 192.168.1.10
+    modbus_port: 502
+    unit_id: 1
+    register_address: 40001
+    register_type: float32
+    gain: 1.0
+    offset: 0.0
+    unit: degC
+    polling_interval_ms: 1000
+
+  - tag_id: CHIL1_TEMP_IN
+    name: Chiller 1 - Giris Sicakligi
+    modbus_host: 192.168.1.10
+    register_address: 40003
+    register_type: float32
+    unit: degC
+    polling_interval_ms: 1000
+
+  - tag_id: CHIL1_PRESS
+    name: Chiller 1 - Basinc
+    modbus_host: 192.168.1.10
+    register_address: 40005
+    register_type: uint16
+    gain: 0.1
+    unit: bar
+    polling_interval_ms: 1000
+
+  - tag_id: CHIL1_CURRENT
+    name: Chiller 1 - Kompressor Akim
+    modbus_host: 192.168.1.10
+    register_address: 40007
+    register_type: uint16
+    gain: 0.1
+    unit: A
+    polling_interval_ms: 1000
+
+  - tag_id: CHIL1_STATUS
+    name: Chiller 1 - Durum
+    modbus_host: 192.168.1.10
+    register_address: 40009
+    register_type: uint16
+    polling_interval_ms: 10000
+
+  - tag_id: AHU1_SUP_TEMP
+    name: AHU 1 - Ufleme Sicakligi
+    modbus_host: 192.168.1.11
+    register_address: 40001
+    register_type: float32
+    unit: degC
+    polling_interval_ms: 10000
+
+  - tag_id: AHU1_RET_TEMP
+    name: AHU 1 - Donus Sicakligi
+    modbus_host: 192.168.1.11
+    register_address: 40003
+    register_type: float32
+    unit: degC
+    polling_interval_ms: 10000
+
+  - tag_id: AHU1_FAN_SPEED
+    name: AHU 1 - Fan Hizi
+    modbus_host: 192.168.1.11
+    register_address: 40005
+    register_type: uint16
+    unit: rpm
+    polling_interval_ms: 10000
+
+  - tag_id: AHU1_FILTER_DP
+    name: AHU 1 - Filtre Basinc Farki
+    modbus_host: 192.168.1.11
+    register_address: 40007
+    register_type: float32
+    unit: Pa
+    polling_interval_ms: 10000
+
+  - tag_id: AHU1_OA_DAMPER
+    name: AHU 1 - Taze Hava Damper
+    modbus_host: 192.168.1.11
+    register_address: 40009
+    register_type: uint16
+    unit: "%"
+    polling_interval_ms: 10000

@@ -16,14 +16,23 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from custos.analytics.archiver import ArchiveResult, ParquetArchiver
 from custos.analytics.assistant.retriever import AssistantRetriever
 from custos.analytics.assistant.service import get_assistant_retriever
+from custos.analytics.dashboard.bulk_import import (
+    BulkImportParseError,
+    CommitResult,
+    DuplicateMode,
+    PreviewResult,
+    parse_file,
+    process_bulk_import,
+    validate_rows,
+)
 from custos.analytics.disk_telemetry import DiskMonitor, DiskUsage, get_disk_usage
 from custos.analytics.push_sender import send_push_notifications
 from custos.analytics.scanner import ModbusScanner
@@ -71,6 +80,10 @@ _EMPTY_FORM_STR_LIST: Any = Form(default_factory=list)
 # FastAPI Depends() argüman default'unda ruff B008 uyarısı verdiği için
 # module-level singleton ile sarmalıyoruz (aynı Form(...) sarması gibi).
 _ASSISTANT_RETRIEVER_DEP: Any = Depends(get_assistant_retriever)
+
+# FastAPI File(...) varsayılanı da ruff B008 uyarısı verir; aynı
+# sarmalama tekniğiyle module-level singleton tutuyoruz.
+_FILE_UPLOAD: Any = File(...)
 
 
 # Polling preset → ms eşleştirmesi
@@ -761,6 +774,235 @@ async def sensor_new_form(request: Request) -> HTMLResponse:
         fast_polling_budget=settings.collector_fast_polling_budget,
     )
     return templates.TemplateResponse(request, "pages/sensor_form.html", ctx)
+
+
+# --- Bulk import: CSV / YAML ile toplu tag yükleme ---
+
+# Statik "bulk-import" path'i `/sensors/{tag_id}/...` pattern'inden önce
+# tanımlanıyor ki FastAPI router eşleşmesinde çakışma olmasın.
+
+
+def _parse_duplicate_mode(raw: str) -> DuplicateMode:
+    """Query/form değerini DuplicateMode enum'una çevirir; geçersizse 400."""
+    try:
+        return DuplicateMode(raw.strip().lower())
+    except ValueError as exc:
+        valid = ", ".join(m.value for m in DuplicateMode)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz mode '{raw}'. Kabul edilenler: {valid}",
+        ) from exc
+
+
+def _is_htmx(request: Request) -> bool:
+    """HTMX isteği mi — HX-Request header var."""
+    return request.headers.get("HX-Request", "").lower() == "true"
+
+
+def _preview_to_dict(preview: PreviewResult) -> dict[str, Any]:
+    """PreviewResult'u JSON uyumlu sözlüğe çevirir."""
+    return {
+        "ok": preview.ok,
+        "valid_count": len(preview.valid),
+        "error_count": len(preview.errors),
+        "warning_count": len(preview.warnings),
+        "rows": [
+            {
+                "row_num": row_num,
+                "tag_id": row.tag_id,
+                "name": row.name,
+                "modbus_host": row.modbus_host,
+                "register_address": row.register_address,
+                "polling_interval_ms": row.polling_interval_ms,
+            }
+            for row_num, row in preview.valid
+        ],
+        "errors": [
+            {"row": e.row_num, "field": e.field, "message": e.message}
+            for e in preview.errors
+        ],
+    }
+
+
+def _commit_to_dict(commit: CommitResult) -> dict[str, Any]:
+    """CommitResult'u JSON uyumlu sözlüğe çevirir."""
+    return {
+        "ok": commit.ok,
+        "inserted": commit.inserted,
+        "updated": commit.updated,
+        "skipped": commit.skipped,
+        "errors": [
+            {"row": e.row_num, "field": e.field, "message": e.message}
+            for e in commit.errors
+        ],
+    }
+
+
+# Örnek dosyalar — docs/examples/ içinde repo ile birlikte versiyonlanır;
+# kullanıcı modal'dan indirebilsin diye beyaz liste ile FileResponse'a
+# sarmalanır (path traversal engeli).
+_BULK_IMPORT_EXAMPLES: dict[str, tuple[str, str]] = {
+    "tag_import_example.csv": ("tag_import_example.csv", "text/csv"),
+    "tag_import_example.yaml": ("tag_import_example.yaml", "application/x-yaml"),
+    "README.md": ("README.md", "text/markdown"),
+}
+
+
+def _repo_docs_examples_dir() -> Path:
+    """docs/examples/ klasörünün mutlak path'i."""
+    # src/custos/analytics/dashboard/app.py → 4 üstü = repo kökü
+    return _MODULE_DIR.parent.parent.parent.parent / "docs" / "examples"
+
+
+@router.get("/sensors/bulk-import", response_class=HTMLResponse)
+async def sensor_bulk_import_modal(request: Request) -> HTMLResponse:
+    """Bulk import modal'ını HTMX partial olarak döndürür."""
+    return templates.TemplateResponse(
+        request,
+        "components/bulk_import_modal.html",
+        {"preview": None, "commit": None, "filename": None},
+    )
+
+
+@router.get("/sensors/bulk-import/example/{name}")
+async def sensor_bulk_import_example(name: str) -> FileResponse:
+    """docs/examples/ içindeki beyaz liste dosyayı indir olarak sunar."""
+    if name not in _BULK_IMPORT_EXAMPLES:
+        raise HTTPException(status_code=404, detail="Örnek bulunamadı")
+    rel_name, mime = _BULK_IMPORT_EXAMPLES[name]
+    path = _repo_docs_examples_dir() / rel_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Örnek dosya eksik")
+    return FileResponse(path, media_type=mime, filename=rel_name)
+
+
+@router.post("/sensors/bulk-import/preview", response_model=None)
+async def sensor_bulk_import_preview(
+    request: Request,
+    file: UploadFile = _FILE_UPLOAD,
+) -> HTMLResponse | JSONResponse:
+    """Yüklenen dosyayı parse + validate eder, DB'ye dokunmaz.
+
+    HTMX isteği ise preview partial'ı HTML olarak döner; aksi durumda JSON.
+    """
+    filename = file.filename or ""
+    content = await file.read()
+
+    try:
+        raw_rows = parse_file(filename, content)
+    except BulkImportParseError as exc:
+        if _is_htmx(request):
+            return templates.TemplateResponse(
+                request,
+                "partials/bulk_import_preview.html",
+                {
+                    "preview": None,
+                    "parse_error": str(exc),
+                    "filename": filename,
+                },
+                status_code=400,
+            )
+        return JSONResponse(
+            {"ok": False, "parse_error": str(exc)},
+            status_code=400,
+        )
+
+    preview = validate_rows(raw_rows)
+
+    if _is_htmx(request):
+        return templates.TemplateResponse(
+            request,
+            "partials/bulk_import_preview.html",
+            {
+                "preview": preview,
+                "parse_error": None,
+                "filename": filename,
+            },
+        )
+    return JSONResponse(_preview_to_dict(preview))
+
+
+@router.post("/sensors/bulk-import", response_model=None)
+async def sensor_bulk_import_commit(
+    request: Request,
+    file: UploadFile = _FILE_UPLOAD,
+    mode: str = Form("reject"),
+) -> HTMLResponse | JSONResponse:
+    """Dosyayı parse + validate + DB'ye yazar.
+
+    Mode:
+    - reject (default): çakışma → 409, hiçbiri yazılmaz
+    - update: mevcut tag_id güncellenir, yeniler eklenir
+    - insert: mevcut tag_id'ler atlanır, yalnız yeniler eklenir
+    """
+    # Önce parametre doğrulaması (DB bağımlılığından önce — geçersiz mode
+    # durumunda 400 verip, DB olmasa bile net hata mesajı döndürür).
+    duplicate_mode = _parse_duplicate_mode(mode)
+    db = _get_db(request)
+    filename = file.filename or ""
+    content = await file.read()
+
+    try:
+        raw_rows = parse_file(filename, content)
+    except BulkImportParseError as exc:
+        if _is_htmx(request):
+            return templates.TemplateResponse(
+                request,
+                "partials/bulk_import_result.html",
+                {
+                    "commit": None,
+                    "parse_error": str(exc),
+                    "filename": filename,
+                },
+                status_code=400,
+            )
+        return JSONResponse(
+            {"ok": False, "parse_error": str(exc)},
+            status_code=400,
+        )
+
+    result = await process_bulk_import(db, raw_rows, duplicate_mode)
+
+    # Reject modda DB çarpışması → 409; aksi halde genel hata → 400
+    if not result.ok:
+        if duplicate_mode == DuplicateMode.REJECT and any(
+            "zaten var" in e.message for e in result.errors
+        ):
+            status_code = 409
+        else:
+            status_code = 400
+        if _is_htmx(request):
+            return templates.TemplateResponse(
+                request,
+                "partials/bulk_import_result.html",
+                {
+                    "commit": result,
+                    "parse_error": None,
+                    "filename": filename,
+                },
+                status_code=status_code,
+            )
+        return JSONResponse(_commit_to_dict(result), status_code=status_code)
+
+    await logger.ainfo(
+        "Bulk tag import tamamlandı",
+        filename=filename,
+        mode=duplicate_mode.value,
+        inserted=result.inserted,
+        updated=result.updated,
+        skipped=result.skipped,
+    )
+
+    if _is_htmx(request):
+        response = templates.TemplateResponse(
+            request,
+            "partials/bulk_import_result.html",
+            {"commit": result, "parse_error": None, "filename": filename},
+        )
+        # HTMX tarafı sensor listesini yenilemek için trigger atar.
+        response.headers["HX-Trigger"] = "bulk-import-completed"
+        return response
+    return JSONResponse(_commit_to_dict(result))
 
 
 @router.post("/sensors", response_class=HTMLResponse)

@@ -1,0 +1,11 @@
+tag_id,name,modbus_host,modbus_port,unit_id,register_address,register_type,gain,offset,unit,polling_interval_ms
+CHIL1_TEMP_OUT,Chiller 1 - Cikis Sicakligi,192.168.1.10,502,1,40001,float32,1.0,0.0,degC,1000
+CHIL1_TEMP_IN,Chiller 1 - Giris Sicakligi,192.168.1.10,502,1,40003,float32,1.0,0.0,degC,1000
+CHIL1_PRESS,Chiller 1 - Basinc,192.168.1.10,502,1,40005,uint16,0.1,0.0,bar,1000
+CHIL1_CURRENT,Chiller 1 - Kompressor Akim,192.168.1.10,502,1,40007,uint16,0.1,0.0,A,1000
+CHIL1_STATUS,Chiller 1 - Durum,192.168.1.10,502,1,40009,uint16,1.0,0.0,,10000
+AHU1_SUP_TEMP,AHU 1 - Ufleme Sicakligi,192.168.1.11,502,1,40001,float32,1.0,0.0,degC,10000
+AHU1_RET_TEMP,AHU 1 - Donus Sicakligi,192.168.1.11,502,1,40003,float32,1.0,0.0,degC,10000
+AHU1_FAN_SPEED,AHU 1 - Fan Hizi,192.168.1.11,502,1,40005,uint16,1.0,0.0,rpm,10000
+AHU1_FILTER_DP,AHU 1 - Filtre Basinc Farki,192.168.1.11,502,1,40007,float32,1.0,0.0,Pa,10000
+AHU1_OA_DAMPER,AHU 1 - Taze Hava Damper,192.168.1.11,502,1,40009,uint16,1.0,0.0,%,10000
