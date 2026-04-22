@@ -1,0 +1,110 @@
+# F9 AVM Template Pack — Enerji Analizörü
+#
+# 3 faz elektrik enerji analizörü. AVM ana dağıtım panosu ve kritik
+# alt panolar için. Toplam enerji sayacı cumulative bir counter; KPI
+# motoru anlık değer üzerinden çalışır, delta hesabı historian tarafı.
+
+slug: energy_analyzer
+name: Enerji Analizörü
+description: 3 faz elektrik enerji analizörü (AVM ana veya alt panolar)
+icon: zap
+
+roles:
+  - role_key: active_power_kw
+    label: Anlık Aktif Güç
+    unit_hint: kW
+    required: true
+    sort_order: 1
+  - role_key: energy_total_kwh
+    label: Toplam Aktif Enerji
+    unit_hint: kWh
+    required: true
+    sort_order: 2
+  - role_key: current_l1
+    label: Akım L1
+    unit_hint: A
+    required: true
+    sort_order: 3
+  - role_key: current_l2
+    label: Akım L2
+    unit_hint: A
+    required: true
+    sort_order: 4
+  - role_key: current_l3
+    label: Akım L3
+    unit_hint: A
+    required: true
+    sort_order: 5
+  - role_key: voltage_l1
+    label: Gerilim L1
+    unit_hint: V
+    required: true
+    sort_order: 6
+  - role_key: voltage_l2
+    label: Gerilim L2
+    unit_hint: V
+    required: true
+    sort_order: 7
+  - role_key: voltage_l3
+    label: Gerilim L3
+    unit_hint: V
+    required: true
+    sort_order: 8
+  - role_key: power_factor
+    label: Güç Faktörü
+    unit_hint: ""
+    required: false
+    sort_order: 9
+  - role_key: frequency
+    label: Frekans
+    unit_hint: Hz
+    required: false
+    sort_order: 10
+
+kpis:
+  - name: average_current
+    formula: (current_l1 + current_l2 + current_l3) / 3
+    unit: A
+    description: 3 faz ortalama akım
+  - name: average_voltage
+    formula: (voltage_l1 + voltage_l2 + voltage_l3) / 3
+    unit: V
+    description: 3 faz ortalama gerilim (faz-nötr)
+
+alarm_defaults:
+  - role_key: power_factor
+    direction: low
+    set_point: 0.92
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 0.01
+    description: Güç faktörü düşük — kompanzasyon bankını kontrol et
+  - role_key: voltage_l1
+    direction: low
+    set_point: 207.0
+    severity: warn
+    debounce_seconds: 60
+    hysteresis: 1.0
+    description: L1 gerilim düşük (±%10 nominal sınır 207-253 V)
+  - role_key: voltage_l1
+    direction: high
+    set_point: 253.0
+    severity: warn
+    debounce_seconds: 60
+    hysteresis: 1.0
+    description: L1 gerilim yüksek (±%10 nominal sınır)
+  - role_key: frequency
+    direction: low
+    set_point: 49.5
+    severity: crit
+    debounce_seconds: 10
+    hysteresis: 0.05
+    description: Frekans düşük — jeneratöre geçiş sırasında normal olabilir
+
+maintenance_defaults:
+  - title: Pano sıkı bağlantı + termal kamera kontrolü
+    period_days: 180
+    description: Yılda iki kez termografi, cıvata torku kontrolü
+  - title: Kompanzasyon kondansatör bank ölçümü
+    period_days: 365
+    description: Kapasite testi, bank hücresi değiştirme ihtiyacı kontrolü
