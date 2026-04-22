@@ -6,6 +6,12 @@ batch halinde yazar. Critical loop'un ana bileşeni.
 Per-tag polling desteği: her tag kendi polling_interval_ms
 değerine göre okunur. GCD base tick yaklaşımı kullanılır.
 
+Batch Modbus read (F11 Paket I): Komşu register'lar `batch_grouper`
+aracılığıyla tek `read_holding_registers(start, count=N)` çağrısında
+okunur — PLC başına ~10x daha az TCP round-trip. Batch hatasında
+per-tag fallback (eski yol) devreye girer; tek bozuk tag tüm batch'i
+düşürmez. `collector_batch_read_enabled=False` ile kapatılabilir.
+
 Mimari kural: Bu modül SADECE pymodbus ve abstract DB arayüzünü
 kullanır. asyncpg, SQL string'leri veya ORM kodu burada YAZILMAZ.
 Modbus write fonksiyonları ASLA çağrılmaz.
@@ -21,6 +27,12 @@ from typing import Any
 import structlog
 from pymodbus.client import AsyncModbusTcpClient
 
+from custos.critical.batch_grouper import BatchGroup, group_tags_for_batch_read
+from custos.critical.register_decoder import (
+    RegisterDecodeError,
+    decode_register,
+    expected_word_count,
+)
 from custos.shared.database import DatabaseInterface, TagReading, TagRecord
 
 logger = structlog.get_logger(logger_name="collector")
@@ -28,6 +40,8 @@ logger = structlog.get_logger(logger_name="collector")
 # Varsayılan değerler — Settings override etmezse kullanılır.
 _DEFAULT_FAST_POLLING_BUDGET = 10
 _DEFAULT_PER_HOST_CONCURRENCY = 5
+_DEFAULT_BATCH_READ_ENABLED = True
+_DEFAULT_BATCH_GAP_TOLERANCE = 8
 
 # Fast polling eşiği (ms). Bu değerin altındaki polling "fast" sayılır.
 _FAST_POLLING_THRESHOLD_MS = 1000
@@ -83,6 +97,8 @@ class ModbusCollector:
         database: DatabaseInterface,
         per_host_concurrency: int = _DEFAULT_PER_HOST_CONCURRENCY,
         fast_polling_budget: int = _DEFAULT_FAST_POLLING_BUDGET,
+        batch_read_enabled: bool = _DEFAULT_BATCH_READ_ENABLED,
+        batch_gap_tolerance: int = _DEFAULT_BATCH_GAP_TOLERANCE,
     ) -> None:
         self._tags = [t for t in tags if t.status == "active"]
         self._database = database
@@ -90,6 +106,10 @@ class ModbusCollector:
         self._shutdown_event = asyncio.Event()
         self._per_host_concurrency = max(1, per_host_concurrency)
         self._fast_polling_budget = fast_polling_budget
+
+        # Batch read ayarları (F11 Paket I)
+        self._batch_read_enabled = batch_read_enabled
+        self._batch_gap_tolerance = max(0, batch_gap_tolerance)
 
         # Per-tag polling durumu
         self._next_due: dict[str, float] = {}
@@ -99,6 +119,11 @@ class ModbusCollector:
         # Tick metrikleri — yük testi ve gözlemlenebilirlik için
         self._total_tick_count = 0
         self._slow_tick_count = 0
+
+        # Batch metrikleri (Paket E observability)
+        self._batch_read_count = 0
+        self._single_read_count = 0
+        self._batch_fallback_count = 0
 
         # Fast polling budget kontrolü — aşım varsa init'te raise edilir.
         self._enforce_fast_polling_budget()
@@ -246,17 +271,188 @@ class ModbusCollector:
     ) -> list[TagReading]:
         """Tek bir (host, port) için tag'leri paralel okur.
 
+        Batch path (default): `group_tags_for_batch_read` ile komşu
+        register'lar tek çağrıda okunur. Batch hatasında per-tag fallback.
+        Single path (batch_read_enabled=False): eski per-tag okuma — acil
+        geri dönüş için feature flag.
+
         `Semaphore` ile aynı anda en fazla `per_host_concurrency` okuma
         yapılır. Async Modbus client tek TCP socket üstünden sıraya alır;
         bütçeyi sınırlamak slave'i (8-32 concurrent connection tipik) korur.
         """
         sem = asyncio.Semaphore(self._per_host_concurrency)
 
-        async def _one(t: TagRecord) -> TagReading:
-            async with sem:
-                return await self._read_tag(t)
+        if not self._batch_read_enabled:
+            # Feature flag kapalı → eski per-tag yol
+            async def _one(t: TagRecord) -> TagReading:
+                async with sem:
+                    self._single_read_count += 1
+                    return await self._read_tag(t)
 
-        return await asyncio.gather(*[_one(t) for t in tags])
+            return await asyncio.gather(*[_one(t) for t in tags])
+
+        # Batch path — gruplama aynı host'ta unit_id bazında da ayırır.
+        batches = group_tags_for_batch_read(
+            tags, gap_tolerance=self._batch_gap_tolerance
+        )
+
+        async def _one_batch(batch: BatchGroup) -> list[TagReading]:
+            async with sem:
+                return await self._read_batch(batch)
+
+        batch_results = await asyncio.gather(
+            *[_one_batch(b) for b in batches]
+        )
+        return [r for batch_readings in batch_results for r in batch_readings]
+
+    async def _read_batch(self, batch: BatchGroup) -> list[TagReading]:
+        """Tek bir batch'i okur, decode eder, TagReading listesi döner.
+
+        Hata yönetimi (atomicity):
+            - Bağlantı yoksa: batch'in tüm tag'leri quality_flag=1.
+            - response.isError() veya exception: per-tag fallback
+              (`_fallback_read_tags`) — tek bozuk tag tüm batch'i düşürmez.
+            - Tek tag'in decode hatası: o tag quality_flag=1, diğerleri
+              başarılı.
+        """
+        now = datetime.now(UTC)
+        client = await self._get_or_create_client(
+            batch.modbus_host, batch.modbus_port
+        )
+
+        if not await self._ensure_connected(
+            client, batch.modbus_host, batch.modbus_port
+        ):
+            await logger.awarning(
+                "Batch okunamadı: bağlantı yok",
+                host=batch.modbus_host,
+                port=batch.modbus_port,
+                start=batch.start_address,
+                tag_sayısı=batch.tag_count,
+            )
+            return [
+                TagReading(
+                    timestamp=now,
+                    tag_id=t.tag_id,
+                    value=0.0,
+                    quality_flag=1,
+                )
+                for t in batch.tags
+            ]
+
+        loop = asyncio.get_event_loop()
+        try:
+            t0 = loop.time()
+            response: Any = await client.read_holding_registers(
+                batch.start_address,
+                count=batch.count,
+                device_id=batch.unit_id,
+            )
+            duration_ms = (loop.time() - t0) * 1000.0
+
+            if response.isError():
+                await logger.awarning(
+                    "Batch okuma hatası, per-tag fallback",
+                    host=batch.modbus_host,
+                    start=batch.start_address,
+                    count=batch.count,
+                    hata=str(response),
+                )
+                self._batch_fallback_count += 1
+                return await self._fallback_read_tags(batch.tags)
+
+            registers = list(response.registers)
+            if len(registers) < batch.count:
+                await logger.awarning(
+                    "Batch response eksik register, fallback",
+                    alınan=len(registers),
+                    beklenen=batch.count,
+                )
+                self._batch_fallback_count += 1
+                return await self._fallback_read_tags(batch.tags)
+
+            readings = self._decode_batch_response(batch, registers, now)
+            self._batch_read_count += 1
+
+            await logger.adebug(
+                "Batch okundu",
+                host=batch.modbus_host,
+                start=batch.start_address,
+                count=batch.count,
+                tag_sayısı=batch.tag_count,
+                süre_ms=round(duration_ms, 1),
+            )
+            return readings
+
+        except Exception:
+            await logger.aerror(
+                "Batch okuma exception, per-tag fallback",
+                host=batch.modbus_host,
+                start=batch.start_address,
+                exc_info=True,
+            )
+            self._batch_fallback_count += 1
+            return await self._fallback_read_tags(batch.tags)
+
+    def _decode_batch_response(
+        self,
+        batch: BatchGroup,
+        registers: list[int],
+        timestamp: datetime,
+    ) -> list[TagReading]:
+        """Batch response'undan her tag için register'ı kes + decode.
+
+        Tek tag'in decode hatası diğerlerini etkilemez (quality_flag=1).
+        """
+        readings: list[TagReading] = []
+        for tag in batch.tags:
+            offset = tag.register_address - batch.start_address
+            span = expected_word_count(tag.register_type)
+            try:
+                raw = tuple(registers[offset : offset + span])
+                if len(raw) != span:
+                    raise RegisterDecodeError(
+                        f"Tag {tag.tag_id}: offset {offset} için yeterli "
+                        f"register yok (span={span}, toplam={len(registers)})"
+                    )
+                value = decode_register(raw, tag)
+                readings.append(
+                    TagReading(
+                        timestamp=timestamp,
+                        tag_id=tag.tag_id,
+                        value=value,
+                        quality_flag=0,
+                    )
+                )
+            except RegisterDecodeError as e:
+                # Tek tag'in decode hatası — log + quality_flag=1, batch'in
+                # diğer tag'leri devam eder.
+                logger.warning(
+                    "Tag decode hatası",
+                    tag_id=tag.tag_id,
+                    hata=str(e),
+                )
+                readings.append(
+                    TagReading(
+                        timestamp=timestamp,
+                        tag_id=tag.tag_id,
+                        value=0.0,
+                        quality_flag=1,
+                    )
+                )
+        return readings
+
+    async def _fallback_read_tags(
+        self, tags: list[TagRecord]
+    ) -> list[TagReading]:
+        """Batch başarısız olduğunda tag bazlı per-tag retry.
+
+        Eski single-read path'i kullanır; tek bozuk tag tüm batch'i düşürmez.
+        Budget semaphore bu noktada zaten dış kapsamda tutulduğu için burada
+        tekrar sınırlama yapılmaz.
+        """
+        self._single_read_count += len(tags)
+        return await asyncio.gather(*[self._read_tag(t) for t in tags])
 
     async def _run_tick(self) -> None:
         """Tek bir tick: süresi gelen tag'leri oku, batch yaz.
@@ -303,6 +499,9 @@ class ModbusCollector:
                 başarılı=ok_count,
                 hatalı=fail_count,
                 host_sayısı=len(by_host),
+                batch_okuma=self._batch_read_count,
+                tekil_okuma=self._single_read_count,
+                batch_fallback=self._batch_fallback_count,
             )
         except Exception:
             await logger.aerror(
