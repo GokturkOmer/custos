@@ -31,7 +31,7 @@ from custos.simulator.patterns import (
     anomaly_delta,
     compute_base_value,
 )
-from custos.simulator.sensors import SENSORS, SensorDef
+from custos.simulator.sensors import SensorDef, active_sensors
 
 logger = structlog.get_logger(logger_name="simulator")
 
@@ -91,6 +91,8 @@ class ModbusSimulator:
         self._context: ModbusServerContext | None = None
         self._sim_start: datetime = datetime.now(UTC)
         self._rng = random.Random(42)  # deterministic gürültü seed
+        # active_sensors() env-aware: CUSTOS_TAG_COUNT=200 ise endurance kataloğu
+        self._sensors: tuple[SensorDef, ...] = active_sensors()
 
     def _register_count(self) -> int:
         """Sequential block boyutu.
@@ -98,7 +100,7 @@ class ModbusSimulator:
         pymodbus ModbusSequentialDataBlock'ta ilk eleman iç indeks olarak
         kullanıldığından, adres 0..N için N+2 eleman gerekir.
         """
-        return max(s.register for s in SENSORS) + 2
+        return max(s.register for s in self._sensors) + 2
 
     def _create_context(self) -> ModbusServerContext:
         """Modbus server context oluşturur; başlangıç değerlerini pattern'den üretir."""
@@ -106,7 +108,7 @@ class ModbusSimulator:
         count = self._register_count()
         initial: list[int] = [0] * count
         # pymodbus iç indeks yüzünden register N → initial[N+1] pozisyonuna yazılır
-        for sensor in SENSORS:
+        for sensor in self._sensors:
             initial[sensor.register + 1] = compute_sensor_register(
                 sensor, now, self._sim_start, noise=0.0
             )
@@ -115,6 +117,22 @@ class ModbusSimulator:
         store = ModbusDeviceContext(hr=block)
         return ModbusServerContext(devices=store, single=True)  # type: ignore[no-untyped-call]
 
+    def _log_sample_sensors(self) -> tuple[SensorDef, ...]:
+        """Özet log için maksimum 4 örnek sensör seç (kataloga göre adapte).
+
+        30 sensör: sabit 4 örnek (0, 6, 10, 24). Endurance gibi daha büyük
+        katalog: eşit aralıklı 4 örnek (ör. 200 içinden 0, 66, 132, 199).
+        """
+        n = len(self._sensors)
+        if n <= 4:
+            return tuple(self._sensors)
+        if n == 30:
+            # Geriye uyum: mevcut testlerle aynı örnekleme.
+            return (self._sensors[0], self._sensors[6], self._sensors[10], self._sensors[24])
+        step = (n - 1) // 3
+        indices = (0, step, 2 * step, n - 1)
+        return tuple(self._sensors[i] for i in indices)
+
     async def _update_values(self) -> None:
         """Tüm register'ları pattern + anomali ile periyodik günceller."""
         assert self._context is not None
@@ -122,7 +140,7 @@ class ModbusSimulator:
 
         while not self._shutdown_event.is_set():
             now = datetime.now(UTC)
-            for sensor in SENSORS:
+            for sensor in self._sensors:
                 noise = self._rng.gauss(0.0, 1.0)
                 new_reg = compute_sensor_register(
                     sensor, now, self._sim_start, noise
@@ -133,7 +151,7 @@ class ModbusSimulator:
 
             # Her 60 güncellemede (≈30 s) özet log — seçili birkaç sensör
             if self._update_count % 60 == 0:
-                sample = [SENSORS[0], SENSORS[6], SENSORS[10], SENSORS[24]]
+                sample = self._log_sample_sensors()
                 summary: dict[str, float] = {}
                 for s in sample:
                     raw = store.getValues(_HR_FC, s.register, 1)
@@ -166,7 +184,7 @@ class ModbusSimulator:
             "Modbus simülatör başlatılıyor",
             host=self._host,
             port=self._port,
-            sensör_sayısı=len(SENSORS),
+            sensör_sayısı=len(self._sensors),
         )
 
         update_task = asyncio.create_task(self._update_values())

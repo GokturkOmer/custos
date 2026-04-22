@@ -13,10 +13,15 @@ ile elde edilir; ör. sıcaklık için gain=0.1, basınç için gain=0.01.
 
 Pattern parametreleri saat bazlı değişim (diurnal + work hours boost)
 üretir. Anomaliler ayrı bir katman olarak uygulanır.
+
+Endurance testi için `build_endurance_sensors()` 200 register'lık alternatif
+katalog üretir (env CUSTOS_TAG_COUNT=200 ile aktifleşir). Gerçek AVM yerine
+uzun süreli yük testi amaçlı: farklı tipte dalgalar + monotonic sayaçlar.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from custos.simulator.patterns import Anomaly, SensorPattern
@@ -308,3 +313,175 @@ def sensor_count() -> int:
 def max_register() -> int:
     """En yüksek register adresi (register map boyutunu belirler)."""
     return max(s.register for s in SENSORS)
+
+
+# --- Endurance (200 register) modu ---
+
+# Endurance katalog bölüm boyutları (prompt/kılavuzdaki dağılıma birebir).
+_ENDURANCE_TEMP_COUNT = 50
+_ENDURANCE_PRESSURE_COUNT = 50
+_ENDURANCE_ENERGY_COUNT = 50
+_ENDURANCE_RPM_COUNT = 30
+_ENDURANCE_STATUS_COUNT = 20
+_ENDURANCE_TOTAL = 200
+
+
+def _endurance_tag_id(index: int) -> str:
+    """1-based index'ten üç haneli 'T001'..'T200' tag_id üretir."""
+    return f"T{index:03d}"
+
+
+def build_endurance_sensors() -> tuple[SensorDef, ...]:
+    """200 register'lık endurance kataloğunu üretir.
+
+    Dağılım (kılavuzla aynı):
+        1-50    sıcaklık (gain=0.1, 15-25°C sinüs + gürültü)
+        51-100  basınç (gain=0.01, 1-10 bar, günlük sinüs)
+        101-150 enerji sayacı (gain=1.0, monotonic artış, kWh)
+        151-180 RPM / hız (gain=1.0, sabit + ±%5 gürültü)
+        181-200 durum bitleri (gain=1.0, 0/1 step, diurnal)
+
+    Tag_id'ler T001..T200 (üç haneli sabit). Register adresleri 0-199.
+    Polling preset karışımı (bulk import CSV'sinde) ayrıca dağıtılır.
+    """
+    sensors: list[SensorDef] = []
+    register = 0
+    tag_index = 1
+
+    # --- 1-50: sıcaklık-benzeri (gain=0.1, 15-25°C diurnal) ---
+    for slot in range(_ENDURANCE_TEMP_COUNT):
+        peak_offset = (slot % 6) * 0.5  # peak'leri birbirinden ayır (0..2.5 saat)
+        sensors.append(
+            SensorDef(
+                register=register,
+                tag_id=_endurance_tag_id(tag_index),
+                name=f"Endurance Temp {tag_index}",
+                unit="°C",
+                gain=0.1,
+                pattern=SensorPattern(
+                    base=20.0,
+                    diurnal_amp=5.0,
+                    diurnal_peak_hour=13.0 + peak_offset,
+                    workhours_boost=1.05,
+                    noise_amp=0.5,
+                    min_value=10.0,
+                    max_value=35.0,
+                ),
+            ),
+        )
+        register += 1
+        tag_index += 1
+
+    # --- 51-100: basınç-benzeri (gain=0.01, 1-10 bar) ---
+    for slot in range(_ENDURANCE_PRESSURE_COUNT):
+        peak_offset = (slot % 4) * 1.0
+        sensors.append(
+            SensorDef(
+                register=register,
+                tag_id=_endurance_tag_id(tag_index),
+                name=f"Endurance Pressure {tag_index}",
+                unit="bar",
+                gain=0.01,
+                pattern=SensorPattern(
+                    base=5.0,
+                    diurnal_amp=3.0,
+                    diurnal_peak_hour=12.0 + peak_offset,
+                    workhours_boost=1.02,
+                    noise_amp=0.2,
+                    min_value=1.0,
+                    max_value=10.0,
+                ),
+            ),
+        )
+        register += 1
+        tag_index += 1
+
+    # --- 101-150: enerji sayacı (gain=1.0, monotonic kWh) ---
+    for slot in range(_ENDURANCE_ENERGY_COUNT):
+        # 0.5..5 kWh/saat aralığında dağılım; 7 gün * 24 saat * 5 = 840 kWh → uint16'ya sığar
+        rate_per_hour = 0.5 + (slot % 10) * 0.5
+        sensors.append(
+            SensorDef(
+                register=register,
+                tag_id=_endurance_tag_id(tag_index),
+                name=f"Endurance Energy {tag_index}",
+                unit="kWh",
+                gain=1.0,
+                pattern=SensorPattern(
+                    base=100.0,
+                    diurnal_amp=0.0,
+                    noise_amp=0.0,
+                    min_value=0.0,
+                    max_value=65535.0,
+                ),
+                anomaly=Anomaly(
+                    kind="monotonic",
+                    delta=rate_per_hour,
+                ),
+            ),
+        )
+        register += 1
+        tag_index += 1
+
+    # --- 151-180: RPM / hız (gain=1.0, sabit + ±5% gürültü) ---
+    for _slot in range(_ENDURANCE_RPM_COUNT):
+        sensors.append(
+            SensorDef(
+                register=register,
+                tag_id=_endurance_tag_id(tag_index),
+                name=f"Endurance RPM {tag_index}",
+                unit="rpm",
+                gain=1.0,
+                pattern=SensorPattern(
+                    base=1500.0,
+                    diurnal_amp=0.0,
+                    workhours_boost=1.0,
+                    noise_amp=75.0,  # %5 gaussian
+                    min_value=0.0,
+                    max_value=3000.0,
+                ),
+            ),
+        )
+        register += 1
+        tag_index += 1
+
+    # --- 181-200: durum bitleri (gain=1.0, 0/1 step, diurnal) ---
+    for _slot in range(_ENDURANCE_STATUS_COUNT):
+        # base=0.5, amp=0.5 → gece yaklaşık 0, gündüz 1. Clamp ile 0..1'de kalır.
+        sensors.append(
+            SensorDef(
+                register=register,
+                tag_id=_endurance_tag_id(tag_index),
+                name=f"Endurance Status {tag_index}",
+                unit="",
+                gain=1.0,
+                pattern=SensorPattern(
+                    base=0.5,
+                    diurnal_amp=0.5,
+                    diurnal_peak_hour=12.0,
+                    workhours_boost=1.0,
+                    noise_amp=0.0,
+                    min_value=0.0,
+                    max_value=1.0,
+                ),
+            ),
+        )
+        register += 1
+        tag_index += 1
+
+    assert len(sensors) == _ENDURANCE_TOTAL, (
+        f"Endurance katalog boyutu {len(sensors)}, beklenen {_ENDURANCE_TOTAL}"
+    )
+    return tuple(sensors)
+
+
+def active_sensors() -> tuple[SensorDef, ...]:
+    """Simülatörün çalışma zamanında kullanacağı aktif sensör kataloğu.
+
+    Env değişkeni `CUSTOS_TAG_COUNT` 200'e eşitse endurance kataloğu,
+    aksi halde (default: 30) AVM pilot kataloğu döner.
+    """
+    raw = os.environ.get("CUSTOS_TAG_COUNT", "").strip()
+    if raw == str(_ENDURANCE_TOTAL):
+        return build_endurance_sensors()
+    return SENSORS

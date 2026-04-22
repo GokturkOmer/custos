@@ -46,7 +46,14 @@ class Anomaly:
     Tek bir tag'e atanır, pattern çıktısına delta olarak eklenir.
     """
 
-    kind: str  # "daily_spike" | "weekly_dropout" | "wear_trend" | "daily_multi_peak"
+    # Kind kümesi:
+    #   "daily_spike"      — her gün belirli saatlerde gaussian spike
+    #   "daily_multi_peak" — aynı spike mantığı, birden fazla saat
+    #   "weekly_dropout"   — haftanın belirli gününde dropout
+    #   "wear_trend"       — 7 günde sıfırdan delta'ya yükselir, cyclic
+    #   "monotonic"        — sim_start'tan itibaren saatte `delta` birim artış
+    #                        (enerji sayacı / kWh gibi sürekli sayaçlar için)
+    kind: str
     delta: float  # etki miktarı (pozitif = artış, negatif = dropout)
     hours: tuple[int, ...] = field(default_factory=tuple)  # günlük tetik saatleri
     duration_minutes: int = 10  # spike/dropout süresi
@@ -157,5 +164,13 @@ def anomaly_delta(
             return 0.0
         progress = (weekly_phase - 2.0) / 5.0  # 0..1
         return anomaly.delta * progress
+
+    if anomaly.kind == "monotonic":
+        # Sim_start'tan itibaren geçen saat başına `delta` birim ekler.
+        # Enerji sayacı / toplam kWh gibi sürekli artan sayaçlar için kullanılır.
+        hours_elapsed = (now - sim_start).total_seconds() / 3600.0
+        if hours_elapsed < 0.0:
+            return 0.0
+        return anomaly.delta * hours_elapsed
 
     return 0.0
