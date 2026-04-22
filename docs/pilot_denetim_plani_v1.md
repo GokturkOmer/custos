@@ -482,7 +482,31 @@ Hepsi ✅ → **GO**. Bir tanesi ❌ → pilot ertelemesi konuşulur.
   datetime.utcnow, print, analytics→critical, SQL shared/database dışında, deep learning,
   asyncpg dışı DB driver) devrede. Pre-commit local hook + CI step (ruff'tan önce) aktif.
   `# allow-arch-check: <sebep>` istisna yorumu destekleniyor. Baseline 11/11 yeşil.
-- **v1.1 için açık kalem:** `pyproject.toml` bağımlılık beyaz liste denetimi
-  `architecture_check`'e ekle. Şu an sadece kod düzeyi import'ları kapsıyor;
-  yeni bir DL/ORM kütüphanesi pyproject'e eklenip henüz import edilmemişse
-  script yakalamaz.
+- **2026-04-22** — Adım 2 tamamlandı: `pytest --cov` baseline %66.50 (collector %93,
+  database %89, threshold_engine %75, scanner %86, archiver %94). 3 yeni kritik
+  test path'i: `tests/unit/test_collector_read_paths.py` (5 test: connect fail,
+  response error, exception, gain+offset success, refresh schedule),
+  `tests/integration/test_threshold_engine.py` (+2 test: low direction breach+clear,
+  reading silinince debounce tracker temizliği). `pyproject.toml` `[tool.coverage.report]
+  fail_under = 65` regression guard. **Hedef pilot öncesi %75 — yükseltme planı:**
+  W3 → 70 (anomaly_detector + kpi_engine'e unit test), W5 → 75 (dashboard route
+  coverage). Açık modüller (W3+ kapsamı): `anomaly_detector.py` %13,
+  `kpi_engine.py` %32, `analytics/dashboard/app.py` %37. Toplam test 331 passed,
+  8 skipped, 0 fail.
+- **2026-04-22** — Adım 3 tamamlandı: `pip-audit` v2.10.0 ile tarama, 4 bulgu /
+  3 paket (1 skip torch+cpu PyPI'da yok). 2 HIGH (`lxml 6.0.4 → 6.1.0`
+  CVE-2026-41066 XXE; `setuptools 70.2.0 → 78.1.1` CVE-2025-47273 path traversal),
+  1 belirsiz severity (`transformers 4.57.6 → 5.0.0rc3` CVE-2026-1839,
+  RC sürüm + sentence-transformers ailesi major bump gerektirir). Detaylı
+  rapor + aksiyon önerisi `_personal/pilot/dependency_audit_2026_04_22.md`
+  (pyproject/setup.sh değişiklikleri kullanıcı onayı bekliyor).
+  `pymodbus<3.13.0` pin nedeniyle alınamayan CVE **YOK** (3.10.x güncel).
+  `transformers` v1.1'e ertelendi (RC + chatbot ailesi rework riski).
+- **v1.1 için açık kalemler:**
+  - `pyproject.toml` bağımlılık beyaz liste denetimi `architecture_check`'e ekle.
+    Şu an sadece kod düzeyi import'ları kapsıyor; yeni bir DL/ORM kütüphanesi
+    pyproject'e eklenip henüz import edilmemişse script yakalamaz.
+  - F8b transformers 5.x + sentence-transformers 4.x geçişi (CVE-2026-1839)
+  - CI'a `pip-audit --strict` step (HIGH bulgular kapatıldıktan sonra Adım 3.5)
+  - Coverage hedefini W3'te 70'e, W5'te 75'e yükselt (anomaly_detector + kpi_engine
+    + dashboard route testleri).
