@@ -593,7 +593,7 @@ class DatabaseInterface(abc.ABC):
     ) -> None:
         """Etiket kaydı oluşturur."""
 
-    # --- Asset Template (read-only) ---
+    # --- Asset Template (read + seed upsert) ---
 
     @abc.abstractmethod
     async def list_asset_templates(self) -> list[AssetTemplate]:
@@ -602,6 +602,16 @@ class DatabaseInterface(abc.ABC):
     @abc.abstractmethod
     async def get_asset_template(self, template_id: int) -> AssetTemplate | None:
         """Tekil template (roles + kpi dahil). Bulunamazsa None döndürür."""
+
+    @abc.abstractmethod
+    async def upsert_asset_template(self, template: AssetTemplate) -> AssetTemplate:
+        """Asset template'i slug bazında upsert eder.
+
+        ``roles`` (template_id, role_key) ve ``kpi_definitions`` (template_id, name)
+        bazında upsert edilir. Mevcut tag_binding'leri korumak için YAML'da
+        bulunmayan orphan roller silinmez. Yalnızca F9 seed akışı ve test
+        fixture'ları tarafından çağrılır.
+        """
 
     # --- Asset Instance CRUD ---
 
@@ -1996,6 +2006,74 @@ class TimescaleDBDatabase(DatabaseInterface):
         tmpl.roles = [_row_to_template_role(r) for r in role_rows]
         tmpl.kpi_definitions = [_row_to_kpi_definition(r) for r in kpi_rows]
         return tmpl
+
+    async def upsert_asset_template(self, template: AssetTemplate) -> AssetTemplate:
+        """Asset template'i slug bazında upsert eder.
+
+        Template satırı slug UNIQUE üzerinden, roller (template_id, role_key)
+        bazında, KPI'lar (template_id, name) bazında upsert edilir. Orphan
+        roller (YAML'da olmayan ama DB'de kalan) bırakılır — tag_bindings
+        CASCADE davranışı nedeniyle silme yapılmaz. Tek transaction.
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            tmpl_row = await conn.fetchrow(
+                """
+                INSERT INTO asset_templates (slug, name, description, icon)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (slug) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    icon = EXCLUDED.icon
+                RETURNING *
+                """,
+                template.slug, template.name, template.description, template.icon,
+            )
+            assert tmpl_row is not None
+            tmpl_id = int(tmpl_row["id"])
+
+            role_rows: list[TemplateRole] = []
+            for role in template.roles:
+                role_row = await conn.fetchrow(
+                    """
+                    INSERT INTO template_roles
+                        (template_id, role_key, label, unit_hint, required, sort_order)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (template_id, role_key) DO UPDATE SET
+                        label = EXCLUDED.label,
+                        unit_hint = EXCLUDED.unit_hint,
+                        required = EXCLUDED.required,
+                        sort_order = EXCLUDED.sort_order
+                    RETURNING *
+                    """,
+                    tmpl_id, role.role_key, role.label, role.unit_hint,
+                    role.required, role.sort_order,
+                )
+                assert role_row is not None
+                role_rows.append(_row_to_template_role(role_row))
+
+            kpi_rows: list[KpiDefinition] = []
+            for kpi in template.kpi_definitions:
+                kpi_row = await conn.fetchrow(
+                    """
+                    INSERT INTO kpi_definitions
+                        (template_id, name, formula, unit, description)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (template_id, name) DO UPDATE SET
+                        formula = EXCLUDED.formula,
+                        unit = EXCLUDED.unit,
+                        description = EXCLUDED.description
+                    RETURNING *
+                    """,
+                    tmpl_id, kpi.name, kpi.formula, kpi.unit, kpi.description,
+                )
+                assert kpi_row is not None
+                kpi_rows.append(_row_to_kpi_definition(kpi_row))
+
+        result = _row_to_asset_template(tmpl_row)
+        result.roles = role_rows
+        result.kpi_definitions = kpi_rows
+        return result
 
     # --- Asset Instance CRUD implementasyonları ---
 
