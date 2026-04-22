@@ -477,4 +477,12 @@ Hepsi ✅ → **GO**. Bir tanesi ❌ → pilot ertelemesi konuşulur.
 
 ## Değişiklik notları
 
-_(Henüz değişiklik yok)_
+- **2026-04-22** — Adım 1 tamamlandı: `scripts/architecture_check.py` 11 kuralla
+  (ML critical, asyncpg collector, SQL collector, Modbus write, datetime.now naive,
+  datetime.utcnow, print, analytics→critical, SQL shared/database dışında, deep learning,
+  asyncpg dışı DB driver) devrede. Pre-commit local hook + CI step (ruff'tan önce) aktif.
+  `# allow-arch-check: <sebep>` istisna yorumu destekleniyor. Baseline 11/11 yeşil.
+- **v1.1 için açık kalem:** `pyproject.toml` bağımlılık beyaz liste denetimi
+  `architecture_check`'e ekle. Şu an sadece kod düzeyi import'ları kapsıyor;
+  yeni bir DL/ORM kütüphanesi pyproject'e eklenip henüz import edilmemişse
+  script yakalamaz.

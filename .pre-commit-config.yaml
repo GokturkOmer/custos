@@ -26,3 +26,12 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      - id: architecture-check
+        name: Custos mimari kurallari
+        entry: python scripts/architecture_check.py
+        language: system
+        pass_filenames: false
+        always_run: true
