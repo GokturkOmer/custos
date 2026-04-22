@@ -19,7 +19,7 @@ Brief v1.6'nın W1–W7 haftalık dağılımı korunuyor; F11 (Historian) paketl
 | **W2** | 23–29 Nis | F8b Chatbot (basit: semantic + chunking) | **A** (TimescaleDB migration) | 2–3 saat, W2 başı |
 | **W3** | 30 Nis–6 May | F9 AVM Template Pack | **B** (continuous aggregates) + **C** (auto-resolution query) | ~1.5 gün (F9 sabah, F11 öğleden sonra) |
 | **W4** | 7–13 May | F10 AVM Deploy | **D** (dashboard auto-res) + **E** (Parquet arşiv) + **F** (retention UI) | ~2.5 gün (F10 gündüz, F11 akşam) |
-| **W5** | 14–20 May | Saha entegrasyon 1 (Regin + Modbus map) | **G** (collector paralelleştirme) | ~1 gün |
+| **W5** | 14–20 May | Saha entegrasyon 1 (Regin + Modbus map) | **I** (collector batch read) | ~3–4 gün |
 | **W6** | 21–27 May | Saha entegrasyon 2 (tuning + binding) | **H** (query guard) + tüm F11 regression test | ~0.5 + 1 gün test |
 | **W7** | 28 May–4 Haz | Son test + buffer | buffer F11 gecikmesini tolere eder | — |
 | **5 Haz** | — | **Pilot Go-Live** | — | — |
@@ -68,10 +68,18 @@ Brief v1.6'nın W1–W7 haftalık dağılımı korunuyor; F11 (Historian) paketl
 - `query_readings_auto` içine: `(tag_count × time_range_days)` > eşik → aggregate'e düşür veya reddet
 - Dashboard tarafında zoom aralığı limit'i — 3 yıldan geriye gidilmek istenirse "saat agg'a geçildi" uyarısı
 
+**Paket I — Batch Modbus read** _(W5, 3–4 gün)_
+- Register gruplama algoritması: aynı `(host, port, unit_id)` altında komşu/yakın `register_address`'leri (gap toleransı ~8 register) tek `read_holding_registers(address, count=N)` çağrısında birleştir
+- Register type decode genişletme: uint16, int16, uint32, float32 desteği (şu an sadece uint16)
+- Atomicity + fallback: batch hatasında per-tag retry — tek tag bozuksa tüm batch düşmesin
+- **PLC yük koruması:** tag başına ayrı TCP round-trip yerine tek çağrı → saha cihazlarına ~10x daha az sorgu; "sadece okur, asla yazmaz" prensibinin okuma tarafı uzantısı
+- Yük testi: 200 tag × gerçek profil (saha keşfi sonrası register haritasına göre)
+- Bağımlılık: Saha keşfinden register komşuluk bilgisi (W4 öncesi lazım)
+
 ### Kritik bağımlılıklar
 
 1. **`pyarrow` ekleme onayı** — ✅ alındı (20 Nisan)
-2. **Gerçek tag sayısı / polling mix bilgisi** — arkadaştan bekleniyor, W4 öncesi lazım
+2. **Gerçek tag sayısı / polling mix + register adres haritası** — arkadaştan bekleniyor, W4 öncesi lazım (Paket I gruplama algoritması için register komşuluk bilgisi kritik)
 3. **2 TB NVMe SSD siparişi** — pilot teslimine en geç W5 başı lazım
 
 ### Kesme önceliği (gecikme olursa feda sırası)
@@ -79,7 +87,7 @@ Brief v1.6'nın W1–W7 haftalık dağılımı korunuyor; F11 (Historian) paketl
 1. **Paket H** (query guard) — iç kullanım güvenliği, pilotta kritik değil → v1.1
 2. **Paket F "disk doluluk uyarısı"** — Settings'te retention seçici kalabilir, push notification ertelenir
 3. **Paket D'deki "resolution hint badge"** — sadece UX, kesilebilir
-4. **Asla kesilmez:** A, B, C, E (Parquet). Pilot günü çalışıyor olmalı çünkü sonradan geriye dönük kurulum disk yapısını bozar.
+4. **Asla kesilmez:** A, B, C, E (Parquet), **I (batch read — PLC yük koruması)**. Pilot günü çalışıyor olmalı çünkü sonradan geriye dönük kurulum disk yapısını bozar. Paket I ayrıca saha cihazlarının güvenliği için kritik.
 
 ---
 
@@ -161,4 +169,4 @@ Bu iş planı v1'dir. Değişiklik durumları:
 
 ### Değişiklik notları
 
-_(Henüz değişiklik yok)_
+- **22 Nisan 2026:** F11 Paket I (Batch Modbus Read) W5 haftasına eklendi. Gerekçe: AVM pilotunda 200 tag öngörüldü; mevcut collector tag başına ayrı `read_holding_registers` çağrısı atıyor, PLC başına saniyede yüzlerce TCP round-trip Modbus slave'i (8–32 concurrent connection tipik) yorar. Komşu register'lar tek çağrıda okunursa ~10x daha az PLC yükü. "Sadece okur, asla yazmaz" prensibinin okuma tarafındaki uzantısı. Kesme önceliği: asla kesilmez (saha cihazları güvenliği).
