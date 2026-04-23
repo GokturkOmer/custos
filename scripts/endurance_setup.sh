@@ -49,7 +49,7 @@ ENDURANCE_CSV="${INSTALL_DIR}/_personal/pilot/endurance_tags_200.csv"
 DASHBOARD_URL="http://localhost:8000"
 BULK_IMPORT_URL="${DASHBOARD_URL}/dashboard/sensors/bulk-import"
 METRICS_OUTPUT="/var/log/custos/endurance.csv"
-METRICS_PID_FILE="/var/run/custos-endurance-metrics.pid"
+METRICS_PID_FILE="/var/log/custos/endurance-metrics.pid"
 METRICS_LOG_FILE="/var/log/custos/endurance_metrics.log"
 SIM_UNIT="/etc/systemd/system/custos-simulator-endurance.service"
 
