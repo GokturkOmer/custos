@@ -10,6 +10,13 @@ requires-python = ">=3.11"
 dependencies = [
     "asyncpg",
     "alembic",
+    # psycopg2-binary: alembic sync engine (migration) için. Runtime hala
+    # asyncpg kullanır — psycopg2 yalnızca `alembic upgrade head` koşarken
+    # aktiftir. asyncpg-native migration (Q3=b, commit 4d92da8) multi-statement
+    # migration'ları prepared statement protocol altında reddettiği için
+    # (migration 012 alarm_events: CREATE TABLE + 3 CREATE INDEX aynı
+    # op.execute()'ta) Q3=(a) fallback'e dönüldü.
+    "psycopg2-binary>=2.9",
     "pydantic-settings",
     "pymodbus>=3.6.0,<3.13.0",
     "structlog",
