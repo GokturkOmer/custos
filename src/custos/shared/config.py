@@ -41,7 +41,9 @@ class Settings(BaseSettings):
 
     # Fast polling bütçesi — polling_interval_ms <= 1000 olan aktif tag sayısı.
     # Aşım init veya activation'da hata olarak reddedilir.
-    collector_fast_polling_budget: int = 10
+    # Default 60: pilot 200 tag gerçeği (v1.0.1 kalem 17). .env.example ile
+    # senkron. v1.1'de threshold semantiği (1000ms "fast" mı?) revize edilecek.
+    collector_fast_polling_budget: int = 60
 
     # Batch Modbus read (F11 Paket I). Komşu register'ları tek
     # read_holding_registers çağrısında okur, PLC round-trip'i ~10x azaltır.
