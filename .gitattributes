@@ -1,0 +1,24 @@
+# Satır sonu + exec bit kuralları.
+# Windows FS (NTFS) üzerinden yapılan Edit'lerde 100755 -> 100644 mode drift
+# yaşanıyordu (v1.0.1 kalem 25, commit e24128d). Burada:
+#   1. Tüm shell script'ler LF (Unix) zorlanır — CRLF check-in engellenir.
+#   2. Exec bit git index'te tutulur (core.fileMode=true varsayılan).
+# Not: git update-index --chmod=+x ilk ayar için gerekli; sonrası bu dosya.
+
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary — Git'in text normalize etmesini engelle
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.parquet binary
