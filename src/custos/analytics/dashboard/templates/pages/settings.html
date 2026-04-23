@@ -127,8 +127,8 @@
       </div>
       {% endif %}
 
-      {# Test bildirimi #}
-      {% if push_enabled %}
+      {# Test bildirimi — sadece en az bir abone varken gösterilir #}
+      {% if push_enabled and subscription_count > 0 %}
       <div class="pt-2 border-t border-border-weak">
         <button @click="sendTest()"
                 class="px-4 py-1.5 text-small font-medium text-text-secondary

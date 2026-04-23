@@ -21,7 +21,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from custos.shared.database import DatabaseInterface, TagRecord
+from custos.shared.database import ConnectionProfile, DatabaseInterface, TagRecord
 
 # Kabul edilen register türleri (F9/F11-I Paket I karar kümesi).
 ALLOWED_REGISTER_TYPES: frozenset[str] = frozenset(
@@ -439,12 +439,72 @@ async def process_bulk_import(
             errors=commit_errors,
         )
 
+    # Bulk import başarılı → tag'lerdeki (host, port) birleşimlerinden
+    # eksik connection profile kayıtlarını idempotent olarak yarat.
+    # Hata durumunda sessizce geçer — bulk import başarısını bozmaz.
+    await _autopopulate_connection_profiles(db, [row for _, row in preview.valid])
+
     return CommitResult(
         ok=True,
         inserted=inserted,
         updated=updated,
         skipped=skipped,
     )
+
+
+async def _autopopulate_connection_profiles(
+    db: DatabaseInterface,
+    rows: list[BulkImportRow],
+) -> int:
+    """Bulk import tag'lerindeki her unique `(host, port)` için idempotent
+    connection profile kaydı üretir. Zaten var olan `(host, port)`'a dokunmaz.
+
+    `unit_id_start` / `unit_id_end` — aynı endpoint'e yönelen tag'lerin
+    `unit_id` min/max değerinden türetilir (scanner UI'da keşfedilmiş izlenimi
+    verir). `name` = "Oto: host:port" — operatör istediği zaman yeniden
+    adlandırabilir; "Oto:" öneki auto-populate kaynağını belli eder.
+
+    Dönüş: yeni yaratılan profil sayısı. Hata durumunda 0 (sessizce geç).
+    """
+    if not rows:
+        return 0
+
+    # (host, port) → (min_unit_id, max_unit_id)
+    endpoints: dict[tuple[str, int], tuple[int, int]] = {}
+    for row in rows:
+        key = (row.modbus_host, row.modbus_port)
+        unit = row.unit_id
+        if key in endpoints:
+            lo, hi = endpoints[key]
+            endpoints[key] = (min(lo, unit), max(hi, unit))
+        else:
+            endpoints[key] = (unit, unit)
+
+    try:
+        existing = await db.list_connection_profiles()
+    except Exception:
+        return 0
+    existing_endpoints = {(p.host, p.port) for p in existing}
+
+    created = 0
+    for (host, port), (unit_lo, unit_hi) in endpoints.items():
+        if (host, port) in existing_endpoints:
+            continue
+        profile = ConnectionProfile(
+            name=f"Oto: {host}:{port}",
+            host=host,
+            port=port,
+            unit_id_start=unit_lo,
+            unit_id_end=unit_hi,
+            status="idle",
+        )
+        try:
+            await db.insert_connection_profile(profile)
+            created += 1
+        except Exception:
+            # name UNIQUE constraint veya beklenmedik hata — sessizce geç
+            continue
+    return created
 
 
 def _tag_to_update_dict(tag: TagRecord) -> dict[str, object]:

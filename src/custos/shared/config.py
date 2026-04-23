@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     # top_k: Search'ten dönen en yakın chunk sayısı. Kaynak link üretimi için
     #   şimdilik en yüksek skorlu olan kullanılır; 3 future-proof.
     custos_assistant_knowledge_dir: str = "data/knowledge"
-    custos_assistant_score_threshold: float = 0.35
+    custos_assistant_score_threshold: float = 0.60
     custos_assistant_top_k: int = 3
 
     @property

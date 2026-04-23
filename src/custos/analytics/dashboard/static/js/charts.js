@@ -410,6 +410,76 @@ function xAxisInteractionPlugin() {
   };
 }
 
+/**
+ * Scale state localStorage persistence — kullanıcının her chart için özel
+ * pan/zoom ayarlarını re-init arasında korur.
+ *
+ * Sorun: Chart'a tag eklenince veya HTMX auto-refresh sırasında uPlot
+ * instance yeniden yaratılıyor → shift+pan ile girilen Y ekseni ve
+ * X ekseni aralıkları resetleniyor. Bu plugin her setScale çağrısını
+ * debounced olarak localStorage'a yazar, bir sonraki `ready` hook'ta
+ * geri yükler.
+ *
+ * Storage key şeması: `custos:chart-state:<chartId>` →
+ *   `{ "x": {"min": ts, "max": ts}, "scale-C": {"min": ..}, ... }`
+ *
+ * Reset (dblclick → min:null/max:null) setScale'i tetikler ve
+ * state'e null değer yazılır; restore sırasında null değer atlanır,
+ * scale'in kendi `range` fonksiyonu devreye girer → auto-range davranışı.
+ */
+function scaleStatePersistPlugin(chartId) {
+  const storageKey = 'custos:chart-state:' + chartId;
+  let saveTimer = null;
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw ? JSON.parse(raw) : {};
+    } catch (_e) {
+      return {};
+    }
+  }
+
+  function writeState(state) {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(state));
+    } catch (_e) {
+      // quota veya localStorage erişim hatası — sessizce geç
+    }
+  }
+
+  return {
+    hooks: {
+      ready(u) {
+        const saved = loadState();
+        for (const [scaleKey, range] of Object.entries(saved)) {
+          if (!u.scales[scaleKey]) continue;
+          if (range && range.min != null && range.max != null) {
+            u.setScale(scaleKey, { min: range.min, max: range.max });
+          }
+        }
+      },
+      setScale(u, scaleKey) {
+        // Debounce: peş peşe setScale'leri tek write'a indir (pan/zoom).
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          const s = u.scales[scaleKey];
+          if (!s) return;
+          const state = loadState();
+          if (s.min == null || s.max == null) {
+            // Reset durumu — kaydı sil
+            delete state[scaleKey];
+          } else {
+            state[scaleKey] = { min: s.min, max: s.max };
+          }
+          writeState(state);
+        }, 300);
+      },
+    },
+  };
+}
+
+
 function chartPanel(chartId) {
   return {
     chart: null,
@@ -588,6 +658,7 @@ function chartPanel(chartId) {
           xAxisInteractionPlugin(),
           dblClickResetPlugin(windowRange),
           perAxisZoomPanPlugin(),
+          scaleStatePersistPlugin(chartId),
         ],
       };
 

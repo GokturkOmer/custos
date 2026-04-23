@@ -76,7 +76,7 @@ class AssistantRetriever:
         >>> retriever = AssistantRetriever(
         ...     index=index,
         ...     yaml_chunks=[c for c in chunks if c.yaml_question],
-        ...     score_threshold=0.35,
+        ...     score_threshold=0.60,
         ...     top_k=3,
         ... )
         >>> answer = retriever.answer("Chiller nedir?")

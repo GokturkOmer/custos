@@ -62,8 +62,10 @@ DEFAULT_ROTATE_BYTES = 10 * 1024 * 1024  # 10 MB
 _EXPECTED_BATCH_PER_INTERVAL = 300
 
 # journalctl "Batch yazıldı" satırını arar. JSON veya renkli konsol formatında
-# olabilir; her iki durumda da "Batch yazıldı" kısayolu kesişimdir.
-_BATCH_LOG_MARKER = "Batch yazıldı"
+# olabilir. structlog JSON modunda Türkçe karakterler `\u0131 / \u015f` şeklinde
+# unicode-escape ile çıktılanır (MESSAGE alanı raw string olduğu için). "Batch yaz"
+# prefix'i tüm varyantları (ASCII, JSON-escaped Türkçe) tek marker ile yakalar.
+_BATCH_LOG_MARKER = "Batch yaz"
 
 # batch_fallback alanını JSON veya key=value formatında çeker.
 _BATCH_FALLBACK_JSON_RE = re.compile(r'"batch_fallback"\s*:\s*(\d+)')
