@@ -85,12 +85,16 @@ bash "${REPO_ROOT}/deploy/setup.sh"
 echo "  Ana kurulum tamam."
 
 # --- 4. Endurance CSV hazır mı? (yoksa generator çağır) ---
+# v1.0.1 kalem 15: tüm "sudo -u custos .venv/bin/python X.py" çağrıları
+# bash -c "cd ${INSTALL_DIR} && ..." wrapper'ına alınır. Sebep: pydantic-settings
+# env_file=".env" relative, cwd /opt/custos dışındaysa .env bulunmaz -> config
+# varsayılan değerlerine (degistir-bu-bir-ornektir şifresi) düşer.
 if [[ ! -f "${ENDURANCE_CSV}" ]]; then
     echo "[3/11] Endurance CSV eksik, üretiliyor..."
-    sudo -u "${CUSTOS_USER}" \
-        "${INSTALL_DIR}/.venv/bin/python" \
-        "${INSTALL_DIR}/scripts/endurance_generate_tags_csv.py" \
-        --out "${ENDURANCE_CSV}"
+    sudo -u "${CUSTOS_USER}" bash -c "cd ${INSTALL_DIR} && \
+        ${INSTALL_DIR}/.venv/bin/python \
+        ${INSTALL_DIR}/scripts/endurance_generate_tags_csv.py \
+        --out ${ENDURANCE_CSV}"
 else
     echo "[3/11] Endurance CSV mevcut: ${ENDURANCE_CSV}"
 fi
@@ -124,10 +128,13 @@ systemctl enable custos-simulator-endurance.service >/dev/null
 systemctl restart custos-simulator-endurance.service
 echo "  Simülatör (200 tag) başlatıldı, port 5020."
 
-# --- 6. Ana servisleri başlat ---
-echo "[5/11] Ana Custos servisleri başlatılıyor..."
+# --- 6. Dashboard servisini başlat ---
+# v1.0.1 kalem 16: critical.service bu noktada BAŞLATILMAZ — henüz tag yok,
+# collector "Aktif tag bulunamadı" log + exit 0 ile kapanır, systemd
+# Restart=on-failure tetiklenmez. Critical restart [7/11] binding'den
+# SONRA yapılır (tag'ler DB'de olduktan sonra).
+echo "[5/11] Dashboard (custos.service) başlatılıyor..."
 systemctl restart custos.service
-systemctl restart custos-critical.service
 sleep 5
 
 # Dashboard açık mı?
@@ -140,7 +147,7 @@ if ! curl -sf "${DASHBOARD_URL}/dashboard/overview" >/dev/null 2>&1; then
         exit 5
     fi
 fi
-echo "  Dashboard + collector hazır."
+echo "  Dashboard hazır."
 
 # --- 7. Bulk import ---
 echo "[6/11] 200 tag bulk import ediliyor..."
@@ -158,9 +165,21 @@ echo "  200 tag yüklendi."
 
 # --- 8. Instance + binding ---
 echo "[7/11] 5 instance + role binding kuruluyor..."
-sudo -u "${CUSTOS_USER}" \
-    "${INSTALL_DIR}/.venv/bin/python" \
-    "${INSTALL_DIR}/scripts/endurance_bind_instances.py"
+sudo -u "${CUSTOS_USER}" bash -c "cd ${INSTALL_DIR} && \
+    ${INSTALL_DIR}/.venv/bin/python \
+    ${INSTALL_DIR}/scripts/endurance_bind_instances.py"
+
+# v1.0.1 kalem 16: binding sonrası critical.service başlat — aktif tag'ler
+# artık DB'de, collector polling loop'u kurallı başlayacak.
+echo "  Binding tamam — critical.service başlatılıyor (tag'ler DB'de)."
+systemctl restart custos-critical.service
+sleep 3
+if ! systemctl is-active --quiet custos-critical.service; then
+    echo "HATA: custos-critical.service aktif değil (binding sonrası)." >&2
+    systemctl status custos-critical.service --no-pager | head -15 >&2 || true
+    exit 5
+fi
+echo "  custos-critical.service aktif, collector polling başladı."
 
 # --- 9. Veri birikmesi için bekleme (ML eğitim öncesi) ---
 if (( SKIP_WAIT == 0 && SKIP_TRAINING == 0 )); then
@@ -175,9 +194,9 @@ fi
 # --- 10. ML eğitim ---
 if (( SKIP_TRAINING == 0 )); then
     echo "[9/11] Isolation Forest modelleri eğitiliyor..."
-    if ! sudo -u "${CUSTOS_USER}" \
-            "${INSTALL_DIR}/.venv/bin/python" \
-            "${INSTALL_DIR}/scripts/train_anomaly_models.py" --lookback-hours 1; then
+    if ! sudo -u "${CUSTOS_USER}" bash -c "cd ${INSTALL_DIR} && \
+            ${INSTALL_DIR}/.venv/bin/python \
+            ${INSTALL_DIR}/scripts/train_anomaly_models.py --lookback-hours 1"; then
         echo "  UYARI: ML eğitim başarısız (veri yetersiz olabilir). Sonra elle tekrar denenebilir."
     fi
 else
@@ -186,9 +205,9 @@ fi
 
 # --- 11. Healthcheck ---
 echo "[10/11] Healthcheck çalıştırılıyor..."
-HC_OUT=$(sudo -u "${CUSTOS_USER}" \
-    "${INSTALL_DIR}/.venv/bin/python" \
-    "${INSTALL_DIR}/scripts/healthcheck.py" --json || true)
+HC_OUT=$(sudo -u "${CUSTOS_USER}" bash -c "cd ${INSTALL_DIR} && \
+    ${INSTALL_DIR}/.venv/bin/python \
+    ${INSTALL_DIR}/scripts/healthcheck.py --json" || true)
 echo "${HC_OUT}" | head -30 || true
 
 # --- 12. Metrics daemon ---
