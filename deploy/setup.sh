@@ -234,6 +234,12 @@ if ! id "$CUSTOS_USER" &>/dev/null; then
 else
     echo "  Kullanici '$CUSTOS_USER' zaten mevcut."
 fi
+# v1.0.1 kalem 30: custos user systemd-journal grubuna alinsin -
+# endurance_metrics.py daemon `journalctl -u custos-critical.service`
+# okuyabilmesi icin gerekli (default: kullanici kendi journal'larini gorur,
+# system service'lerini goremez -> batch_count=0 / tick_miss_ratio=1.0).
+# Idempotent: zaten gruptaysa zarar gelmez.
+usermod -aG systemd-journal "$CUSTOS_USER"
 
 # --- 7. Kurulum dizinleri + veri/log klasorleri ---
 echo "[6/11] Kurulum ve veri dizinleri hazirlaniyor..."

@@ -210,12 +210,15 @@ HC_OUT=$(sudo -u "${CUSTOS_USER}" bash -c "cd ${INSTALL_DIR} && \
     ${INSTALL_DIR}/scripts/healthcheck.py --json" || true)
 echo "${HC_OUT}" | head -30 || true
 
-# --- 12. Metrics daemon ---
-echo "[11/11] endurance_metrics.py daemon başlatılıyor..."
+# --- 12. Metrics daemon (v1.0.1 kalem 31: systemd unit, nohup degil) ---
+# Sebep: nohup reboot/guc kesintisi sonrasi kaybolur; pilot 14 gun izleme
+# garantisi icin Restart=always olan systemd unit gerekli. Service file
+# repo'da deploy/custos-endurance-metrics.service icinde tanimli.
+echo "[11/11] Endurance metrics daemon (systemd unit) kuruluyor..."
 mkdir -p "$(dirname "${METRICS_OUTPUT}")"
 chown -R "${CUSTOS_USER}:${CUSTOS_USER}" "$(dirname "${METRICS_OUTPUT}")"
 
-# Eski daemon varsa durdur
+# Eski nohup daemon (legacy deployment) varsa durdur — backwards compat.
 if [[ -f "${METRICS_PID_FILE}" ]]; then
     OLD_PID=$(cat "${METRICS_PID_FILE}" 2>/dev/null || echo "")
     if [[ -n "${OLD_PID}" ]] && kill -0 "${OLD_PID}" 2>/dev/null; then
@@ -224,21 +227,21 @@ if [[ -f "${METRICS_PID_FILE}" ]]; then
     fi
     rm -f "${METRICS_PID_FILE}"
 fi
+# PID dosyasi olmasa bile orphan nohup process'leri kapat (legacy guard).
+pkill -f "endurance_metrics.py" 2>/dev/null || true
 
-# nohup ile başlat (PID dosyasına yaz)
-sudo -u "${CUSTOS_USER}" bash -c "
-    cd ${INSTALL_DIR}
-    nohup ${INSTALL_DIR}/.venv/bin/python \
-        ${INSTALL_DIR}/scripts/endurance_metrics.py \
-        --out ${METRICS_OUTPUT} \
-        > ${METRICS_LOG_FILE} 2>&1 &
-    echo \$! > ${METRICS_PID_FILE}
-"
-sleep 2
-if [[ -f "${METRICS_PID_FILE}" ]] && kill -0 "$(cat "${METRICS_PID_FILE}")" 2>/dev/null; then
-    echo "  Metrics daemon çalışıyor (PID $(cat "${METRICS_PID_FILE}"))."
+# Systemd unit'i kur ve baslat (idempotent: enable + restart).
+cp "${INSTALL_DIR}/deploy/custos-endurance-metrics.service" \
+    /etc/systemd/system/custos-endurance-metrics.service
+systemctl daemon-reload
+systemctl enable custos-endurance-metrics.service >/dev/null
+systemctl restart custos-endurance-metrics.service
+sleep 3
+if systemctl is-active --quiet custos-endurance-metrics.service; then
+    echo "  Metrics daemon aktif (systemd unit, Restart=always)."
 else
-    echo "  UYARI: Metrics daemon başlatılamadı, log: ${METRICS_LOG_FILE}" >&2
+    echo "  UYARI: Metrics daemon baslamadi, log: ${METRICS_LOG_FILE}" >&2
+    systemctl status custos-endurance-metrics.service --no-pager | head -10 >&2 || true
 fi
 
 # --- Tamamlandı banner ---

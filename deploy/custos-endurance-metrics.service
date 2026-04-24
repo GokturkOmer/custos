@@ -1,0 +1,27 @@
+[Unit]
+# v1.0.1 kalem 31: Endurance metrics daemon nohup yerine systemd unit.
+# Sebep: WSL/sunucu reboot veya elektrik kesintisi sonrasi nohup process'i
+# kaybolur, endurance izleme CSV'si bos kalir. systemd unit Restart=always
+# ile otomatik toparlanir; pilot 14 gun izleme + gunluk rapor garantisi
+# icin sart (kabul kriteri).
+Description=Custos Endurance Metrics Daemon (5 dk CSV snapshot)
+Documentation=https://github.com/GokturkOmer/custos/blob/main/scripts/endurance_metrics.py
+After=network-online.target postgresql.service custos.service custos-critical.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=custos
+WorkingDirectory=/opt/custos
+EnvironmentFile=/opt/custos/.env
+ExecStart=/opt/custos/.venv/bin/python /opt/custos/scripts/endurance_metrics.py --out /var/log/custos/endurance.csv
+Restart=always
+RestartSec=10
+# StandardOutput/Error: hem journal'a hem dosyaya — endurance_daily_check
+# CSV ile birlikte log dosyasini da okur, journalctl daemon hayat dongusu
+# icin (start/stop/restart eventleri).
+StandardOutput=append:/var/log/custos/endurance_metrics.log
+StandardError=append:/var/log/custos/endurance_metrics.log
+
+[Install]
+WantedBy=multi-user.target
