@@ -51,21 +51,13 @@ async def db() -> TimescaleDBDatabase:
     pool = database._get_pool()
     # Test öncesi temizlik
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM connection_profiles WHERE name LIKE 'TEST_%'"
-        )
-        await conn.execute(
-            "DELETE FROM tags WHERE tag_id LIKE 'tag_127.0.0.1_%'"
-        )
+        await conn.execute("DELETE FROM connection_profiles WHERE name LIKE 'TEST_%'")
+        await conn.execute("DELETE FROM tags WHERE tag_id LIKE 'tag_127.0.0.1_%'")
     yield database  # type: ignore[misc]
     # Test sonrası temizlik
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM connection_profiles WHERE name LIKE 'TEST_%'"
-        )
-        await conn.execute(
-            "DELETE FROM tags WHERE tag_id LIKE 'tag_127.0.0.1_%'"
-        )
+        await conn.execute("DELETE FROM connection_profiles WHERE name LIKE 'TEST_%'")
+        await conn.execute("DELETE FROM tags WHERE tag_id LIKE 'tag_127.0.0.1_%'")
     await database.close()
 
 
@@ -138,8 +130,7 @@ async def test_scanner_discovers_registers(
     # Discovered tag'ler oluşturulmuş olmalı
     discovered = await db.list_tags(status="discovered")
     scan_tags = [
-        t for t in discovered
-        if t.modbus_host == "127.0.0.1" and t.modbus_port == simulator._port
+        t for t in discovered if t.modbus_host == "127.0.0.1" and t.modbus_port == simulator._port
     ]
     assert len(scan_tags) >= 1, "En az bir discovered tag oluşturulmalı"
 
@@ -181,8 +172,7 @@ async def test_scanner_no_duplicate_tags(
     # Tag sayısı artmamalı (aynı register'lar zaten keşfedilmiş)
     discovered = await db.list_tags(status="discovered")
     scan_tags = [
-        t for t in discovered
-        if t.modbus_host == "127.0.0.1" and t.modbus_port == simulator._port
+        t for t in discovered if t.modbus_host == "127.0.0.1" and t.modbus_port == simulator._port
     ]
     # Her register için en fazla 1 tag olmalı
     addresses = [t.register_address for t in scan_tags]

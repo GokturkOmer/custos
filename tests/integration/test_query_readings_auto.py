@@ -59,15 +59,20 @@ def _install_dispatch_spy(
 
 
 async def _seed_raw_readings(
-    db: TimescaleDBDatabase, tag_id: str,
-    start: datetime, count: int, step_seconds: float,
+    db: TimescaleDBDatabase,
+    tag_id: str,
+    start: datetime,
+    count: int,
+    step_seconds: float,
     base_value: float = 0.0,
 ) -> None:
     """N adet okuma insert eder (her biri step_seconds arayla, i+base_value)."""
     batch: list[TagReading] = [
         TagReading(
             timestamp=start + timedelta(seconds=i * step_seconds),
-            tag_id=tag_id, value=float(i) + base_value, quality_flag=0,
+            tag_id=tag_id,
+            value=float(i) + base_value,
+            quality_flag=0,
         )
         for i in range(count)
     ]
@@ -75,7 +80,9 @@ async def _seed_raw_readings(
 
 
 async def _refresh_1min(
-    db: TimescaleDBDatabase, start: datetime, end: datetime,
+    db: TimescaleDBDatabase,
+    start: datetime,
+    end: datetime,
 ) -> None:
     """1min CA'yı verilen aralık için manuel refresh eder.
 
@@ -90,7 +97,8 @@ async def _refresh_1min(
             "CALL refresh_continuous_aggregate("
             "    'tag_readings_1min', $1::timestamptz, $2::timestamptz"
             ");",
-            start, end,
+            start,
+            end,
         )
 
 
@@ -99,7 +107,8 @@ async def _refresh_1min(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_short_window_hits_raw_table(
-    db: TimescaleDBDatabase, monkeypatch: pytest.MonkeyPatch,
+    db: TimescaleDBDatabase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """30 dakika pencere → ham tablodan (_query_raw_downsampled) okunur."""
     calls = _install_dispatch_spy(db, monkeypatch)
@@ -113,7 +122,8 @@ async def test_short_window_hits_raw_table(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_medium_window_hits_1min_agg(
-    db: TimescaleDBDatabase, monkeypatch: pytest.MonkeyPatch,
+    db: TimescaleDBDatabase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """4 saat pencere → 1min aggregate'ten (_query_1min_downsampled) okunur."""
     calls = _install_dispatch_spy(db, monkeypatch)
@@ -127,7 +137,8 @@ async def test_medium_window_hits_1min_agg(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_long_window_hits_1hour_agg(
-    db: TimescaleDBDatabase, monkeypatch: pytest.MonkeyPatch,
+    db: TimescaleDBDatabase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """1 hafta pencere → 1hour aggregate'ten (_query_1hour_downsampled) okunur."""
     calls = _install_dispatch_spy(db, monkeypatch)
@@ -144,7 +155,8 @@ async def test_long_window_hits_1hour_agg(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_boundary_1h_exact_hits_raw(
-    db: TimescaleDBDatabase, monkeypatch: pytest.MonkeyPatch,
+    db: TimescaleDBDatabase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Tam 1 saat pencere → ham katmana gider (inclusive eşik)."""
     calls = _install_dispatch_spy(db, monkeypatch)
@@ -158,7 +170,8 @@ async def test_boundary_1h_exact_hits_raw(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_boundary_1d_exact_hits_1min(
-    db: TimescaleDBDatabase, monkeypatch: pytest.MonkeyPatch,
+    db: TimescaleDBDatabase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Tam 1 gün pencere → 1min aggregate'e gider (inclusive eşik)."""
     calls = _install_dispatch_spy(db, monkeypatch)
@@ -180,19 +193,30 @@ async def test_return_points_under_target(
     """Ham katmanda 1000 okuma, target=600 → dönen <= 600."""
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_AUTO_TARGET_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="Auto Target",
-        modbus_host="127.0.0.1", register_address=41000,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="Auto Target",
+            modbus_host="127.0.0.1",
+            register_address=41000,
+        )
+    )
 
     end = datetime.now(UTC)
     start = end - timedelta(minutes=50)  # ham katmana düşsün
     await _seed_raw_readings(
-        db, tag_id, start, count=1000, step_seconds=3.0,
+        db,
+        tag_id,
+        start,
+        count=1000,
+        step_seconds=3.0,
     )
 
     result = await db.query_readings_auto(
-        tag_id, start, end, target_points=600,
+        tag_id,
+        start,
+        end,
+        target_points=600,
     )
     # target_points = 600 soft hedef; time_bucket epoch'a hizalandığı için
     # pencere bucket sınırlarına denk gelmezse 1 bucket daha dönebilir.
@@ -212,23 +236,31 @@ async def test_homogeneous_output_type(
     """
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_AUTO_HOMO_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="Auto Homo",
-        modbus_host="127.0.0.1", register_address=41001,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="Auto Homo",
+            modbus_host="127.0.0.1",
+            register_address=41001,
+        )
+    )
 
     # 1min CA refresh için dakika başına hizalı bir bucket hazırla.
     now = datetime.now(UTC).replace(microsecond=0)
     bucket_start = now.replace(second=0) - timedelta(minutes=5)
     await _seed_raw_readings(
-        db, tag_id, bucket_start, count=60, step_seconds=1.0,
+        db,
+        tag_id,
+        bucket_start,
+        count=60,
+        step_seconds=1.0,
     )
     await _refresh_1min(db, bucket_start, bucket_start + timedelta(minutes=2))
 
     end = datetime.now(UTC)
-    short_start = end - timedelta(minutes=30)       # → raw
-    medium_start = end - timedelta(hours=4)         # → 1min
-    long_start = end - timedelta(days=7)            # → 1hour
+    short_start = end - timedelta(minutes=30)  # → raw
+    medium_start = end - timedelta(hours=4)  # → 1min
+    long_start = end - timedelta(days=7)  # → 1hour
 
     results_raw = await db.query_readings_auto(tag_id, short_start, end)
     results_1min = await db.query_readings_auto(tag_id, medium_start, end)
@@ -252,19 +284,38 @@ async def test_empty_result_for_tag_with_no_data(
     """Tanımlı ama veri eklenmemiş tag → boş liste (tüm katmanlarda)."""
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_AUTO_EMPTY_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="Auto Empty",
-        modbus_host="127.0.0.1", register_address=41002,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="Auto Empty",
+            modbus_host="127.0.0.1",
+            register_address=41002,
+        )
+    )
 
     end = datetime.now(UTC)
 
-    assert await db.query_readings_auto(
-        tag_id, end - timedelta(minutes=30), end,
-    ) == []
-    assert await db.query_readings_auto(
-        tag_id, end - timedelta(hours=4), end,
-    ) == []
-    assert await db.query_readings_auto(
-        tag_id, end - timedelta(days=7), end,
-    ) == []
+    assert (
+        await db.query_readings_auto(
+            tag_id,
+            end - timedelta(minutes=30),
+            end,
+        )
+        == []
+    )
+    assert (
+        await db.query_readings_auto(
+            tag_id,
+            end - timedelta(hours=4),
+            end,
+        )
+        == []
+    )
+    assert (
+        await db.query_readings_auto(
+            tag_id,
+            end - timedelta(days=7),
+            end,
+        )
+        == []
+    )

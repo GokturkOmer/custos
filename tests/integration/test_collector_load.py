@@ -281,15 +281,9 @@ async def test_200_tags_batch_read_tick_miss() -> None:
     sim, sim_task = await _start_simulator(_BATCH_LOAD_TEST_PORT)
 
     try:
-        slow_tags = _make_distributed_tags(
-            150, polling_ms=10_000, port=_BATCH_LOAD_TEST_PORT
-        )
-        normal_tags = _make_distributed_tags(
-            45, polling_ms=1_000, port=_BATCH_LOAD_TEST_PORT
-        )
-        fast_tags = _make_distributed_tags(
-            5, polling_ms=500, port=_BATCH_LOAD_TEST_PORT
-        )
+        slow_tags = _make_distributed_tags(150, polling_ms=10_000, port=_BATCH_LOAD_TEST_PORT)
+        normal_tags = _make_distributed_tags(45, polling_ms=1_000, port=_BATCH_LOAD_TEST_PORT)
+        fast_tags = _make_distributed_tags(5, polling_ms=500, port=_BATCH_LOAD_TEST_PORT)
         tags = slow_tags + normal_tags + fast_tags
 
         collector = ModbusCollector(
@@ -361,9 +355,7 @@ async def test_batch_fallback_on_partial_error() -> None:
 
     call_log: list[int] = []
 
-    async def _read_side_effect(
-        address: int, *, count: int = 1, device_id: int = 1
-    ) -> Any:
+    async def _read_side_effect(address: int, *, count: int = 1, device_id: int = 1) -> Any:
         call_log.append(count)
         if count > 1:
             return batch_error_response
@@ -371,9 +363,7 @@ async def test_batch_fallback_on_partial_error() -> None:
 
     fake_client.read_holding_registers = AsyncMock(side_effect=_read_side_effect)
 
-    with patch.object(
-        collector, "_get_or_create_client", new=AsyncMock(return_value=fake_client)
-    ):
+    with patch.object(collector, "_get_or_create_client", new=AsyncMock(return_value=fake_client)):
         collector._init_schedule()
         await collector._run_tick()
 
@@ -384,8 +374,7 @@ async def test_batch_fallback_on_partial_error() -> None:
     assert len(last_readings) == 10, "10 tag'in hepsi bir reading üretmeli"
     ok = sum(1 for r in last_readings if r.quality_flag == 0)
     assert ok == 10, (
-        f"Fallback sonrası 10/10 başarı bekleniyor, {ok}/10 alındı. "
-        f"Call log counts: {call_log}"
+        f"Fallback sonrası 10/10 başarı bekleniyor, {ok}/10 alındı. Call log counts: {call_log}"
     )
     assert collector._batch_fallback_count >= 1, (
         "Fallback sayacı artmalı (batch error sonrası per-tag retry)"
@@ -394,8 +383,7 @@ async def test_batch_fallback_on_partial_error() -> None:
     batch_calls = sum(1 for c in call_log if c > 1)
     single_calls = sum(1 for c in call_log if c == 1)
     assert batch_calls >= 1 and single_calls == 10, (
-        f"Batch=1, single=10 bekleniyor; gerçek batch={batch_calls}, "
-        f"single={single_calls}"
+        f"Batch=1, single=10 bekleniyor; gerçek batch={batch_calls}, single={single_calls}"
     )
 
 
@@ -465,9 +453,7 @@ async def test_mixed_register_types() -> None:
         batch_read_enabled=True,
     )
 
-    with patch.object(
-        collector, "_get_or_create_client", new=AsyncMock(return_value=fake_client)
-    ):
+    with patch.object(collector, "_get_or_create_client", new=AsyncMock(return_value=fake_client)):
         collector._init_schedule()
         await collector._run_tick()
 
@@ -492,9 +478,7 @@ async def test_mixed_register_types() -> None:
 async def test_batch_read_disabled_falls_back_to_single() -> None:
     """batch_read_enabled=False -> eski single-read path, single_count artar."""
     db = _fake_db()
-    tags = _make_distributed_tags(
-        5, polling_ms=1_000, port=_BATCH_LOAD_TEST_PORT, address_range=5
-    )
+    tags = _make_distributed_tags(5, polling_ms=1_000, port=_BATCH_LOAD_TEST_PORT, address_range=5)
 
     collector = ModbusCollector(
         tags=tags,
@@ -513,9 +497,7 @@ async def test_batch_read_disabled_falls_back_to_single() -> None:
     ok_response.registers = [0]
     fake_client.read_holding_registers = AsyncMock(return_value=ok_response)
 
-    with patch.object(
-        collector, "_get_or_create_client", new=AsyncMock(return_value=fake_client)
-    ):
+    with patch.object(collector, "_get_or_create_client", new=AsyncMock(return_value=fake_client)):
         collector._init_schedule()
         await collector._run_tick()
 

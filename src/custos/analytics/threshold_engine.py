@@ -118,7 +118,10 @@ class ThresholdEngine:
             elif not breach and active_alarm is not None:
                 # Durum C: Eşik aşılmamış, aktif alarm VAR → hysteresis kontrolü
                 await self._handle_no_breach_with_alarm(
-                    threshold, active_alarm, value, now,
+                    threshold,
+                    active_alarm,
+                    value,
+                    now,
                 )
 
             else:

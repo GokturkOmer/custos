@@ -80,9 +80,11 @@ async def _setup_tag_with_reading(
             ),
         )
     now = datetime.now(UTC)
-    await db.insert_tag_readings_batch([
-        TagReading(timestamp=now, tag_id=tag_id, value=value),
-    ])
+    await db.insert_tag_readings_batch(
+        [
+            TagReading(timestamp=now, tag_id=tag_id, value=value),
+        ]
+    )
 
 
 @pytest.mark.usefixtures("_check_db_available")

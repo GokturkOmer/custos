@@ -17,6 +17,7 @@ from custos.analytics.anomaly_detector import AnomalyDetector
 from custos.analytics.archive_scheduler import ArchiveScheduler
 from custos.analytics.archiver import ParquetArchiver
 from custos.analytics.dashboard.app import _archive_lock, get_static_files_app, router
+from custos.analytics.dashboard.auth_routes import auth_router
 from custos.analytics.disk_telemetry import DiskMonitor
 from custos.analytics.kpi_engine import KpiEngine
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
@@ -65,8 +66,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         # Yüklenemezse boş dict (seed yapılmamış olabilir).
         try:
             avm_pack: dict[str, TemplateSchema] = {
-                entry.schema.slug: entry.schema
-                for entry in load_templates(default_template_dir())
+                entry.schema.slug: entry.schema for entry in load_templates(default_template_dir())
             }
             application.state.avm_template_pack = avm_pack
             await logger.ainfo(
@@ -105,7 +105,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         archiver = ParquetArchiver(db=db, archive_dir=_ARCHIVE_DIR)
         application.state.archiver = archiver
         archive_scheduler = ArchiveScheduler(
-            archiver=archiver, lock=_archive_lock,
+            archiver=archiver,
+            lock=_archive_lock,
         )
         archive_scheduler_task = asyncio.create_task(archive_scheduler.start())
         application.state.archive_scheduler = archive_scheduler
@@ -187,6 +188,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Auth router (login/logout/change-password) — root level, prefix yok
+app.include_router(auth_router)
 # Dashboard router ve statik dosyaları ekle
 app.include_router(router)
 app.mount("/static", get_static_files_app(), name="static")

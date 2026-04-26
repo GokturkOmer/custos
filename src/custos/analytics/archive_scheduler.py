@@ -47,15 +47,19 @@ def _compute_next_run_utc(reference: datetime) -> datetime:
     """
     local = reference.astimezone(_TRT)
     this_month_first = local.replace(
-        day=1, hour=_RUN_HOUR_TRT, minute=_RUN_MINUTE_TRT,
-        second=0, microsecond=0,
+        day=1,
+        hour=_RUN_HOUR_TRT,
+        minute=_RUN_MINUTE_TRT,
+        second=0,
+        microsecond=0,
     )
     if local < this_month_first:
         return this_month_first.astimezone(UTC)
     # Bir sonraki ayın 1'i 02:00 TRT
     if local.month == 12:
         next_month_first = this_month_first.replace(
-            year=local.year + 1, month=1,
+            year=local.year + 1,
+            month=1,
         )
     else:
         next_month_first = this_month_first.replace(month=local.month + 1)
@@ -97,7 +101,8 @@ class ArchiveScheduler:
                     await self.run_once()
                 except Exception:
                     await logger.aerror(
-                        "Archive scheduler tick hatası", exc_info=True,
+                        "Archive scheduler tick hatası",
+                        exc_info=True,
                     )
                 await asyncio.sleep(self._tick_seconds)
         except asyncio.CancelledError:
@@ -131,7 +136,8 @@ class ArchiveScheduler:
                 result = await self._archiver.run_scheduled()
                 await logger.ainfo(
                     "Scheduled arşiv tamamlandı",
-                    year=result.year, month=result.month,
+                    year=result.year,
+                    month=result.month,
                     duration_seconds=round(result.duration_seconds, 3),
                 )
             finally:

@@ -51,12 +51,14 @@ async def db() -> AsyncIterator[tuple[TimescaleDBDatabase, int]]:
     pool = database._get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "DELETE FROM anomaly_scores WHERE instance_id = $1", inst.id,
+            "DELETE FROM anomaly_scores WHERE instance_id = $1",
+            inst.id,
         )
     yield database, inst.id  # type: ignore[misc]
     async with pool.acquire() as conn:
         await conn.execute(
-            "DELETE FROM anomaly_scores WHERE instance_id = $1", inst.id,
+            "DELETE FROM anomaly_scores WHERE instance_id = $1",
+            inst.id,
         )
     await database.delete_asset_instance(inst.id)
     await database.close()

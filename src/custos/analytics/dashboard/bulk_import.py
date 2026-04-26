@@ -389,9 +389,7 @@ async def process_bulk_import(
             RowError(
                 row_num=row_num,
                 field="tag_id",
-                message=(
-                    f"Tag_id '{row.tag_id}' DB'de zaten var (mode=reject)"
-                ),
+                message=(f"Tag_id '{row.tag_id}' DB'de zaten var (mode=reject)"),
             )
             for row_num, row in preview.valid
             if row.tag_id in existing

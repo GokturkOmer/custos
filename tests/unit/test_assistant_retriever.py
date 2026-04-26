@@ -141,9 +141,7 @@ def test_exact_match_preferred_over_semantic() -> None:
             "pompa nedir": _unit(1.0, 0.0, 0.0),  # sorgu embed
         }
     )
-    retriever = _make_retriever(
-        yaml_chunks=[yaml_c], md_chunks=[md_c], encoder=encoder
-    )
+    retriever = _make_retriever(yaml_chunks=[yaml_c], md_chunks=[md_c], encoder=encoder)
     answer = retriever.answer("Pompa nedir?")
     assert answer.match_type == "exact"
     assert answer.source_path == "y1.yaml"
@@ -232,9 +230,7 @@ def test_duplicate_yaml_questions_first_wins() -> None:
     """Aynı normalize anahtarda iki YAML chunk varsa ilk eklenen kazanır."""
     c1 = _yaml_chunk("y1", "Aynı soru", "cevap1")
     c2 = _yaml_chunk("y2", "Aynı  soru!!", "cevap2")
-    encoder = _FakeEncoder(
-        {c1.text: _unit(1.0, 0.0, 0.0), c2.text: _unit(1.0, 0.0, 0.0)}
-    )
+    encoder = _FakeEncoder({c1.text: _unit(1.0, 0.0, 0.0), c2.text: _unit(1.0, 0.0, 0.0)})
     retriever = _make_retriever(yaml_chunks=[c1, c2], md_chunks=[], encoder=encoder)
     answer = retriever.answer("aynı soru")
     assert answer.match_type == "exact"

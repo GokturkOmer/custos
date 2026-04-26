@@ -24,6 +24,10 @@ from fastapi.templating import Jinja2Templates
 from custos.analytics.archiver import ArchiveResult, ParquetArchiver
 from custos.analytics.assistant.retriever import AssistantRetriever
 from custos.analytics.assistant.service import get_assistant_retriever
+from custos.analytics.dashboard.auth_dependencies import (
+    require_developer,
+    require_operator,
+)
 from custos.analytics.dashboard.bulk_import import (
     BulkImportParseError,
     CommitResult,
@@ -42,6 +46,7 @@ from custos.analytics.templates import (
     default_template_dir,
     load_templates,
 )
+from custos.shared.auth import hash_password
 from custos.shared.config import settings
 from custos.shared.database import (
     AssetInstance,
@@ -81,6 +86,12 @@ _EMPTY_FORM_STR_LIST: Any = Form(default_factory=list)
 # module-level singleton ile sarmalıyoruz (aynı Form(...) sarması gibi).
 _ASSISTANT_RETRIEVER_DEP: Any = Depends(get_assistant_retriever)
 
+# Auth dependency'leri — V11-101. Decorator'larda
+# ``dependencies=[_OPERATOR_DEP]`` veya ``[_DEVELOPER_DEP]`` olarak kullanılır;
+# session ``request.state.session``'a yazılır (template'de nav filtresi için).
+_OPERATOR_DEP: Any = Depends(require_operator)
+_DEVELOPER_DEP: Any = Depends(require_developer)
+
 # FastAPI File(...) varsayılanı da ruff B008 uyarısı verir; aynı
 # sarmalama tekniğiyle module-level singleton tutuyoruz.
 _FILE_UPLOAD: Any = File(...)
@@ -98,9 +109,7 @@ POLLING_PRESETS: dict[str, int] = {
 _FAST_POLLING_THRESHOLD_MS = 1000
 
 
-async def _count_active_fast_tags(
-    db: DatabaseInterface, exclude_tag_id: str | None = None
-) -> int:
+async def _count_active_fast_tags(db: DatabaseInterface, exclude_tag_id: str | None = None) -> int:
     """Aktif + fast polling'li tag sayısını sayar.
 
     `exclude_tag_id` verilirse o tag sayımdan düşülür (update kendi kendini
@@ -110,8 +119,7 @@ async def _count_active_fast_tags(
     return sum(
         1
         for t in all_active
-        if t.polling_interval_ms <= _FAST_POLLING_THRESHOLD_MS
-        and t.tag_id != exclude_tag_id
+        if t.polling_interval_ms <= _FAST_POLLING_THRESHOLD_MS and t.tag_id != exclude_tag_id
     )
 
 
@@ -121,6 +129,7 @@ def _budget_error_detail(current: int, budget: int) -> str:
         f"Fast polling bütçesi dolu ({current}/{budget}). "
         f"Mevcut bir fast tag'i Slow'a çekin veya bütçeyi artırın."
     )
+
 
 # Overview sayfası için sabit timedelta'lar (her çağrıda nesne oluşturmamak için)
 _timedelta_24h = timedelta(hours=24)
@@ -175,7 +184,12 @@ def _get_db(request: Request) -> DatabaseInterface:
 
 
 def _base_context(**kwargs: Any) -> dict[str, Any]:
-    """Tüm sayfalarda kullanılan temel template context'i oluşturur."""
+    """Tüm sayfalarda kullanılan temel template context'i oluşturur.
+
+    Nav itemları üzerindeki ``dev_only`` flag'i base.html tarafından
+    ``request.state.session.role == 'developer'`` kontrolüyle filtrelenir
+    (V11-101 — operatör Geliştirici menü gruplarını görmez).
+    """
     return {
         "version": "v0.1.0-dev",
         "nav_items": [
@@ -188,7 +202,12 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
             {"href": "/dashboard/alarms", "icon": "alert-triangle", "label": "Alarms"},
             {"href": "/dashboard/maintenance", "icon": "tool", "label": "Maintenance"},
             {"href": "/dashboard/assistant", "icon": "message-circle", "label": "Asistan"},
-            {"href": "/dashboard/logs", "icon": "file-text", "label": "Logs"},
+            {
+                "href": "/dashboard/logs",
+                "icon": "file-text",
+                "label": "Logs",
+                "dev_only": True,
+            },
             {"href": "/dashboard/settings", "icon": "settings", "label": "Settings"},
         ],
         **kwargs,
@@ -198,13 +217,13 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
 # --- Overview ---
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def dashboard_root() -> RedirectResponse:
     """Dashboard ana sayfası — overview'a yönlendirir."""
     return RedirectResponse(url="/dashboard/overview")
 
 
-@router.get("/overview", response_class=HTMLResponse)
+@router.get("/overview", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def overview(request: Request) -> HTMLResponse:
     """Overview sayfası — ana kontrol paneli.
 
@@ -262,23 +281,27 @@ async def overview(request: Request) -> HTMLResponse:
                 query_specs.append((oc.chart_key, tid))
                 # Guard toplu yük hesabı için chart başına tag_count'u geç —
                 # teklide etki yok, ama büyük chart'ta katman override eder.
-                query_tasks.append(db_instance.query_readings_auto(
-                    tid, chart_start, now,
-                    target_points=_CHART_TARGET_POINTS,
-                    tag_count=chart_tag_count,
-                ))
+                query_tasks.append(
+                    db_instance.query_readings_auto(
+                        tid,
+                        chart_start,
+                        now,
+                        target_points=_CHART_TARGET_POINTS,
+                        tag_count=chart_tag_count,
+                    )
+                )
 
         try:
-            all_readings = (
-                await asyncio.gather(*query_tasks) if query_tasks else []
-            )
+            all_readings = await asyncio.gather(*query_tasks) if query_tasks else []
         except QueryGuardError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         # chart_key -> tag_id -> readings
         readings_by_chart: dict[str, dict[str, list[Any]]] = {}
         for (chart_key, tid), readings in zip(
-            query_specs, all_readings, strict=True,
+            query_specs,
+            all_readings,
+            strict=True,
         ):
             readings_by_chart.setdefault(chart_key, {})[tid] = readings
 
@@ -288,14 +311,16 @@ async def overview(request: Request) -> HTMLResponse:
             window = now - chart_start
             resolution = _resolution_hint_for(window)
             long_window = _is_long_window(window)
-            chart_slots.append({
-                "chart_key": oc.chart_key,
-                "title": oc.title,
-                "sort_order": oc.sort_order,
-                "time_window_minutes": oc.time_window_minutes,
-                "resolution": resolution,
-                "long_window_hint": long_window,
-            })
+            chart_slots.append(
+                {
+                    "chart_key": oc.chart_key,
+                    "title": oc.title,
+                    "sort_order": oc.sort_order,
+                    "time_window_minutes": oc.time_window_minutes,
+                    "resolution": resolution,
+                    "long_window_hint": long_window,
+                }
+            )
             tag_ids = tags_by_chart.get(oc.chart_key, [])
             if not tag_ids:
                 charts[oc.chart_key] = {
@@ -328,9 +353,7 @@ async def overview(request: Request) -> HTMLResponse:
                     units.append(unit)
                     series.append([r.value for r in readings])
                     if not timestamps:
-                        timestamps = [
-                            int(r.timestamp.timestamp()) for r in readings
-                        ]
+                        timestamps = [int(r.timestamp.timestamp()) for r in readings]
             charts[oc.chart_key] = {
                 "timestamps": timestamps,
                 "series": series,
@@ -351,13 +374,10 @@ async def overview(request: Request) -> HTMLResponse:
                 thr_map[thr_id] = t
 
         # Yaklaşan bakım task'ları (Overview widget) — ilk 5, 48 saat içinde
-        upcoming_maint = (
-            await db_instance.list_upcoming_maintenance_tasks(within_hours=48)
-        )[:5]
+        upcoming_maint = (await db_instance.list_upcoming_maintenance_tasks(within_hours=48))[:5]
         if upcoming_maint:
             inst_ids = {
-                t.asset_instance_id for t in upcoming_maint
-                if t.asset_instance_id is not None
+                t.asset_instance_id for t in upcoming_maint if t.asset_instance_id is not None
             }
             for iid in inst_ids:
                 inst = await db_instance.get_asset_instance(iid)
@@ -376,16 +396,17 @@ async def overview(request: Request) -> HTMLResponse:
                 "acknowledged": "warn",
                 "cleared": "ok",
             }.get(event.state, "neutral")
-            alarms.append({
-                "time": (
-                    event.triggered_at.strftime("%H:%M:%S")
-                    if event.triggered_at else "-"
-                ),
-                "sensor": event.tag_id,
-                "type": t.name if t else f"Threshold #{event.threshold_id}",
-                "status": state_status,
-                "status_label": state_label,
-            })
+            alarms.append(
+                {
+                    "time": (
+                        event.triggered_at.strftime("%H:%M:%S") if event.triggered_at else "-"
+                    ),
+                    "sensor": event.tag_id,
+                    "type": t.name if t else f"Threshold #{event.threshold_id}",
+                    "status": state_status,
+                    "status_label": state_label,
+                }
+            )
 
     # Gerçek KPI kartları
     kpis: list[dict[str, str]] = [
@@ -419,11 +440,11 @@ async def overview(request: Request) -> HTMLResponse:
     # sonraki tazelemeleri HTMX polling (/api/disk-usage) sağlar.
     disk_info_init: dict[str, Any] | None = None
     monitor_init: DiskMonitor | None = getattr(
-        request.app.state, "disk_monitor", None,
+        request.app.state,
+        "disk_monitor",
+        None,
     )
-    mount_init = (
-        monitor_init._mount_point if monitor_init is not None else "/var/custos"
-    )
+    mount_init = monitor_init._mount_point if monitor_init is not None else "/var/custos"
     try:
         usage_init = await asyncio.to_thread(get_disk_usage, mount_init)
         disk_info_init = _disk_usage_to_dict(usage_init)
@@ -475,7 +496,7 @@ async def _unique_chart_key(base: str, db: DatabaseInterface) -> str:
     return candidate
 
 
-@router.get("/overview/charts/new", response_class=HTMLResponse)
+@router.get("/overview/charts/new", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def overview_chart_new_form(request: Request) -> HTMLResponse:
     """Yeni chart olusturma formu."""
     db = _get_db(request)
@@ -486,11 +507,13 @@ async def overview_chart_new_form(request: Request) -> HTMLResponse:
         all_tags=all_tags,
     )
     return templates.TemplateResponse(
-        request, "pages/overview_chart_form.html", ctx,
+        request,
+        "pages/overview_chart_form.html",
+        ctx,
     )
 
 
-@router.post("/overview/charts", response_class=HTMLResponse)
+@router.post("/overview/charts", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def overview_chart_create(
     request: Request,
     title: str = Form(...),
@@ -507,34 +530,48 @@ async def overview_chart_create(
     existing = await db.list_overview_charts()
     sort_order = max((c.sort_order for c in existing), default=-1) + 1
 
-    await db.insert_overview_chart(OverviewChart(
-        chart_key=chart_key, title=clean_title, sort_order=sort_order,
-    ))
+    await db.insert_overview_chart(
+        OverviewChart(
+            chart_key=chart_key,
+            title=clean_title,
+            sort_order=sort_order,
+        )
+    )
 
     form = await request.form()
     tag_ids = [str(t) for t in form.getlist("tag_ids")]
     if tag_ids:
         await db.replace_overview_chart_tags(chart_key, tag_ids)
 
-    await db.insert_audit_log(AuditLogEntry(
-        category="chart_config", action="create",
-        detail=f"{chart_key}: {clean_title} ({len(tag_ids)} tag)",
-    ))
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="chart_config",
+            action="create",
+            detail=f"{chart_key}: {clean_title} ({len(tag_ids)} tag)",
+        )
+    )
     return RedirectResponse(url="/dashboard/overview", status_code=303)
 
 
-@router.post("/overview/charts/{chart_key}/delete", response_class=HTMLResponse)
+@router.post(
+    "/overview/charts/{chart_key}/delete", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP]
+)
 async def overview_chart_delete(
-    request: Request, chart_key: str,
+    request: Request,
+    chart_key: str,
 ) -> RedirectResponse:
     """Chart slotunu siler; tag bindingleri FK CASCADE ile duser."""
     db = _get_db(request)
     ok = await db.delete_overview_chart(chart_key)
     if not ok:
         raise HTTPException(status_code=404, detail="Chart bulunamadi")
-    await db.insert_audit_log(AuditLogEntry(
-        category="chart_config", action="delete", detail=chart_key,
-    ))
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="chart_config",
+            action="delete",
+            detail=chart_key,
+        )
+    )
     return RedirectResponse(url="/dashboard/overview", status_code=303)
 
 
@@ -550,9 +587,12 @@ def _format_time_window_label(minutes: int) -> str:
     return f"Last {hours}h"
 
 
-@router.get("/overview/charts/{chart_key}/view", response_class=HTMLResponse)
+@router.get(
+    "/overview/charts/{chart_key}/view", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP]
+)
 async def overview_chart_detail(
-    request: Request, chart_key: str,
+    request: Request,
+    chart_key: str,
 ) -> HTMLResponse:
     """Chart detay sayfasi — genis chart + tag panel + zaman araligi."""
     db = _get_db(request)
@@ -576,16 +616,16 @@ async def overview_chart_detail(
     chart_tag_count = len(chart_tags)
     readings_tasks = [
         db.query_readings_auto(
-            ct.tag_id, chart_start, now,
+            ct.tag_id,
+            chart_start,
+            now,
             target_points=_CHART_TARGET_POINTS,
             tag_count=chart_tag_count,
         )
         for ct in chart_tags
     ]
     try:
-        all_readings = (
-            await asyncio.gather(*readings_tasks) if readings_tasks else []
-        )
+        all_readings = await asyncio.gather(*readings_tasks) if readings_tasks else []
     except QueryGuardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -600,11 +640,13 @@ async def overview_chart_detail(
         unit_suffix = f" ({unit})" if unit else ""
         labels.append(f"{ct.tag_id}{unit_suffix}")
         units.append(unit)
-        tag_meta.append({
-            "tag_id": ct.tag_id,
-            "name": tag_rec.name if tag_rec else ct.tag_id,
-            "unit": unit,
-        })
+        tag_meta.append(
+            {
+                "tag_id": ct.tag_id,
+                "name": tag_rec.name if tag_rec else ct.tag_id,
+                "unit": unit,
+            }
+        )
         series.append([r.value for r in readings] if readings else [])
         if readings and not timestamps:
             timestamps = [int(r.timestamp.timestamp()) for r in readings]
@@ -621,8 +663,7 @@ async def overview_chart_detail(
     }
 
     time_windows = [
-        {"minutes": m, "label": _format_time_window_label(m)}
-        for m in sorted(_ALLOWED_TIME_WINDOWS)
+        {"minutes": m, "label": _format_time_window_label(m)} for m in sorted(_ALLOWED_TIME_WINDOWS)
     ]
 
     ctx = _base_context(
@@ -637,12 +678,17 @@ async def overview_chart_detail(
         long_window_hint=long_window,
     )
     return templates.TemplateResponse(
-        request, "pages/overview_chart_detail.html", ctx,
+        request,
+        "pages/overview_chart_detail.html",
+        ctx,
     )
 
 
-@router.post("/overview/charts/{chart_key}/time-window",
-             response_class=HTMLResponse)
+@router.post(
+    "/overview/charts/{chart_key}/time-window",
+    response_class=HTMLResponse,
+    dependencies=[_OPERATOR_DEP],
+)
 async def overview_chart_set_time_window(
     request: Request,
     chart_key: str,
@@ -653,21 +699,27 @@ async def overview_chart_set_time_window(
         raise HTTPException(status_code=400, detail="Gecersiz zaman araligi")
     db = _get_db(request)
     updated = await db.update_overview_chart(
-        chart_key, {"time_window_minutes": minutes},
+        chart_key,
+        {"time_window_minutes": minutes},
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Chart bulunamadi")
-    await db.insert_audit_log(AuditLogEntry(
-        category="chart_config", action="time_window",
-        detail=f"{chart_key}: {minutes} min",
-    ))
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="chart_config",
+            action="time_window",
+            detail=f"{chart_key}: {minutes} min",
+        )
+    )
     return RedirectResponse(
         url=f"/dashboard/overview/charts/{chart_key}/view",
         status_code=303,
     )
 
 
-@router.get("/overview/chart-config/{chart_key}", response_class=HTMLResponse)
+@router.get(
+    "/overview/chart-config/{chart_key}", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP]
+)
 async def chart_config_form(request: Request, chart_key: str) -> HTMLResponse:
     """Grafik tag secim formunu HTMX partial olarak dondurur."""
     db = _get_db(request)
@@ -687,11 +739,15 @@ async def chart_config_form(request: Request, chart_key: str) -> HTMLResponse:
         "selected_ids": selected_ids,
     }
     return templates.TemplateResponse(
-        request, "partials/chart_tag_selector.html", ctx,
+        request,
+        "partials/chart_tag_selector.html",
+        ctx,
     )
 
 
-@router.post("/overview/chart-config/{chart_key}", response_class=HTMLResponse)
+@router.post(
+    "/overview/chart-config/{chart_key}", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP]
+)
 async def chart_config_save(request: Request, chart_key: str) -> RedirectResponse:
     """Grafik tag secimini kaydeder ve overview'a yonlendirir."""
     db = _get_db(request)
@@ -703,15 +759,17 @@ async def chart_config_save(request: Request, chart_key: str) -> RedirectRespons
     tag_ids = form.getlist("tag_ids")
     await db.replace_overview_chart_tags(chart_key, [str(t) for t in tag_ids])
 
-    await db.insert_audit_log(AuditLogEntry(
-        category="chart_config",
-        action="update",
-        detail=f"{chart_key}: {len(tag_ids)} tag secildi",
-    ))
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="chart_config",
+            action="update",
+            detail=f"{chart_key}: {len(tag_ids)} tag secildi",
+        )
+    )
     return RedirectResponse(url="/dashboard/overview", status_code=303)
 
 
-@router.get("/_showcase", response_class=HTMLResponse)
+@router.get("/_showcase", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def showcase(request: Request) -> HTMLResponse:
     """Component showcase sayfası (sadece geliştirme modunda)."""
     if not _is_dev_mode():
@@ -727,7 +785,7 @@ async def showcase(request: Request) -> HTMLResponse:
 # --- Sensors (Tag CRUD) ---
 
 
-@router.get("/sensors", response_class=HTMLResponse)
+@router.get("/sensors", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def sensors_list(request: Request) -> HTMLResponse:
     """Sensors sayfası — tag listesi ve canlı değerler."""
     db = _get_db(request)
@@ -746,7 +804,7 @@ async def sensors_list(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/sensors.html", ctx)
 
 
-@router.get("/sensors/live-values", response_class=HTMLResponse)
+@router.get("/sensors/live-values", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def sensors_live_values(request: Request) -> HTMLResponse:
     """HTMX partial — sensor tablosu canlı değer güncellemesi."""
     db = _get_db(request)
@@ -756,11 +814,13 @@ async def sensors_live_values(request: Request) -> HTMLResponse:
 
     ctx = {"tags": tags, "readings": readings}
     return templates.TemplateResponse(
-        request, "partials/sensor_live_rows.html", ctx,
+        request,
+        "partials/sensor_live_rows.html",
+        ctx,
     )
 
 
-@router.get("/sensors/new", response_class=HTMLResponse)
+@router.get("/sensors/new", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def sensor_new_form(request: Request) -> HTMLResponse:
     """Yeni tag ekleme formu."""
     db = _get_db(request)
@@ -818,8 +878,7 @@ def _preview_to_dict(preview: PreviewResult) -> dict[str, Any]:
             for row_num, row in preview.valid
         ],
         "errors": [
-            {"row": e.row_num, "field": e.field, "message": e.message}
-            for e in preview.errors
+            {"row": e.row_num, "field": e.field, "message": e.message} for e in preview.errors
         ],
     }
 
@@ -832,8 +891,7 @@ def _commit_to_dict(commit: CommitResult) -> dict[str, Any]:
         "updated": commit.updated,
         "skipped": commit.skipped,
         "errors": [
-            {"row": e.row_num, "field": e.field, "message": e.message}
-            for e in commit.errors
+            {"row": e.row_num, "field": e.field, "message": e.message} for e in commit.errors
         ],
     }
 
@@ -854,7 +912,7 @@ def _repo_docs_examples_dir() -> Path:
     return _MODULE_DIR.parent.parent.parent.parent / "docs" / "examples"
 
 
-@router.get("/sensors/bulk-import", response_class=HTMLResponse)
+@router.get("/sensors/bulk-import", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def sensor_bulk_import_modal(request: Request) -> HTMLResponse:
     """Bulk import modal'ını HTMX partial olarak döndürür."""
     return templates.TemplateResponse(
@@ -864,7 +922,7 @@ async def sensor_bulk_import_modal(request: Request) -> HTMLResponse:
     )
 
 
-@router.get("/sensors/bulk-import/example/{name}")
+@router.get("/sensors/bulk-import/example/{name}", dependencies=[_DEVELOPER_DEP])
 async def sensor_bulk_import_example(name: str) -> FileResponse:
     """docs/examples/ içindeki beyaz liste dosyayı indir olarak sunar."""
     if name not in _BULK_IMPORT_EXAMPLES:
@@ -876,7 +934,7 @@ async def sensor_bulk_import_example(name: str) -> FileResponse:
     return FileResponse(path, media_type=mime, filename=rel_name)
 
 
-@router.post("/sensors/bulk-import/preview", response_model=None)
+@router.post("/sensors/bulk-import/preview", response_model=None, dependencies=[_DEVELOPER_DEP])
 async def sensor_bulk_import_preview(
     request: Request,
     file: UploadFile = _FILE_UPLOAD,
@@ -922,7 +980,7 @@ async def sensor_bulk_import_preview(
     return JSONResponse(_preview_to_dict(preview))
 
 
-@router.post("/sensors/bulk-import", response_model=None)
+@router.post("/sensors/bulk-import", response_model=None, dependencies=[_DEVELOPER_DEP])
 async def sensor_bulk_import_commit(
     request: Request,
     file: UploadFile = _FILE_UPLOAD,
@@ -1005,7 +1063,7 @@ async def sensor_bulk_import_commit(
     return JSONResponse(_commit_to_dict(result))
 
 
-@router.post("/sensors", response_class=HTMLResponse)
+@router.post("/sensors", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def sensor_create(
     request: Request,
     tag_id: str = Form(...),
@@ -1070,7 +1128,7 @@ async def sensor_create(
     return RedirectResponse(url="/dashboard/sensors", status_code=303)
 
 
-@router.get("/sensors/{tag_id}/edit", response_class=HTMLResponse)
+@router.get("/sensors/{tag_id}/edit", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def sensor_edit_form(request: Request, tag_id: str) -> HTMLResponse:
     """Tag düzenleme formu."""
     db = _get_db(request)
@@ -1091,7 +1149,7 @@ async def sensor_edit_form(request: Request, tag_id: str) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/sensor_form.html", ctx)
 
 
-@router.post("/sensors/{tag_id}/edit", response_class=HTMLResponse)
+@router.post("/sensors/{tag_id}/edit", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def sensor_update(
     request: Request,
     tag_id: str,
@@ -1156,7 +1214,7 @@ async def sensor_update(
     return RedirectResponse(url="/dashboard/sensors", status_code=303)
 
 
-@router.post("/sensors/{tag_id}/delete", response_class=HTMLResponse)
+@router.post("/sensors/{tag_id}/delete", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def sensor_delete(request: Request, tag_id: str) -> RedirectResponse:
     """Tag kaydını siler."""
     db = _get_db(request)
@@ -1170,7 +1228,7 @@ async def sensor_delete(request: Request, tag_id: str) -> RedirectResponse:
 # --- Connection Profiles ---
 
 
-@router.get("/connections", response_class=HTMLResponse)
+@router.get("/connections", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def connections_list(request: Request) -> HTMLResponse:
     """Connection Profiles sayfası — profil listesi."""
     db = _get_db(request)
@@ -1183,7 +1241,7 @@ async def connections_list(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/connections.html", ctx)
 
 
-@router.get("/connections/new", response_class=HTMLResponse)
+@router.get("/connections/new", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def connection_new_form(request: Request) -> HTMLResponse:
     """Yeni connection profili formu."""
     ctx = _base_context(
@@ -1195,7 +1253,7 @@ async def connection_new_form(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/connection_form.html", ctx)
 
 
-@router.post("/connections", response_class=HTMLResponse)
+@router.post("/connections", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def connection_create(
     request: Request,
     name: str = Form(...),
@@ -1224,7 +1282,9 @@ async def connection_create(
     return RedirectResponse(url="/dashboard/connections", status_code=303)
 
 
-@router.get("/connections/{profile_id:int}/edit", response_class=HTMLResponse)
+@router.get(
+    "/connections/{profile_id:int}/edit", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP]
+)
 async def connection_edit_form(request: Request, profile_id: int) -> HTMLResponse:
     """Connection profili düzenleme formu."""
     db = _get_db(request)
@@ -1241,7 +1301,9 @@ async def connection_edit_form(request: Request, profile_id: int) -> HTMLRespons
     return templates.TemplateResponse(request, "pages/connection_form.html", ctx)
 
 
-@router.post("/connections/{profile_id:int}/edit", response_class=HTMLResponse)
+@router.post(
+    "/connections/{profile_id:int}/edit", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP]
+)
 async def connection_update(
     request: Request,
     profile_id: int,
@@ -1269,7 +1331,11 @@ async def connection_update(
     return RedirectResponse(url="/dashboard/connections", status_code=303)
 
 
-@router.post("/connections/{profile_id:int}/delete", response_class=HTMLResponse)
+@router.post(
+    "/connections/{profile_id:int}/delete",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
 async def connection_delete(request: Request, profile_id: int) -> RedirectResponse:
     """Connection profilini siler."""
     db = _get_db(request)
@@ -1280,7 +1346,9 @@ async def connection_delete(request: Request, profile_id: int) -> RedirectRespon
     return RedirectResponse(url="/dashboard/connections", status_code=303)
 
 
-@router.post("/connections/{profile_id:int}/scan", response_class=HTMLResponse)
+@router.post(
+    "/connections/{profile_id:int}/scan", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP]
+)
 async def connection_scan(request: Request, profile_id: int) -> RedirectResponse:
     """Scan başlatır (arka plan task olarak)."""
     db = _get_db(request)
@@ -1310,7 +1378,11 @@ async def connection_scan(request: Request, profile_id: int) -> RedirectResponse
     )
 
 
-@router.get("/connections/{profile_id:int}/scan-status", response_class=HTMLResponse)
+@router.get(
+    "/connections/{profile_id:int}/scan-status",
+    response_class=HTMLResponse,
+    dependencies=[_OPERATOR_DEP],
+)
 async def connection_scan_status(request: Request, profile_id: int) -> HTMLResponse:
     """Scan durumu sayfası (HTMX polling ile güncellenir).
 
@@ -1325,7 +1397,9 @@ async def connection_scan_status(request: Request, profile_id: int) -> HTMLRespo
     # HTMX polling — sadece kart partial'ını döndür
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
-            request, "partials/scan_status_card.html", {"profile": profile},
+            request,
+            "partials/scan_status_card.html",
+            {"profile": profile},
         )
 
     # Normal sayfa yüklemesi — tam sayfa
@@ -1340,7 +1414,11 @@ async def connection_scan_status(request: Request, profile_id: int) -> HTMLRespo
 # --- Scan Results ---
 
 
-@router.get("/connections/{profile_id:int}/results", response_class=HTMLResponse)
+@router.get(
+    "/connections/{profile_id:int}/results",
+    response_class=HTMLResponse,
+    dependencies=[_OPERATOR_DEP],
+)
 async def connection_scan_results(request: Request, profile_id: int) -> HTMLResponse:
     """Scan sonuçları — keşfedilen tag'ler."""
     db = _get_db(request)
@@ -1351,8 +1429,7 @@ async def connection_scan_results(request: Request, profile_id: int) -> HTMLResp
     # Bu profile ait discovered tag'leri getir
     all_discovered = await db.list_tags(status="discovered")
     discovered_tags = [
-        t for t in all_discovered
-        if t.modbus_host == profile.host and t.modbus_port == profile.port
+        t for t in all_discovered if t.modbus_host == profile.host and t.modbus_port == profile.port
     ]
 
     # Son değerleri çek
@@ -1369,7 +1446,11 @@ async def connection_scan_results(request: Request, profile_id: int) -> HTMLResp
     return templates.TemplateResponse(request, "pages/scan_results.html", ctx)
 
 
-@router.post("/connections/{profile_id:int}/results/activate", response_class=HTMLResponse)
+@router.post(
+    "/connections/{profile_id:int}/results/activate",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
 async def connection_activate_tags(
     request: Request,
     profile_id: int,
@@ -1383,11 +1464,14 @@ async def connection_activate_tags(
 
     for tag_id in tag_ids:
         tag_id_str = str(tag_id)
-        await db.update_tag(tag_id_str, {
-            "status": "active",
-            "polling_interval_ms": 10000,
-            "polling_preset": "slow",
-        })
+        await db.update_tag(
+            tag_id_str,
+            {
+                "status": "active",
+                "polling_interval_ms": 10000,
+                "polling_preset": "slow",
+            },
+        )
 
     await logger.ainfo(
         "Tag'ler aktifleştirildi",
@@ -1398,7 +1482,11 @@ async def connection_activate_tags(
     return RedirectResponse(url="/dashboard/sensors", status_code=303)
 
 
-@router.post("/connections/{profile_id:int}/results/ignore", response_class=HTMLResponse)
+@router.post(
+    "/connections/{profile_id:int}/results/ignore",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
 async def connection_ignore_tags(
     request: Request,
     profile_id: int,
@@ -1428,7 +1516,7 @@ async def connection_ignore_tags(
 # --- Asset Templates (read-only) ---
 
 
-@router.get("/templates", response_class=HTMLResponse)
+@router.get("/templates", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def templates_list(request: Request) -> HTMLResponse:
     """Template kütüphanesi — read-only liste."""
     db = _get_db(request)
@@ -1450,13 +1538,14 @@ def _get_avm_template_pack(request: Request) -> dict[str, TemplateSchema]:
     döndürür.
     """
     pack: dict[str, TemplateSchema] | None = getattr(
-        request.app.state, "avm_template_pack", None,
+        request.app.state,
+        "avm_template_pack",
+        None,
     )
     if pack is None:
         try:
             pack = {
-                entry.schema.slug: entry.schema
-                for entry in load_templates(default_template_dir())
+                entry.schema.slug: entry.schema for entry in load_templates(default_template_dir())
             }
         except TemplateLoadError:
             pack = {}
@@ -1464,7 +1553,9 @@ def _get_avm_template_pack(request: Request) -> dict[str, TemplateSchema]:
     return pack
 
 
-@router.get("/templates/{template_id:int}", response_class=HTMLResponse)
+@router.get(
+    "/templates/{template_id:int}", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP]
+)
 async def template_detail(request: Request, template_id: int) -> HTMLResponse:
     """Template detayı — roller, KPI tanımları ve (F9) AVM pack advisory preview."""
     db = _get_db(request)
@@ -1490,7 +1581,7 @@ async def template_detail(request: Request, template_id: int) -> HTMLResponse:
 # --- Processes (Asset Instance CRUD) ---
 
 
-@router.get("/processes", response_class=HTMLResponse)
+@router.get("/processes", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def processes_list(request: Request) -> HTMLResponse:
     """Asset instance listesi."""
     db = _get_db(request)
@@ -1515,7 +1606,7 @@ async def processes_list(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/processes.html", ctx)
 
 
-@router.get("/processes/new", response_class=HTMLResponse)
+@router.get("/processes/new", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def process_new_form(request: Request) -> HTMLResponse:
     """Yeni asset instance formu."""
     db = _get_db(request)
@@ -1534,7 +1625,7 @@ async def process_new_form(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/process_form.html", ctx)
 
 
-@router.post("/processes", response_class=HTMLResponse)
+@router.post("/processes", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def process_create(request: Request) -> RedirectResponse:
     """Yeni asset instance + binding'ler oluşturur."""
     db = _get_db(request)
@@ -1570,18 +1661,22 @@ async def process_create(request: Request) -> RedirectResponse:
             assert role.id is not None
             tag_id = str(form.get(f"role_{role.id}", "")).strip()
             if tag_id:
-                bindings.append(TagBinding(
-                    instance_id=created.id,
-                    role_id=role.id,
-                    tag_id=tag_id,
-                ))
+                bindings.append(
+                    TagBinding(
+                        instance_id=created.id,
+                        role_id=role.id,
+                        tag_id=tag_id,
+                    )
+                )
         if bindings:
             await db.replace_tag_bindings(created.id, bindings)
 
     return RedirectResponse(url=f"/dashboard/processes/{created.id}", status_code=303)
 
 
-@router.get("/processes/{instance_id:int}", response_class=HTMLResponse)
+@router.get(
+    "/processes/{instance_id:int}", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP]
+)
 async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
     """Asset instance detay sayfası — canlı değerler."""
     db = _get_db(request)
@@ -1598,11 +1693,13 @@ async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
     tag_ids: list[str] = []
     for b in bindings:
         role = role_map.get(b.role_id)
-        binding_data.append({
-            "role_label": role.label if role else "?",
-            "unit_hint": role.unit_hint if role else "",
-            "tag_id": b.tag_id,
-        })
+        binding_data.append(
+            {
+                "role_label": role.label if role else "?",
+                "unit_hint": role.unit_hint if role else "",
+                "tag_id": b.tag_id,
+            }
+        )
         tag_ids.append(b.tag_id)
 
     readings = await db.get_latest_tag_readings(tag_ids) if tag_ids else {}
@@ -1613,11 +1710,13 @@ async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
         latest_kpis = await db.get_latest_kpi_results(instance_id)
         for kd in tmpl.kpi_definitions:
             result = latest_kpis.get(kd.id) if kd.id is not None else None
-            kpi_cards.append({
-                "name": kd.name,
-                "value": result.value if result else None,
-                "unit": kd.unit,
-            })
+            kpi_cards.append(
+                {
+                    "name": kd.name,
+                    "value": result.value if result else None,
+                    "unit": kd.unit,
+                }
+            )
 
     ctx = _base_context(
         page_title=f"Asset: {instance.name}",
@@ -1631,7 +1730,11 @@ async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/process_detail.html", ctx)
 
 
-@router.get("/processes/{instance_id:int}/live-values", response_class=HTMLResponse)
+@router.get(
+    "/processes/{instance_id:int}/live-values",
+    response_class=HTMLResponse,
+    dependencies=[_OPERATOR_DEP],
+)
 async def process_live_values(request: Request, instance_id: int) -> HTMLResponse:
     """HTMX partial — process detay canlı değer güncellemesi."""
     db = _get_db(request)
@@ -1647,22 +1750,27 @@ async def process_live_values(request: Request, instance_id: int) -> HTMLRespons
     tag_ids: list[str] = []
     for b in bindings:
         role = role_map.get(b.role_id)
-        binding_data.append({
-            "role_label": role.label if role else "?",
-            "unit_hint": role.unit_hint if role else "",
-            "tag_id": b.tag_id,
-        })
+        binding_data.append(
+            {
+                "role_label": role.label if role else "?",
+                "unit_hint": role.unit_hint if role else "",
+                "tag_id": b.tag_id,
+            }
+        )
         tag_ids.append(b.tag_id)
 
     readings = await db.get_latest_tag_readings(tag_ids) if tag_ids else {}
 
     return templates.TemplateResponse(
-        request, "partials/process_live_values.html",
+        request,
+        "partials/process_live_values.html",
         {"binding_data": binding_data, "readings": readings},
     )
 
 
-@router.get("/processes/{instance_id:int}/edit", response_class=HTMLResponse)
+@router.get(
+    "/processes/{instance_id:int}/edit", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP]
+)
 async def process_edit_form(request: Request, instance_id: int) -> HTMLResponse:
     """Asset instance düzenleme formu."""
     db = _get_db(request)
@@ -1689,7 +1797,9 @@ async def process_edit_form(request: Request, instance_id: int) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/process_form.html", ctx)
 
 
-@router.post("/processes/{instance_id:int}/edit", response_class=HTMLResponse)
+@router.post(
+    "/processes/{instance_id:int}/edit", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP]
+)
 async def process_update(request: Request, instance_id: int) -> RedirectResponse:
     """Asset instance günceller."""
     db = _get_db(request)
@@ -1723,17 +1833,23 @@ async def process_update(request: Request, instance_id: int) -> RedirectResponse
             assert role.id is not None
             tag_id = str(form.get(f"role_{role.id}", "")).strip()
             if tag_id:
-                bindings.append(TagBinding(
-                    instance_id=instance_id,
-                    role_id=role.id,
-                    tag_id=tag_id,
-                ))
+                bindings.append(
+                    TagBinding(
+                        instance_id=instance_id,
+                        role_id=role.id,
+                        tag_id=tag_id,
+                    )
+                )
         await db.replace_tag_bindings(instance_id, bindings)
 
     return RedirectResponse(url=f"/dashboard/processes/{instance_id}", status_code=303)
 
 
-@router.post("/processes/{instance_id:int}/delete", response_class=HTMLResponse)
+@router.post(
+    "/processes/{instance_id:int}/delete",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
 async def process_delete(request: Request, instance_id: int) -> RedirectResponse:
     """Asset instance siler (binding'ler CASCADE ile silinir)."""
     db = _get_db(request)
@@ -1747,7 +1863,7 @@ async def process_delete(request: Request, instance_id: int) -> RedirectResponse
 # --- Tag Reading API (binding formu için) ---
 
 
-@router.get("/api/tag-reading/{tag_id}")
+@router.get("/api/tag-reading/{tag_id}", dependencies=[_OPERATOR_DEP])
 async def api_tag_reading(request: Request, tag_id: str) -> dict[str, Any]:
     """Tek bir tag'in son okumasını JSON olarak döndürür."""
     db = _get_db(request)
@@ -1766,7 +1882,7 @@ async def api_tag_reading(request: Request, tag_id: str) -> dict[str, Any]:
 # --- KPI ---
 
 
-@router.get("/kpi", response_class=HTMLResponse)
+@router.get("/kpi", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def kpi_list(request: Request, instance_id: int | None = None) -> HTMLResponse:
     """KPI listesi sayfası — tüm aktif instance'ların KPI değerleri."""
     db = _get_db(request)
@@ -1785,7 +1901,7 @@ async def kpi_list(request: Request, instance_id: int | None = None) -> HTMLResp
     return templates.TemplateResponse(request, "pages/kpi.html", ctx)
 
 
-@router.get("/kpi/live", response_class=HTMLResponse)
+@router.get("/kpi/live", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def kpi_live(request: Request, instance_id: int | None = None) -> HTMLResponse:
     """HTMX partial — KPI değerleri güncelleme."""
     db = _get_db(request)
@@ -1795,7 +1911,7 @@ async def kpi_live(request: Request, instance_id: int | None = None) -> HTMLResp
     return templates.TemplateResponse(request, "partials/kpi_live.html", ctx)
 
 
-@router.get("/kpi/{instance_id:int}", response_class=HTMLResponse)
+@router.get("/kpi/{instance_id:int}", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def kpi_detail(request: Request, instance_id: int) -> HTMLResponse:
     """Instance KPI detay sayfası — trend grafikleri ve anomali skoru."""
     db = _get_db(request)
@@ -1811,12 +1927,14 @@ async def kpi_detail(request: Request, instance_id: int) -> HTMLResponse:
     kpi_summaries: list[dict[str, Any]] = []
     for kd in kpi_definitions:
         result = latest_kpis.get(kd.id) if kd.id is not None else None
-        kpi_summaries.append({
-            "name": kd.name,
-            "value": result.value if result else None,
-            "unit": kd.unit,
-            "formula": kd.formula,
-        })
+        kpi_summaries.append(
+            {
+                "name": kd.name,
+                "value": result.value if result else None,
+                "unit": kd.unit,
+                "formula": kd.formula,
+            }
+        )
 
     # Anomali skoru
     anomaly_score = await db.get_latest_anomaly_score(instance_id)
@@ -1883,21 +2001,23 @@ async def _build_kpi_rows(
             if anomaly is not None:
                 anomaly_status = "anomaly" if anomaly.is_anomaly else "normal"
 
-            kpi_rows.append({
-                "instance_id": inst.id,
-                "instance_name": inst.name,
-                "kpi_name": kd.name,
-                "value": result.value if result else 0.0,
-                "unit": kd.unit,
-                "anomaly_status": anomaly_status,
-            })
+            kpi_rows.append(
+                {
+                    "instance_id": inst.id,
+                    "instance_name": inst.name,
+                    "kpi_name": kd.name,
+                    "value": result.value if result else 0.0,
+                    "unit": kd.unit,
+                    "anomaly_status": anomaly_status,
+                }
+            )
     return kpi_rows
 
 
 # --- Threshold CRUD ---
 
 
-@router.get("/thresholds", response_class=HTMLResponse)
+@router.get("/thresholds", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def thresholds_list(request: Request) -> HTMLResponse:
     """Threshold listesi sayfası."""
     db = _get_db(request)
@@ -1910,7 +2030,7 @@ async def thresholds_list(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/thresholds.html", ctx)
 
 
-@router.get("/thresholds/new", response_class=HTMLResponse)
+@router.get("/thresholds/new", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def threshold_new(request: Request) -> HTMLResponse:
     """Yeni threshold formu."""
     db = _get_db(request)
@@ -1927,7 +2047,7 @@ async def threshold_new(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/threshold_form.html", ctx)
 
 
-@router.post("/thresholds", response_class=HTMLResponse)
+@router.post("/thresholds", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def threshold_create(
     request: Request,
     tag_id: str = Form(...),
@@ -1955,7 +2075,9 @@ async def threshold_create(
 
     # Alarm-checklist eşleme (opsiyonel)
     await _upsert_or_delete_alarm_checklist(
-        db, created.id, alarm_checklist_id,
+        db,
+        created.id,
+        alarm_checklist_id,
     )
 
     await db.insert_audit_log(
@@ -1971,7 +2093,11 @@ async def threshold_create(
     return RedirectResponse(url="/dashboard/thresholds", status_code=303)
 
 
-@router.get("/thresholds/{threshold_id:int}/edit", response_class=HTMLResponse)
+@router.get(
+    "/thresholds/{threshold_id:int}/edit",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
 async def threshold_edit(request: Request, threshold_id: int) -> HTMLResponse:
     """Threshold düzenleme formu."""
     db = _get_db(request)
@@ -1994,7 +2120,11 @@ async def threshold_edit(request: Request, threshold_id: int) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/threshold_form.html", ctx)
 
 
-@router.post("/thresholds/{threshold_id:int}/edit", response_class=HTMLResponse)
+@router.post(
+    "/thresholds/{threshold_id:int}/edit",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
 async def threshold_update(
     request: Request,
     threshold_id: int,
@@ -2021,14 +2151,18 @@ async def threshold_update(
         raise HTTPException(status_code=404, detail="Threshold bulunamadı")
 
     await _upsert_or_delete_alarm_checklist(
-        db, threshold_id, alarm_checklist_id,
+        db,
+        threshold_id,
+        alarm_checklist_id,
     )
 
     return RedirectResponse(url="/dashboard/thresholds", status_code=303)
 
 
 async def _upsert_or_delete_alarm_checklist(
-    db: DatabaseInterface, threshold_id: int, checklist_id_str: str,
+    db: DatabaseInterface,
+    threshold_id: int,
+    checklist_id_str: str,
 ) -> None:
     """Form'dan gelen alarm_checklist_id değerini mapping'e uygular.
 
@@ -2045,7 +2179,11 @@ async def _upsert_or_delete_alarm_checklist(
     await db.upsert_alarm_checklist_mapping(threshold_id, cid)
 
 
-@router.post("/thresholds/{threshold_id:int}/delete", response_class=HTMLResponse)
+@router.post(
+    "/thresholds/{threshold_id:int}/delete",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
 async def threshold_delete(
     request: Request,
     threshold_id: int,
@@ -2073,7 +2211,11 @@ async def threshold_delete(
     return RedirectResponse(url="/dashboard/thresholds", status_code=303)
 
 
-@router.post("/thresholds/{threshold_id:int}/toggle", response_class=HTMLResponse)
+@router.post(
+    "/thresholds/{threshold_id:int}/toggle",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
 async def threshold_toggle(
     request: Request,
     threshold_id: int,
@@ -2093,7 +2235,7 @@ async def threshold_toggle(
 # --- Alarms ---
 
 
-@router.get("/alarms", response_class=HTMLResponse)
+@router.get("/alarms", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def alarms_page(request: Request) -> HTMLResponse:
     """Alarm sayfası — aktif alarmlar ve geçmiş."""
     db = _get_db(request)
@@ -2112,9 +2254,7 @@ async def alarms_page(request: Request) -> HTMLResponse:
     cleared_alarms = await db.list_alarm_events(state="cleared", limit=50)
 
     # Threshold adları ve severity'leri çek (denormalize bilgi için)
-    threshold_ids = {
-        a.threshold_id for a in active_alarms + cleared_alarms
-    }
+    threshold_ids = {a.threshold_id for a in active_alarms + cleared_alarms}
     threshold_names: dict[int, str] = {}
     threshold_severities: dict[int, str] = {}
     checklist_by_threshold: dict[int, int] = {}  # threshold_id → checklist_id
@@ -2132,7 +2272,8 @@ async def alarms_page(request: Request) -> HTMLResponse:
     recent_alarm_count: dict[int, int] = {}
     for tid in {a.threshold_id for a in active_alarms}:
         recent_alarm_count[tid] = await db.count_alarm_events_for_threshold(
-            tid, seven_days_ago,
+            tid,
+            seven_days_ago,
         )
 
     ctx = _base_context(
@@ -2148,7 +2289,7 @@ async def alarms_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/alarms.html", ctx)
 
 
-@router.get("/alarms/active", response_class=HTMLResponse)
+@router.get("/alarms/active", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def alarms_active_partial(request: Request) -> HTMLResponse:
     """HTMX partial — aktif alarm satırları."""
     db = _get_db(request)
@@ -2176,11 +2317,15 @@ async def alarms_active_partial(request: Request) -> HTMLResponse:
         "threshold_severities": threshold_severities,
     }
     return templates.TemplateResponse(
-        request, "partials/alarm_active_rows.html", ctx,
+        request,
+        "partials/alarm_active_rows.html",
+        ctx,
     )
 
 
-@router.post("/alarms/{event_id:int}/acknowledge", response_class=HTMLResponse)
+@router.post(
+    "/alarms/{event_id:int}/acknowledge", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP]
+)
 async def alarm_acknowledge(
     request: Request,
     event_id: int,
@@ -2210,10 +2355,7 @@ async def alarm_acknowledge(
             action="acknowledged",
             entity_type="alarm_event",
             entity_id=str(event_id),
-            detail=(
-                f"Alarm onaylandı: threshold_id={event.threshold_id}, "
-                f"tag={event.tag_id}"
-            ),
+            detail=(f"Alarm onaylandı: threshold_id={event.threshold_id}, tag={event.tag_id}"),
         ),
     )
 
@@ -2223,7 +2365,7 @@ async def alarm_acknowledge(
 # --- Logs ---
 
 
-@router.get("/logs", response_class=HTMLResponse)
+@router.get("/logs", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def logs_page(request: Request) -> HTMLResponse:
     """Audit log sayfası."""
     db = _get_db(request)
@@ -2244,7 +2386,7 @@ async def logs_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/logs.html", ctx)
 
 
-@router.get("/logs/entries", response_class=HTMLResponse)
+@router.get("/logs/entries", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def logs_entries_partial(request: Request) -> HTMLResponse:
     """HTMX partial — log girişleri (sayfalama için)."""
     db = _get_db(request)
@@ -2255,7 +2397,9 @@ async def logs_entries_partial(request: Request) -> HTMLResponse:
 
     ctx = {"entries": entries}
     return templates.TemplateResponse(
-        request, "partials/log_entries.html", ctx,
+        request,
+        "partials/log_entries.html",
+        ctx,
     )
 
 
@@ -2266,7 +2410,7 @@ async def logs_entries_partial(request: Request) -> HTMLResponse:
 _APP_START_TIME = datetime.now(UTC)
 
 
-@router.get("/settings", response_class=HTMLResponse)
+@router.get("/settings", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def settings_page(request: Request) -> HTMLResponse:
     """Settings sayfası — sistem bilgisi, bildirim + veri saklama ayarları."""
     db = _get_db(request)
@@ -2305,12 +2449,16 @@ async def settings_page(request: Request) -> HTMLResponse:
     disk_info: dict[str, Any] | None = None
     archive_dir_str: str | None = None
     archiver_obj: ParquetArchiver | None = getattr(
-        request.app.state, "archiver", None,
+        request.app.state,
+        "archiver",
+        None,
     )
     if archiver_obj is not None:
         archive_dir_str = str(archiver_obj.archive_dir)
     monitor: DiskMonitor | None = getattr(
-        request.app.state, "disk_monitor", None,
+        request.app.state,
+        "disk_monitor",
+        None,
     )
     mount = monitor._mount_point if monitor is not None else "/var/custos"
     try:
@@ -2381,7 +2529,7 @@ def _disk_usage_to_dict(usage: DiskUsage) -> dict[str, Any]:
     ``used_percent`` 1 ondalık basamak; total/used/free GB cinsinden yuvarlanır
     (UI ``xxx GB / yyy GB`` gösterimi için).
     """
-    gb = 1024 ** 3
+    gb = 1024**3
     pct = usage.used_percent
     if pct < 70.0:
         color = "ok"
@@ -2399,7 +2547,7 @@ def _disk_usage_to_dict(usage: DiskUsage) -> dict[str, Any]:
     }
 
 
-@router.post("/settings/retention", response_class=HTMLResponse)
+@router.post("/settings/retention", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def update_retention_settings(
     request: Request,
     retention_mode: str = Form(...),
@@ -2419,11 +2567,10 @@ async def update_retention_settings(
         )
     if retention_mode == "off":
         cfg = await db.update_retention_config(
-            auto_clean_enabled=False, updated_by="user",
+            auto_clean_enabled=False,
+            updated_by="user",
         )
-        detail = (
-            f"Auto-clean kapatıldı (raw_retention_days={cfg.raw_retention_days})"
-        )
+        detail = f"Auto-clean kapatıldı (raw_retention_days={cfg.raw_retention_days})"
     else:
         days = int(retention_mode)
         cfg = await db.update_retention_config(
@@ -2445,7 +2592,7 @@ async def update_retention_settings(
     return RedirectResponse(url="/dashboard/settings", status_code=303)
 
 
-@router.get("/api/disk-usage", response_class=HTMLResponse)
+@router.get("/api/disk-usage", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def api_disk_usage(request: Request) -> HTMLResponse:
     """Disk doluluk partial'ı — HTMX polling ile Overview widget'ına gider.
 
@@ -2453,7 +2600,9 @@ async def api_disk_usage(request: Request) -> HTMLResponse:
     Path erişilemezse "ölçülemedi" durumu render edilir.
     """
     monitor: DiskMonitor | None = getattr(
-        request.app.state, "disk_monitor", None,
+        request.app.state,
+        "disk_monitor",
+        None,
     )
     mount = monitor._mount_point if monitor is not None else "/var/custos"
     disk_info: dict[str, Any] | None = None
@@ -2464,11 +2613,13 @@ async def api_disk_usage(request: Request) -> HTMLResponse:
         disk_info = None
     ctx = {"request": request, "disk_info": disk_info}
     return templates.TemplateResponse(
-        request, "partials/disk_usage_widget.html", ctx,
+        request,
+        "partials/disk_usage_widget.html",
+        ctx,
     )
 
 
-@router.post("/settings/avm-pack/seed", response_class=HTMLResponse)
+@router.post("/settings/avm-pack/seed", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def seed_avm_template_pack(request: Request) -> RedirectResponse:
     """AVM Template Pack'i manuel seed eder (F9).
 
@@ -2489,16 +2640,18 @@ async def seed_avm_template_pack(request: Request) -> RedirectResponse:
         await db.upsert_asset_template(schema.to_asset_template())
         count += 1
 
-    await db.insert_audit_log(AuditLogEntry(
-        category="seed",
-        action="avm_template_pack",
-        detail=f"{count} AVM şablonu dashboard üzerinden upsert edildi",
-    ))
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="seed",
+            action="avm_template_pack",
+            detail=f"{count} AVM şablonu dashboard üzerinden upsert edildi",
+        )
+    )
     await logger.ainfo("AVM Template Pack seed tamamlandı", count=count)
     return RedirectResponse(url="/dashboard/settings#avm-pack", status_code=303)
 
 
-@router.post("/settings/notifications", response_class=HTMLResponse)
+@router.post("/settings/notifications", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def update_notification_settings(
     request: Request,
     endpoint: str = Form(...),
@@ -2533,6 +2686,131 @@ async def update_notification_settings(
     return RedirectResponse(url="/dashboard/settings", status_code=303)
 
 
+# --- Kullanıcı yönetimi (V11-101 — developer-only) ---
+
+
+@router.get(
+    "/settings/users",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def users_page(request: Request) -> HTMLResponse:
+    """Kullanıcı listesi + yeni operator/developer ekleme formu."""
+    db = _get_db(request)
+    users_list = await db.list_users()
+    ctx = _base_context(
+        page_title="Kullanıcı Yönetimi",
+        active_nav="/dashboard/settings",
+        users=users_list,
+        error=request.query_params.get("error"),
+        success=request.query_params.get("ok"),
+    )
+    return templates.TemplateResponse(request, "pages/users.html", ctx)
+
+
+@router.post(
+    "/settings/users/new",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def users_create(
+    request: Request,
+    username: str = Form(...),
+    initial_password: str = Form(...),
+    role: str = Form("operator"),
+) -> RedirectResponse:
+    """Yeni kullanıcı oluşturur — must_change_password=True (ilk girişte değiştirir).
+
+    Initial password en az 8 karakter; bcrypt hash + audit log + 303 redirect.
+    """
+    db = _get_db(request)
+    uname = username.strip()
+    if (
+        not uname
+        or len(initial_password) < 8
+        or role
+        not in (
+            "operator",
+            "developer",
+        )
+    ):
+        return RedirectResponse(
+            url="/dashboard/settings/users?error=invalid",
+            status_code=303,
+        )
+
+    existing = await db.get_user_by_username(uname)
+    if existing is not None:
+        return RedirectResponse(
+            url="/dashboard/settings/users?error=duplicate",
+            status_code=303,
+        )
+
+    pw_hash = hash_password(initial_password)
+    new_user = await db.create_user(
+        username=uname,
+        password_hash=pw_hash,
+        role=role,
+        must_change_password=True,
+    )
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="auth",
+            action="user_created",
+            entity_type="user",
+            entity_id=str(new_user.id),
+            detail=f"{new_user.username} ({new_user.role})",
+        )
+    )
+    return RedirectResponse(
+        url="/dashboard/settings/users?ok=created",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/settings/users/{user_id:int}/toggle",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def users_toggle_enabled(
+    request: Request,
+    user_id: int,
+) -> RedirectResponse:
+    """Kullanıcıyı aktif/pasif arasında geçirir.
+
+    Kendi kendini devre dışı bırakmaya karşı koruma: aktif session sahibi
+    kendi user_id'sini pasifleştirirse mevcut session'ları temizlense bile
+    sistemde tek developer kalmama riski olur — basit guard ekledik.
+    """
+    db = _get_db(request)
+    session = request.state.session
+    if session.user_id == user_id:
+        return RedirectResponse(
+            url="/dashboard/settings/users?error=self_disable",
+            status_code=303,
+        )
+    users_list = await db.list_users()
+    target = next((u for u in users_list if u.id == user_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+    new_state = not target.enabled
+    await db.set_user_enabled(user_id, new_state)
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="auth",
+            action="user_enabled" if new_state else "user_disabled",
+            entity_type="user",
+            entity_id=str(user_id),
+            detail=target.username,
+        )
+    )
+    return RedirectResponse(
+        url="/dashboard/settings/users?ok=toggled",
+        status_code=303,
+    )
+
+
 # --- Push API ---
 
 
@@ -2543,7 +2821,7 @@ async def vapid_public_key() -> JSONResponse:
     return JSONResponse({"public_key": public_key})
 
 
-@router.post("/api/push/subscribe")
+@router.post("/api/push/subscribe", dependencies=[_OPERATOR_DEP])
 async def push_subscribe(request: Request) -> JSONResponse:
     """Push subscription kaydeder."""
     db = _get_db(request)
@@ -2564,7 +2842,7 @@ async def push_subscribe(request: Request) -> JSONResponse:
     return JSONResponse({"id": created.id, "endpoint": created.endpoint})
 
 
-@router.delete("/api/push/subscribe")
+@router.delete("/api/push/subscribe", dependencies=[_OPERATOR_DEP])
 async def push_unsubscribe(request: Request) -> JSONResponse:
     """Push subscription siler."""
     db = _get_db(request)
@@ -2578,7 +2856,7 @@ async def push_unsubscribe(request: Request) -> JSONResponse:
     return JSONResponse({"deleted": deleted})
 
 
-@router.post("/api/push/test")
+@router.post("/api/push/test", dependencies=[_OPERATOR_DEP])
 async def push_test(request: Request) -> JSONResponse:
     """Test bildirimi gönderir."""
     if not is_push_enabled():
@@ -2620,7 +2898,8 @@ async def _unique_checklist_slug(db: DatabaseInterface, base: str) -> str:
 
 
 def _parse_checklist_steps_form(
-    texts: list[str], minutes: list[str],
+    texts: list[str],
+    minutes: list[str],
 ) -> list[MaintenanceChecklistStep]:
     """Form'dan gelen paralel step_text[] ve step_minutes[] dizilerini birleştirir.
 
@@ -2636,19 +2915,24 @@ def _parse_checklist_steps_form(
             mins: int | None = int(mins_raw) if mins_raw.strip() else None
         except ValueError:
             mins = None
-        steps.append(MaintenanceChecklistStep(
-            checklist_id=0, sort_order=len(steps),
-            text=t, estimated_minutes=mins,
-        ))
+        steps.append(
+            MaintenanceChecklistStep(
+                checklist_id=0,
+                sort_order=len(steps),
+                text=t,
+                estimated_minutes=mins,
+            )
+        )
     return steps
 
 
 _MAINTENANCE_TABS = ("calendar", "checklists", "history")
 
 
-@router.get("/maintenance", response_class=HTMLResponse)
+@router.get("/maintenance", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def maintenance_page(
-    request: Request, tab: str = "calendar",
+    request: Request,
+    tab: str = "calendar",
 ) -> HTMLResponse:
     """Maintenance ana sayfa — 3 sekme (calendar / checklists / history)."""
     if tab not in _MAINTENANCE_TABS:
@@ -2671,10 +2955,7 @@ async def maintenance_page(
     # Asset instance ve checklist isimleri için lookup dict'leri
     instances = await db.list_asset_instances()
     instance_by_id = {i.id: i for i in instances if i.id is not None}
-    checklist_lookup = {
-        c.id: c for c in await db.list_maintenance_checklists()
-        if c.id is not None
-    }
+    checklist_lookup = {c.id: c for c in await db.list_maintenance_checklists() if c.id is not None}
 
     ctx = _base_context(
         page_title="Maintenance",
@@ -2693,7 +2974,9 @@ async def maintenance_page(
 # --- Checklist CRUD ---
 
 
-@router.get("/maintenance/checklists/new", response_class=HTMLResponse)
+@router.get(
+    "/maintenance/checklists/new", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP]
+)
 async def maintenance_checklist_new(request: Request) -> HTMLResponse:
     """Yeni checklist formu."""
     db = _get_db(request)
@@ -2705,11 +2988,13 @@ async def maintenance_checklist_new(request: Request) -> HTMLResponse:
         asset_templates=templates_list,
     )
     return templates.TemplateResponse(
-        request, "pages/maintenance_checklist_form.html", ctx,
+        request,
+        "pages/maintenance_checklist_form.html",
+        ctx,
     )
 
 
-@router.post("/maintenance/checklists", response_class=HTMLResponse)
+@router.post("/maintenance/checklists", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def maintenance_checklist_create(
     request: Request,
     title: str = Form(...),
@@ -2736,25 +3021,37 @@ async def maintenance_checklist_create(
     slug = await _unique_checklist_slug(db, _slugify_checklist_title(title))
     steps = _parse_checklist_steps_form(step_text, step_minutes)
     checklist = MaintenanceChecklist(
-        slug=slug, title=title, description=description.strip(),
-        category=category, asset_template_id=tmpl_id, steps=steps,
+        slug=slug,
+        title=title,
+        description=description.strip(),
+        category=category,
+        asset_template_id=tmpl_id,
+        steps=steps,
     )
     await db.insert_maintenance_checklist(checklist)
-    await db.insert_audit_log(AuditLogEntry(
-        category="maintenance", action="checklist_created",
-        entity_type="checklist", entity_id=slug, detail=title,
-    ))
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="maintenance",
+            action="checklist_created",
+            entity_type="checklist",
+            entity_id=slug,
+            detail=title,
+        )
+    )
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=checklists", status_code=303,
+        url="/dashboard/maintenance?tab=checklists",
+        status_code=303,
     )
 
 
 @router.get(
     "/maintenance/checklists/{checklist_id:int}/edit",
     response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
 )
 async def maintenance_checklist_edit(
-    request: Request, checklist_id: int,
+    request: Request,
+    checklist_id: int,
 ) -> HTMLResponse:
     """Checklist düzenleme formu."""
     db = _get_db(request)
@@ -2769,16 +3066,20 @@ async def maintenance_checklist_edit(
         asset_templates=templates_list,
     )
     return templates.TemplateResponse(
-        request, "pages/maintenance_checklist_form.html", ctx,
+        request,
+        "pages/maintenance_checklist_form.html",
+        ctx,
     )
 
 
 @router.post(
     "/maintenance/checklists/{checklist_id:int}/edit",
     response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
 )
 async def maintenance_checklist_update(
-    request: Request, checklist_id: int,
+    request: Request,
+    checklist_id: int,
     title: str = Form(...),
     description: str = Form(""),
     category: str = Form("generic"),
@@ -2800,26 +3101,34 @@ async def maintenance_checklist_update(
         except ValueError:
             tmpl_id = None
 
-    updated = await db.update_maintenance_checklist(checklist_id, {
-        "title": title, "description": description.strip(),
-        "category": category, "asset_template_id": tmpl_id,
-    })
+    updated = await db.update_maintenance_checklist(
+        checklist_id,
+        {
+            "title": title,
+            "description": description.strip(),
+            "category": category,
+            "asset_template_id": tmpl_id,
+        },
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Checklist bulunamadı")
 
     steps = _parse_checklist_steps_form(step_text, step_minutes)
     await db.replace_maintenance_checklist_steps(checklist_id, steps)
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=checklists", status_code=303,
+        url="/dashboard/maintenance?tab=checklists",
+        status_code=303,
     )
 
 
 @router.post(
     "/maintenance/checklists/{checklist_id:int}/delete",
     response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
 )
 async def maintenance_checklist_delete(
-    request: Request, checklist_id: int,
+    request: Request,
+    checklist_id: int,
 ) -> RedirectResponse:
     """Checklist siler (steps CASCADE)."""
     db = _get_db(request)
@@ -2829,19 +3138,27 @@ async def maintenance_checklist_delete(
     ok = await db.delete_maintenance_checklist(checklist_id)
     if not ok:
         raise HTTPException(status_code=500, detail="Silme başarısız")
-    await db.insert_audit_log(AuditLogEntry(
-        category="maintenance", action="checklist_deleted",
-        entity_type="checklist", entity_id=existing.slug, detail=existing.title,
-    ))
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="maintenance",
+            action="checklist_deleted",
+            entity_type="checklist",
+            entity_id=existing.slug,
+            detail=existing.title,
+        )
+    )
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=checklists", status_code=303,
+        url="/dashboard/maintenance?tab=checklists",
+        status_code=303,
     )
 
 
 # --- Schedule CRUD ---
 
 
-@router.get("/maintenance/schedules/new", response_class=HTMLResponse)
+@router.get(
+    "/maintenance/schedules/new", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP]
+)
 async def maintenance_schedule_new(request: Request) -> HTMLResponse:
     """Yeni schedule formu."""
     db = _get_db(request)
@@ -2857,14 +3174,20 @@ async def maintenance_schedule_new(request: Request) -> HTMLResponse:
         asset_instances=instances,
     )
     return templates.TemplateResponse(
-        request, "pages/maintenance_schedule_form.html", ctx,
+        request,
+        "pages/maintenance_schedule_form.html",
+        ctx,
     )
 
 
 def _parse_schedule_form(
-    checklist_id_str: str, scope_kind: str, scope_target_str: str,
-    period_kind: str, period_value_str: str,
-    anchor_date_str: str, notify_lead_hours_str: str,
+    checklist_id_str: str,
+    scope_kind: str,
+    scope_target_str: str,
+    period_kind: str,
+    period_value_str: str,
+    anchor_date_str: str,
+    notify_lead_hours_str: str,
 ) -> tuple[int, int | None, int | None, str, int, date, int]:
     """Schedule formunu dataclass alanlarına parse eder.
 
@@ -2877,10 +3200,15 @@ def _parse_schedule_form(
         cid = int(checklist_id_str)
     except ValueError as exc:
         raise HTTPException(
-            status_code=400, detail="Geçersiz checklist",
+            status_code=400,
+            detail="Geçersiz checklist",
         ) from exc
     if period_kind not in (
-        "daily", "weekly", "monthly", "yearly", "custom_days",
+        "daily",
+        "weekly",
+        "monthly",
+        "yearly",
+        "custom_days",
     ):
         raise HTTPException(status_code=400, detail="Geçersiz periyot türü")
     try:
@@ -2891,7 +3219,8 @@ def _parse_schedule_form(
         anchor = datetime.strptime(anchor_date_str, "%Y-%m-%d").date()
     except (ValueError, TypeError) as exc:
         raise HTTPException(
-            status_code=400, detail="Geçersiz tarih",
+            status_code=400,
+            detail="Geçersiz tarih",
         ) from exc
     try:
         notify = max(0, int(notify_lead_hours_str)) if notify_lead_hours_str else 24
@@ -2904,7 +3233,8 @@ def _parse_schedule_form(
         sid = int(scope_target_str)
     except ValueError as exc:
         raise HTTPException(
-            status_code=400, detail="Geçersiz kapsam hedefi",
+            status_code=400,
+            detail="Geçersiz kapsam hedefi",
         ) from exc
     if scope_kind == "template":
         tmpl_id = sid
@@ -2916,7 +3246,7 @@ def _parse_schedule_form(
     return cid, tmpl_id, inst_id, period_kind, pval, anchor, notify
 
 
-@router.post("/maintenance/schedules", response_class=HTMLResponse)
+@router.post("/maintenance/schedules", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def maintenance_schedule_create(
     request: Request,
     checklist_id: str = Form(...),
@@ -2930,34 +3260,46 @@ async def maintenance_schedule_create(
     """Yeni schedule kaydı."""
     db = _get_db(request)
     cid, tmpl_id, inst_id, pkind, pval, anchor, notify = _parse_schedule_form(
-        checklist_id, scope_kind, scope_target, period_kind,
-        period_value, anchor_date, notify_lead_hours,
+        checklist_id,
+        scope_kind,
+        scope_target,
+        period_kind,
+        period_value,
+        anchor_date,
+        notify_lead_hours,
     )
     # next_due_at = anchor_date at 09:00 UTC (sabah default)
     next_due = datetime.combine(
-        anchor, time(9, 0), tzinfo=UTC,
+        anchor,
+        time(9, 0),
+        tzinfo=UTC,
     )
-    await db.insert_maintenance_schedule(MaintenanceSchedule(
-        checklist_id=cid,
-        asset_template_id=tmpl_id,
-        asset_instance_id=inst_id,
-        period_kind=pkind,
-        period_value=pval,
-        anchor_date=anchor,
-        next_due_at=next_due,
-        notify_lead_hours=notify,
-    ))
+    await db.insert_maintenance_schedule(
+        MaintenanceSchedule(
+            checklist_id=cid,
+            asset_template_id=tmpl_id,
+            asset_instance_id=inst_id,
+            period_kind=pkind,
+            period_value=pval,
+            anchor_date=anchor,
+            next_due_at=next_due,
+            notify_lead_hours=notify,
+        )
+    )
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=calendar", status_code=303,
+        url="/dashboard/maintenance?tab=calendar",
+        status_code=303,
     )
 
 
 @router.get(
     "/maintenance/schedules/{schedule_id:int}/edit",
     response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
 )
 async def maintenance_schedule_edit(
-    request: Request, schedule_id: int,
+    request: Request,
+    schedule_id: int,
 ) -> HTMLResponse:
     """Schedule düzenleme formu."""
     db = _get_db(request)
@@ -2976,16 +3318,20 @@ async def maintenance_schedule_edit(
         asset_instances=instances,
     )
     return templates.TemplateResponse(
-        request, "pages/maintenance_schedule_form.html", ctx,
+        request,
+        "pages/maintenance_schedule_form.html",
+        ctx,
     )
 
 
 @router.post(
     "/maintenance/schedules/{schedule_id:int}/edit",
     response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
 )
 async def maintenance_schedule_update(
-    request: Request, schedule_id: int,
+    request: Request,
+    schedule_id: int,
     checklist_id: str = Form(...),
     scope_kind: str = Form(...),
     scope_target: str = Form(...),
@@ -2997,33 +3343,44 @@ async def maintenance_schedule_update(
     """Schedule günceller."""
     db = _get_db(request)
     cid, tmpl_id, inst_id, pkind, pval, anchor, notify = _parse_schedule_form(
-        checklist_id, scope_kind, scope_target, period_kind,
-        period_value, anchor_date, notify_lead_hours,
+        checklist_id,
+        scope_kind,
+        scope_target,
+        period_kind,
+        period_value,
+        anchor_date,
+        notify_lead_hours,
     )
     next_due = datetime.combine(anchor, time(9, 0), tzinfo=UTC)
-    updated = await db.update_maintenance_schedule(schedule_id, {
-        "checklist_id": cid,
-        "asset_template_id": tmpl_id,
-        "asset_instance_id": inst_id,
-        "period_kind": pkind,
-        "period_value": pval,
-        "anchor_date": anchor,
-        "next_due_at": next_due,
-        "notify_lead_hours": notify,
-    })
+    updated = await db.update_maintenance_schedule(
+        schedule_id,
+        {
+            "checklist_id": cid,
+            "asset_template_id": tmpl_id,
+            "asset_instance_id": inst_id,
+            "period_kind": pkind,
+            "period_value": pval,
+            "anchor_date": anchor,
+            "next_due_at": next_due,
+            "notify_lead_hours": notify,
+        },
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Schedule bulunamadı")
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=calendar", status_code=303,
+        url="/dashboard/maintenance?tab=calendar",
+        status_code=303,
     )
 
 
 @router.post(
     "/maintenance/schedules/{schedule_id:int}/delete",
     response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
 )
 async def maintenance_schedule_delete(
-    request: Request, schedule_id: int,
+    request: Request,
+    schedule_id: int,
 ) -> RedirectResponse:
     """Schedule siler."""
     db = _get_db(request)
@@ -3031,16 +3388,19 @@ async def maintenance_schedule_delete(
     if not ok:
         raise HTTPException(status_code=404, detail="Schedule bulunamadı")
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=calendar", status_code=303,
+        url="/dashboard/maintenance?tab=calendar",
+        status_code=303,
     )
 
 
 @router.post(
     "/maintenance/schedules/{schedule_id:int}/toggle",
     response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
 )
 async def maintenance_schedule_toggle(
-    request: Request, schedule_id: int,
+    request: Request,
+    schedule_id: int,
 ) -> RedirectResponse:
     """Schedule'ı aktif/pasif yapar."""
     db = _get_db(request)
@@ -3048,10 +3408,12 @@ async def maintenance_schedule_toggle(
     if schedule is None:
         raise HTTPException(status_code=404, detail="Schedule bulunamadı")
     await db.update_maintenance_schedule(
-        schedule_id, {"enabled": not schedule.enabled},
+        schedule_id,
+        {"enabled": not schedule.enabled},
     )
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=calendar", status_code=303,
+        url="/dashboard/maintenance?tab=calendar",
+        status_code=303,
     )
 
 
@@ -3059,10 +3421,13 @@ async def maintenance_schedule_toggle(
 
 
 @router.get(
-    "/maintenance/tasks/{task_id:int}", response_class=HTMLResponse,
+    "/maintenance/tasks/{task_id:int}",
+    response_class=HTMLResponse,
+    dependencies=[_OPERATOR_DEP],
 )
 async def maintenance_task_detail(
-    request: Request, task_id: int,
+    request: Request,
+    task_id: int,
 ) -> HTMLResponse:
     """Task detay sayfası — adım adım tamamlama formu."""
     db = _get_db(request)
@@ -3084,16 +3449,20 @@ async def maintenance_task_detail(
         asset=asset,
     )
     return templates.TemplateResponse(
-        request, "pages/maintenance_task_detail.html", ctx,
+        request,
+        "pages/maintenance_task_detail.html",
+        ctx,
     )
 
 
 @router.post(
     "/maintenance/tasks/{task_id:int}/complete",
     response_class=HTMLResponse,
+    dependencies=[_OPERATOR_DEP],
 )
 async def maintenance_task_complete(
-    request: Request, task_id: int,
+    request: Request,
+    task_id: int,
     completed_by: str = Form(""),
     notes: str = Form(""),
     step_checked: list[str] = _EMPTY_FORM_STR_LIST,
@@ -3127,35 +3496,46 @@ async def maintenance_task_complete(
             checked = str(step.id) in checked_set
             await db.upsert_maintenance_task_step_result(
                 MaintenanceTaskStepResult(
-                    task_id=task_id, step_id=step.id,
+                    task_id=task_id,
+                    step_id=step.id,
                     checked=checked,
                     note=notes_by_step.get(step.id, ""),
                     completed_at=now if checked else None,
                 ),
             )
 
-    await db.update_maintenance_task(task_id, {
-        "status": "completed",
-        "completed_at": now,
-        "completed_by": completed_by.strip(),
-        "notes": notes.strip(),
-    })
-    await db.insert_audit_log(AuditLogEntry(
-        category="maintenance", action="task_completed",
-        entity_type="task", entity_id=str(task_id),
-        detail=task.title_snapshot,
-    ))
+    await db.update_maintenance_task(
+        task_id,
+        {
+            "status": "completed",
+            "completed_at": now,
+            "completed_by": completed_by.strip(),
+            "notes": notes.strip(),
+        },
+    )
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="maintenance",
+            action="task_completed",
+            entity_type="task",
+            entity_id=str(task_id),
+            detail=task.title_snapshot,
+        )
+    )
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=history", status_code=303,
+        url="/dashboard/maintenance?tab=history",
+        status_code=303,
     )
 
 
 @router.post(
     "/maintenance/tasks/{task_id:int}/skip",
     response_class=HTMLResponse,
+    dependencies=[_OPERATOR_DEP],
 )
 async def maintenance_task_skip(
-    request: Request, task_id: int,
+    request: Request,
+    task_id: int,
     notes: str = Form(""),
 ) -> RedirectResponse:
     """Task'ı skip et."""
@@ -3163,22 +3543,28 @@ async def maintenance_task_skip(
     task = await db.get_maintenance_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task bulunamadı")
-    await db.update_maintenance_task(task_id, {
-        "status": "skipped",
-        "completed_at": datetime.now(UTC),
-        "notes": notes.strip(),
-    })
+    await db.update_maintenance_task(
+        task_id,
+        {
+            "status": "skipped",
+            "completed_at": datetime.now(UTC),
+            "notes": notes.strip(),
+        },
+    )
     return RedirectResponse(
-        url="/dashboard/maintenance?tab=history", status_code=303,
+        url="/dashboard/maintenance?tab=history",
+        status_code=303,
     )
 
 
 @router.post(
     "/alarms/{alarm_event_id:int}/start-checklist",
     response_class=HTMLResponse,
+    dependencies=[_OPERATOR_DEP],
 )
 async def alarm_start_checklist(
-    request: Request, alarm_event_id: int,
+    request: Request,
+    alarm_event_id: int,
 ) -> RedirectResponse:
     """Alarm event'inden checklist task'ı açar + detay sayfasına yönlendirir."""
     db = _get_db(request)
@@ -3204,11 +3590,15 @@ async def alarm_start_checklist(
         status="pending",
     )
     created = await db.insert_maintenance_task(task)
-    await db.insert_audit_log(AuditLogEntry(
-        category="maintenance", action="task_from_alarm",
-        entity_type="alarm", entity_id=str(alarm_event_id),
-        detail=f"Alarm {alarm_event_id} için task {created.id} oluşturuldu",
-    ))
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="maintenance",
+            action="task_from_alarm",
+            entity_type="alarm",
+            entity_id=str(alarm_event_id),
+            detail=f"Alarm {alarm_event_id} için task {created.id} oluşturuldu",
+        )
+    )
     return RedirectResponse(
         url=f"/dashboard/maintenance/tasks/{created.id}",
         status_code=303,
@@ -3225,11 +3615,14 @@ _archive_lock = asyncio.Lock()
 def _get_archiver(request: Request) -> ParquetArchiver:
     """Request state'ten archiver'ı döndürür, yoksa 503."""
     archiver: ParquetArchiver | None = getattr(
-        request.app.state, "archiver", None,
+        request.app.state,
+        "archiver",
+        None,
     )
     if archiver is None:
         raise HTTPException(
-            status_code=503, detail="Archiver başlatılmamış",
+            status_code=503,
+            detail="Archiver başlatılmamış",
         )
     return archiver
 
@@ -3250,7 +3643,7 @@ def _archive_result_to_dict(result: ArchiveResult) -> dict[str, Any]:
     }
 
 
-@router.post("/api/archive/run")
+@router.post("/api/archive/run", dependencies=[_DEVELOPER_DEP])
 async def archive_run(request: Request, year: int, month: int) -> JSONResponse:
     """Belirtilen ayı elle arşivler. Aynı anda sadece 1 job (asyncio.Lock).
 
@@ -3276,7 +3669,7 @@ async def archive_run(request: Request, year: int, month: int) -> JSONResponse:
 # --- Teknik Asistan Chatbot (F8b) ---
 
 
-@router.get("/assistant", response_class=HTMLResponse)
+@router.get("/assistant", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def assistant_page(request: Request) -> HTMLResponse:
     """Teknik asistan chatbot sayfası — boş chat ile render.
 
@@ -3290,7 +3683,7 @@ async def assistant_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "pages/assistant.html", ctx)
 
 
-@router.post("/assistant/ask", response_class=HTMLResponse)
+@router.post("/assistant/ask", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def assistant_ask(
     request: Request,
     query: str = Form(...),
@@ -3306,6 +3699,4 @@ async def assistant_ask(
         "question": trimmed,
         "answer": answer,
     }
-    return templates.TemplateResponse(
-        request, "partials/assistant_message.html", ctx
-    )
+    return templates.TemplateResponse(request, "partials/assistant_message.html", ctx)

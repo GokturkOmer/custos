@@ -22,21 +22,23 @@ from custos.shared.database import (
 logger = structlog.get_logger(logger_name="kpi_engine")
 
 # Güvenli formül değerlendirmede izin verilen AST node tipleri
-_ALLOWED_NODE_TYPES: frozenset[type] = frozenset({
-    ast.Expression,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Constant,
-    ast.Name,
-    ast.Load,
-    # Operatörler
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.Div,
-    ast.USub,
-    ast.UAdd,
-})
+_ALLOWED_NODE_TYPES: frozenset[type] = frozenset(
+    {
+        ast.Expression,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Constant,
+        ast.Name,
+        ast.Load,
+        # Operatörler
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.USub,
+        ast.UAdd,
+    }
+)
 
 
 def _safe_eval(formula: str, variables: dict[str, float]) -> float | None:
@@ -174,12 +176,14 @@ class KpiEngine:
                 assert kpi_def.id is not None
                 value = _safe_eval(kpi_def.formula, variables)
                 if value is not None:
-                    results_batch.append(KpiResult(
-                        instance_id=instance.id,
-                        kpi_definition_id=kpi_def.id,
-                        bucket_start=bucket_start,
-                        value=value,
-                    ))
+                    results_batch.append(
+                        KpiResult(
+                            instance_id=instance.id,
+                            kpi_definition_id=kpi_def.id,
+                            bucket_start=bucket_start,
+                            value=value,
+                        )
+                    )
                     total_computed += 1
 
         # Toplu kaydet
@@ -192,8 +196,10 @@ class KpiEngine:
                 computed=total_computed,
                 instances=len(instances),
             )
-            await self._db.insert_audit_log(AuditLogEntry(
-                category="kpi",
-                action="compute_cycle",
-                detail=f"{total_computed} KPI hesaplandı",
-            ))
+            await self._db.insert_audit_log(
+                AuditLogEntry(
+                    category="kpi",
+                    action="compute_cycle",
+                    detail=f"{total_computed} KPI hesaplandı",
+                )
+            )

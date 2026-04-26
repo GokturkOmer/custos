@@ -32,10 +32,7 @@ def test_bulk_import_preview_invalid_extension() -> None:
 
 def test_bulk_import_preview_valid_csv_json() -> None:
     """Valid CSV + JSON response (HX-Request header yok)."""
-    csv = (
-        b"tag_id,name,modbus_host,register_address\n"
-        b"TEST_UI_01,Test Tag,10.0.0.1,40001\n"
-    )
+    csv = b"tag_id,name,modbus_host,register_address\nTEST_UI_01,Test Tag,10.0.0.1,40001\n"
     files = {"file": ("tags.csv", csv, "text/csv")}
     response = client.post(
         "/dashboard/sensors/bulk-import/preview",
@@ -50,10 +47,7 @@ def test_bulk_import_preview_valid_csv_json() -> None:
 
 def test_bulk_import_preview_valid_csv_htmx_html() -> None:
     """HX-Request header → HTML partial döner."""
-    csv = (
-        b"tag_id,name,modbus_host,register_address\n"
-        b"TEST_UI_02,Test,10.0.0.1,40001\n"
-    )
+    csv = b"tag_id,name,modbus_host,register_address\nTEST_UI_02,Test,10.0.0.1,40001\n"
     files = {"file": ("tags.csv", csv, "text/csv")}
     response = client.post(
         "/dashboard/sensors/bulk-import/preview",

@@ -9,8 +9,33 @@
 {% endblock %}
 
 {% block content %}
+{% set _session = request.state.session if request.state.session is defined else None %}
+{% set _is_dev = _session and _session.role == 'developer' %}
 <div class="space-y-6">
   <h1 class="text-heading text-text-primary font-semibold">Settings</h1>
+
+  {# Kullanıcı Yönetimi linki — yalnızca Geliştirici (V11-101) #}
+  {% if _is_dev %}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak flex items-center justify-between">
+      <h2 class="text-panel-title text-text-primary font-semibold">Geliştirici Ayarları</h2>
+      <span class="text-small text-text-disabled">{{ _session.username }}</span>
+    </div>
+    <div class="p-4 flex items-center justify-between">
+      <div>
+        <p class="text-body text-text-primary font-medium">Kullanıcı Yönetimi</p>
+        <p class="text-small text-text-secondary mt-0.5">
+          Operatör/Geliştirici kullanıcı oluştur, devre dışı bırak.
+        </p>
+      </div>
+      <a href="/dashboard/settings/users"
+         class="px-3 py-1.5 bg-accent-primary text-white text-small font-medium rounded
+                hover:bg-accent-primary/90 transition-colors">
+        Aç →
+      </a>
+    </div>
+  </div>
+  {% endif %}
 
   {# A) Sistem Bilgisi #}
   <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">

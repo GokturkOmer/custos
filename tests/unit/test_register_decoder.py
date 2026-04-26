@@ -100,9 +100,7 @@ def test_uint16_mid() -> None:
 def test_uint16_with_gain_offset() -> None:
     """gain=0.1, offset=-40 -> sıcaklık ölçeği örneği."""
     # raw=400 -> 400 * 0.1 + (-40) = 0
-    assert decode_register(
-        (400,), _tag("uint16", gain=0.1, offset=-40.0)
-    ) == pytest.approx(0.0)
+    assert decode_register((400,), _tag("uint16", gain=0.1, offset=-40.0)) == pytest.approx(0.0)
 
 
 # --- int16 ---
@@ -132,24 +130,18 @@ def test_int16_max_boundary() -> None:
 
 def test_uint32_big_word_order() -> None:
     """big (AB-CD): registers=(hi, lo). 0x0001_0002 -> (0x0001, 0x0002)."""
-    assert decode_register((0x0001, 0x0002), _tag("uint32", byte_order="big")) == float(
-        0x00010002
-    )
+    assert decode_register((0x0001, 0x0002), _tag("uint32", byte_order="big")) == float(0x00010002)
 
 
 def test_uint32_little_word_order() -> None:
     """little (CD-AB): registers=(lo, hi). Aynı değer için ters sıra."""
     # 0x0001_0002 = 65538 -> little word order'da (lo=0x0002, hi=0x0001)
-    assert decode_register(
-        (0x0002, 0x0001), _tag("uint32", byte_order="little")
-    ) == 65538.0
+    assert decode_register((0x0002, 0x0001), _tag("uint32", byte_order="little")) == 65538.0
 
 
 def test_uint32_max() -> None:
     """0xFFFFFFFF = 4294967295."""
-    assert decode_register(
-        (0xFFFF, 0xFFFF), _tag("uint32", byte_order="big")
-    ) == 4294967295.0
+    assert decode_register((0xFFFF, 0xFFFF), _tag("uint32", byte_order="big")) == 4294967295.0
 
 
 def test_uint32_zero() -> None:
@@ -160,43 +152,31 @@ def test_uint32_zero() -> None:
 
 
 def test_int32_positive_big() -> None:
-    assert decode_register(
-        (0x0001, 0x0000), _tag("int32", byte_order="big")
-    ) == 65536.0
+    assert decode_register((0x0001, 0x0000), _tag("int32", byte_order="big")) == 65536.0
 
 
 def test_int32_negative_big() -> None:
     """-1 = 0xFFFFFFFF."""
-    assert decode_register(
-        (0xFFFF, 0xFFFF), _tag("int32", byte_order="big")
-    ) == -1.0
+    assert decode_register((0xFFFF, 0xFFFF), _tag("int32", byte_order="big")) == -1.0
 
 
 def test_int32_min_boundary() -> None:
     """0x80000000 = -2147483648."""
-    assert decode_register(
-        (0x8000, 0x0000), _tag("int32", byte_order="big")
-    ) == -2147483648.0
+    assert decode_register((0x8000, 0x0000), _tag("int32", byte_order="big")) == -2147483648.0
 
 
 def test_int32_max_boundary() -> None:
     """0x7FFFFFFF = 2147483647."""
-    assert decode_register(
-        (0x7FFF, 0xFFFF), _tag("int32", byte_order="big")
-    ) == 2147483647.0
+    assert decode_register((0x7FFF, 0xFFFF), _tag("int32", byte_order="big")) == 2147483647.0
 
 
 def test_int32_little_word_order() -> None:
     """little word order -1: (lo=0xFFFF, hi=0xFFFF) zaten simetrik."""
-    assert decode_register(
-        (0xFFFF, 0xFFFF), _tag("int32", byte_order="little")
-    ) == -1.0
+    assert decode_register((0xFFFF, 0xFFFF), _tag("int32", byte_order="little")) == -1.0
 
     # Asimetrik örnek: 0x0001_0000 big = 65536. little word order'da registers
     # (lo=0x0000, hi=0x0001).
-    assert decode_register(
-        (0x0000, 0x0001), _tag("int32", byte_order="little")
-    ) == 65536.0
+    assert decode_register((0x0000, 0x0001), _tag("int32", byte_order="little")) == 65536.0
 
 
 # --- float32 ---
@@ -204,17 +184,13 @@ def test_int32_little_word_order() -> None:
 
 def test_float32_one_big() -> None:
     """1.0 = 0x3F800000. Big word order: (0x3F80, 0x0000)."""
-    result = decode_register(
-        (0x3F80, 0x0000), _tag("float32", byte_order="big")
-    )
+    result = decode_register((0x3F80, 0x0000), _tag("float32", byte_order="big"))
     assert result == pytest.approx(1.0, abs=1e-5)
 
 
 def test_float32_negative() -> None:
     """-1.5 = 0xBFC00000."""
-    result = decode_register(
-        (0xBFC0, 0x0000), _tag("float32", byte_order="big")
-    )
+    result = decode_register((0xBFC0, 0x0000), _tag("float32", byte_order="big"))
     assert result == pytest.approx(-1.5, abs=1e-5)
 
 
@@ -222,25 +198,19 @@ def test_float32_pi() -> None:
     """Pi'yi pack+decode et, round-trip doğruluğu."""
     packed = struct.pack(">f", math.pi)
     hi, lo = struct.unpack(">HH", packed)
-    result = decode_register(
-        (hi, lo), _tag("float32", byte_order="big")
-    )
+    result = decode_register((hi, lo), _tag("float32", byte_order="big"))
     assert result == pytest.approx(math.pi, rel=1e-6)
 
 
 def test_float32_little_word_order() -> None:
     """Little word order: registers ters sırada verilir."""
     # 1.0 big: (0x3F80, 0x0000). Little: (0x0000, 0x3F80)
-    result = decode_register(
-        (0x0000, 0x3F80), _tag("float32", byte_order="little")
-    )
+    result = decode_register((0x0000, 0x3F80), _tag("float32", byte_order="little"))
     assert result == pytest.approx(1.0, abs=1e-5)
 
 
 def test_float32_zero() -> None:
-    assert decode_register(
-        (0x0000, 0x0000), _tag("float32", byte_order="big")
-    ) == 0.0
+    assert decode_register((0x0000, 0x0000), _tag("float32", byte_order="big")) == 0.0
 
 
 def test_float32_with_gain_offset() -> None:

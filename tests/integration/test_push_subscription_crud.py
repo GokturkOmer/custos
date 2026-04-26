@@ -44,14 +44,10 @@ async def db() -> AsyncIterator[TimescaleDBDatabase]:
 
     pool = database._get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM push_subscriptions WHERE endpoint LIKE 'https://test.%'"
-        )
+        await conn.execute("DELETE FROM push_subscriptions WHERE endpoint LIKE 'https://test.%'")
     yield database  # type: ignore[misc]
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM push_subscriptions WHERE endpoint LIKE 'https://test.%'"
-        )
+        await conn.execute("DELETE FROM push_subscriptions WHERE endpoint LIKE 'https://test.%'")
     await database.close()
 
 

@@ -18,10 +18,14 @@
         <span class="text-lg font-semibold tracking-wider text-accent-primary">CUSTOS</span>
       </div>
 
-      {# Navigasyon #}
+      {# Navigasyon — dev_only itemlar yalnızca developer rolü için gösterilir (V11-101) #}
+      {% set _session = request.state.session if request.state.session is defined else None %}
+      {% set _is_dev = _session and _session.role == 'developer' %}
       <nav class="flex-1 py-2 overflow-y-auto">
         {% for item in nav_items %}
-          {{ sidebar_item(item.href, item.icon, item.label, active=(item.href == active_nav)) }}
+          {% if not item.dev_only or _is_dev %}
+            {{ sidebar_item(item.href, item.icon, item.label, active=(item.href == active_nav)) }}
+          {% endif %}
         {% endfor %}
       </nav>
 
@@ -31,6 +35,19 @@
           <span class="w-2 h-2 rounded-full bg-status-ok"></span>
           <span>System: OK</span>
         </div>
+        {% if _session %}
+        <div class="text-small text-text-disabled mt-1 flex items-center justify-between">
+          <span title="{{ _session.username }} ({{ _session.role }})">{{ _session.username }}</span>
+          <form method="POST" action="/logout" class="inline">
+            <button type="submit"
+                    class="text-text-disabled hover:text-text-primary transition-colors"
+                    title="Çıkış">
+              {% from 'components/icon.html' import icon_inline %}
+              {{ icon_inline('log-out', class='w-3.5 h-3.5') }}
+            </button>
+          </form>
+        </div>
+        {% endif %}
         <div class="text-small text-text-disabled mt-1">{{ version }}</div>
       </div>
     </aside>

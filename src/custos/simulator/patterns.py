@@ -93,12 +93,8 @@ def compute_base_value(pattern: SensorPattern, now: datetime) -> float:
     Gürültü ve anomaliler ayrıca eklenir (testlenebilirlik için).
     """
     hour = _hour_of_day(now)
-    value = pattern.base + diurnal_delta(
-        pattern.diurnal_amp, pattern.diurnal_peak_hour, hour
-    )
-    value *= workhours_multiplier(
-        hour, pattern.workhours_boost, pattern.workhours_only
-    )
+    value = pattern.base + diurnal_delta(pattern.diurnal_amp, pattern.diurnal_peak_hour, hour)
+    value *= workhours_multiplier(hour, pattern.workhours_boost, pattern.workhours_only)
     return value
 
 

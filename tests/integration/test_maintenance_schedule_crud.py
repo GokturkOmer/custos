@@ -27,7 +27,10 @@ async def _ensure_checklist(db: TimescaleDBDatabase) -> int:
             title="Test Schedule CL",
             steps=[
                 MaintenanceChecklistStep(
-                    checklist_id=0, sort_order=0, text="Adım", estimated_minutes=5,
+                    checklist_id=0,
+                    sort_order=0,
+                    text="Adım",
+                    estimated_minutes=5,
                 ),
             ],
         ),
@@ -104,7 +107,8 @@ async def test_update_schedule(db: TimescaleDBDatabase) -> None:
     assert created.id is not None
 
     updated = await db.update_maintenance_schedule(
-        created.id, {"enabled": False, "period_value": 2},
+        created.id,
+        {"enabled": False, "period_value": 2},
     )
     assert updated is not None
     assert updated.enabled is False
@@ -121,8 +125,10 @@ async def test_delete_schedule(db: TimescaleDBDatabase) -> None:
 
     created = await db.insert_maintenance_schedule(
         MaintenanceSchedule(
-            checklist_id=cid, asset_instance_id=iid,
-            period_kind="daily", anchor_date=date(2026, 5, 1),
+            checklist_id=cid,
+            asset_instance_id=iid,
+            period_kind="daily",
+            anchor_date=date(2026, 5, 1),
             next_due_at=datetime(2026, 5, 1, tzinfo=UTC),
         ),
     )
@@ -145,15 +151,19 @@ async def test_list_due_schedules(db: TimescaleDBDatabase) -> None:
 
     due = await db.insert_maintenance_schedule(
         MaintenanceSchedule(
-            checklist_id=cid, asset_instance_id=iid,
-            period_kind="daily", anchor_date=date(2026, 5, 1),
+            checklist_id=cid,
+            asset_instance_id=iid,
+            period_kind="daily",
+            anchor_date=date(2026, 5, 1),
             next_due_at=past,
         ),
     )
     not_yet = await db.insert_maintenance_schedule(
         MaintenanceSchedule(
-            checklist_id=cid, asset_instance_id=iid,
-            period_kind="daily", anchor_date=date(2026, 5, 1),
+            checklist_id=cid,
+            asset_instance_id=iid,
+            period_kind="daily",
+            anchor_date=date(2026, 5, 1),
             next_due_at=future,
         ),
     )
@@ -176,16 +186,22 @@ async def test_list_schedules_filter_by_enabled(
 
     s1 = await db.insert_maintenance_schedule(
         MaintenanceSchedule(
-            checklist_id=cid, asset_instance_id=iid,
-            period_kind="daily", anchor_date=date(2026, 5, 1),
-            next_due_at=datetime(2026, 5, 1, tzinfo=UTC), enabled=True,
+            checklist_id=cid,
+            asset_instance_id=iid,
+            period_kind="daily",
+            anchor_date=date(2026, 5, 1),
+            next_due_at=datetime(2026, 5, 1, tzinfo=UTC),
+            enabled=True,
         ),
     )
     s2 = await db.insert_maintenance_schedule(
         MaintenanceSchedule(
-            checklist_id=cid, asset_instance_id=iid,
-            period_kind="daily", anchor_date=date(2026, 5, 1),
-            next_due_at=datetime(2026, 5, 1, tzinfo=UTC), enabled=False,
+            checklist_id=cid,
+            asset_instance_id=iid,
+            period_kind="daily",
+            anchor_date=date(2026, 5, 1),
+            next_due_at=datetime(2026, 5, 1, tzinfo=UTC),
+            enabled=False,
         ),
     )
 

@@ -142,9 +142,7 @@ class ModbusSimulator:
             now = datetime.now(UTC)
             for sensor in self._sensors:
                 noise = self._rng.gauss(0.0, 1.0)
-                new_reg = compute_sensor_register(
-                    sensor, now, self._sim_start, noise
-                )
+                new_reg = compute_sensor_register(sensor, now, self._sim_start, noise)
                 store.setValues(_HR_FC, sensor.register, [new_reg])
 
             self._update_count += 1
@@ -156,9 +154,7 @@ class ModbusSimulator:
                 for s in sample:
                     raw = store.getValues(_HR_FC, s.register, 1)
                     if isinstance(raw, list) and raw:
-                        summary[s.tag_id] = round(
-                            _register_to_value(int(raw[0]), s), 2
-                        )
+                        summary[s.tag_id] = round(_register_to_value(int(raw[0]), s), 2)
                 await logger.ainfo(
                     "Simülatör değer özeti",
                     güncelleme_sayısı=self._update_count,

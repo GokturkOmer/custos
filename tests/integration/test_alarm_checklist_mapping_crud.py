@@ -28,8 +28,10 @@ async def _setup_threshold_and_checklist(
     tag_id = f"TEST_{unique}"
     await db.insert_tag(
         TagRecord(
-            tag_id=tag_id, name="Test Tag",
-            modbus_host="127.0.0.1", register_address=40001,
+            tag_id=tag_id,
+            name="Test Tag",
+            modbus_host="127.0.0.1",
+            register_address=40001,
         ),
     )
     th = await db.insert_threshold(
@@ -38,11 +40,14 @@ async def _setup_threshold_and_checklist(
     assert th.id is not None
     cl = await db.insert_maintenance_checklist(
         MaintenanceChecklist(
-            slug=f"test-map-{unique}", title="Mapping CL",
+            slug=f"test-map-{unique}",
+            title="Mapping CL",
             category="alarm",
             steps=[
                 MaintenanceChecklistStep(
-                    checklist_id=0, sort_order=0, text="Adım",
+                    checklist_id=0,
+                    sort_order=0,
+                    text="Adım",
                     estimated_minutes=2,
                 ),
             ],
@@ -70,10 +75,13 @@ async def test_upsert_mapping_overwrites(db: TimescaleDBDatabase) -> None:
     unique = uuid.uuid4().hex[:8]
     cl2 = await db.insert_maintenance_checklist(
         MaintenanceChecklist(
-            slug=f"test-map2-{unique}", title="Second CL",
+            slug=f"test-map2-{unique}",
+            title="Second CL",
             steps=[
                 MaintenanceChecklistStep(
-                    checklist_id=0, sort_order=0, text="X",
+                    checklist_id=0,
+                    sort_order=0,
+                    text="X",
                     estimated_minutes=1,
                 ),
             ],
@@ -112,14 +120,16 @@ async def test_count_alarm_events_for_threshold(
     now = datetime.now(UTC)
     await db.insert_alarm_event(
         AlarmEvent(
-            threshold_id=th_id, tag_id="TEST_count",
+            threshold_id=th_id,
+            tag_id="TEST_count",
             triggered_at=now - timedelta(days=3),
             trigger_value=55.0,
         ),
     )
     await db.insert_alarm_event(
         AlarmEvent(
-            threshold_id=th_id, tag_id="TEST_count",
+            threshold_id=th_id,
+            tag_id="TEST_count",
             triggered_at=now - timedelta(days=10),
             trigger_value=60.0,
         ),
@@ -127,12 +137,14 @@ async def test_count_alarm_events_for_threshold(
 
     # Son 7 gün — 1 alarm
     count_7d = await db.count_alarm_events_for_threshold(
-        th_id, now - timedelta(days=7),
+        th_id,
+        now - timedelta(days=7),
     )
     assert count_7d == 1
 
     # Son 30 gün — 2 alarm
     count_30d = await db.count_alarm_events_for_threshold(
-        th_id, now - timedelta(days=30),
+        th_id,
+        now - timedelta(days=30),
     )
     assert count_30d == 2

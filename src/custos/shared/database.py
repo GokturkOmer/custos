@@ -361,6 +361,40 @@ class RetentionConfig:
     updated_by: str
 
 
+@dataclass(frozen=True)
+class User:
+    """users tablosunun Python temsili — V11-101 auth (rol-tabanlı erişim).
+
+    ``role`` sadece ``'operator'`` veya ``'developer'`` olabilir (DB CHECK).
+    ``must_change_password`` ilk-giriş akışında True; setup.sh bootstrap +
+    "Yeni Operator ekle" formu bunu True kurar.
+    """
+
+    id: int
+    username: str
+    role: str
+    enabled: bool
+    must_change_password: bool
+
+
+@dataclass(frozen=True)
+class Session:
+    """Aktif oturum — auth dependency çıktısı (request scope).
+
+    ``users`` ile JOIN edilmiş snapshot: dependency her request'te ek query
+    atmadan ``role`` ve ``enabled`` üzerinden karar verir. Cookie token'ı
+    burada yer almaz — yalnızca DB tarafında saklanır.
+    """
+
+    id: int
+    user_id: int
+    username: str
+    role: str
+    enabled: bool
+    must_change_password: bool
+    expires_at: datetime
+
+
 class DatabaseInterface(abc.ABC):
     """Veritabanı erişim arayüzü.
 
@@ -874,13 +908,16 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def insert_maintenance_checklist(
-        self, checklist: MaintenanceChecklist,
+        self,
+        checklist: MaintenanceChecklist,
     ) -> MaintenanceChecklist:
         """Yeni checklist + steps'i tek transaction ile oluşturur."""
 
     @abc.abstractmethod
     async def update_maintenance_checklist(
-        self, checklist_id: int, updates: dict[str, object],
+        self,
+        checklist_id: int,
+        updates: dict[str, object],
     ) -> MaintenanceChecklist | None:
         """Checklist alanlarını günceller (steps hariç)."""
 
@@ -890,19 +927,23 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def get_maintenance_checklist(
-        self, checklist_id: int,
+        self,
+        checklist_id: int,
     ) -> MaintenanceChecklist | None:
         """Tekil checklist + steps'i döndürür. Bulunamazsa None."""
 
     @abc.abstractmethod
     async def list_maintenance_checklists(
-        self, category: str | None = None,
+        self,
+        category: str | None = None,
     ) -> list[MaintenanceChecklist]:
         """Checklist listesi (steps dahil)."""
 
     @abc.abstractmethod
     async def replace_maintenance_checklist_steps(
-        self, checklist_id: int, steps: list[MaintenanceChecklistStep],
+        self,
+        checklist_id: int,
+        steps: list[MaintenanceChecklistStep],
     ) -> list[MaintenanceChecklistStep]:
         """Bir checklist'in tüm adımlarını yenileriyle değiştirir (tek transaction)."""
 
@@ -910,13 +951,16 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def insert_maintenance_schedule(
-        self, schedule: MaintenanceSchedule,
+        self,
+        schedule: MaintenanceSchedule,
     ) -> MaintenanceSchedule:
         """Yeni periyodik bakım takvimi kaydı oluşturur."""
 
     @abc.abstractmethod
     async def update_maintenance_schedule(
-        self, schedule_id: int, updates: dict[str, object],
+        self,
+        schedule_id: int,
+        updates: dict[str, object],
     ) -> MaintenanceSchedule | None:
         """Schedule alanlarını günceller."""
 
@@ -926,19 +970,22 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def get_maintenance_schedule(
-        self, schedule_id: int,
+        self,
+        schedule_id: int,
     ) -> MaintenanceSchedule | None:
         """Tekil schedule'ı döndürür."""
 
     @abc.abstractmethod
     async def list_maintenance_schedules(
-        self, enabled: bool | None = None,
+        self,
+        enabled: bool | None = None,
     ) -> list[MaintenanceSchedule]:
         """Schedule listesi. enabled filtresi opsiyonel."""
 
     @abc.abstractmethod
     async def list_due_maintenance_schedules(
-        self, now: datetime,
+        self,
+        now: datetime,
     ) -> list[MaintenanceSchedule]:
         """Scheduler için — next_due_at <= now ve enabled=TRUE olan schedule'lar."""
 
@@ -946,37 +993,44 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def insert_maintenance_task(
-        self, task: MaintenanceTask,
+        self,
+        task: MaintenanceTask,
     ) -> MaintenanceTask:
         """Yeni maintenance task kaydı oluşturur."""
 
     @abc.abstractmethod
     async def update_maintenance_task(
-        self, task_id: int, updates: dict[str, object],
+        self,
+        task_id: int,
+        updates: dict[str, object],
     ) -> MaintenanceTask | None:
         """Task alanlarını günceller (status, completed_at, notes vb.)."""
 
     @abc.abstractmethod
     async def get_maintenance_task(
-        self, task_id: int,
+        self,
+        task_id: int,
     ) -> MaintenanceTask | None:
         """Tekil task'ı döndürür."""
 
     @abc.abstractmethod
     async def list_upcoming_maintenance_tasks(
-        self, within_hours: int = 48,
+        self,
+        within_hours: int = 48,
     ) -> list[MaintenanceTask]:
         """Önümüzdeki X saat içinde due olan pending task'lar (Overview widget)."""
 
     @abc.abstractmethod
     async def list_recent_maintenance_tasks(
-        self, limit: int = 50,
+        self,
+        limit: int = 50,
     ) -> list[MaintenanceTask]:
         """Son tamamlanmış/atlanmış/missed task'lar (Geçmiş sekmesi)."""
 
     @abc.abstractmethod
     async def list_maintenance_tasks_for_schedule(
-        self, schedule_id: int,
+        self,
+        schedule_id: int,
     ) -> list[MaintenanceTask]:
         """Bir schedule'a bağlı tüm task'lar."""
 
@@ -984,13 +1038,15 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def upsert_maintenance_task_step_result(
-        self, result: MaintenanceTaskStepResult,
+        self,
+        result: MaintenanceTaskStepResult,
     ) -> MaintenanceTaskStepResult:
         """Task + step kombinasyonu için sonuç ekler/günceller (UNIQUE constraint)."""
 
     @abc.abstractmethod
     async def list_maintenance_task_step_results(
-        self, task_id: int,
+        self,
+        task_id: int,
     ) -> list[MaintenanceTaskStepResult]:
         """Bir task'ın tüm step sonuçlarını döndürür."""
 
@@ -998,7 +1054,9 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def upsert_alarm_checklist_mapping(
-        self, threshold_id: int, checklist_id: int,
+        self,
+        threshold_id: int,
+        checklist_id: int,
     ) -> AlarmChecklistMapping:
         """Threshold → checklist eşlemesi ekler/günceller (1:1)."""
 
@@ -1008,7 +1066,8 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def get_alarm_checklist_mapping(
-        self, threshold_id: int,
+        self,
+        threshold_id: int,
     ) -> AlarmChecklistMapping | None:
         """Threshold için eşlenen checklist (varsa)."""
 
@@ -1018,7 +1077,9 @@ class DatabaseInterface(abc.ABC):
 
     @abc.abstractmethod
     async def count_alarm_events_for_threshold(
-        self, threshold_id: int, since: datetime,
+        self,
+        threshold_id: int,
+        since: datetime,
     ) -> int:
         """Bir threshold'un verilen zamandan sonra tetiklenme sayısı."""
 
@@ -1047,13 +1108,92 @@ class DatabaseInterface(abc.ABC):
         DB satırı + policy güncellemesi tek transaction içinde yapılır.
         """
 
+    # --- Auth: users + sessions (V11-101) ---
+
+    @abc.abstractmethod
+    async def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        role: str,
+        must_change_password: bool = False,
+    ) -> User:
+        """Yeni kullanıcı oluşturur. ``role`` 'operator' veya 'developer'."""
+
+    @abc.abstractmethod
+    async def get_user_by_username(self, username: str) -> User | None:
+        """Username üzerinden kullanıcıyı döndürür (login için)."""
+
+    @abc.abstractmethod
+    async def get_user_password_hash(self, username: str) -> str | None:
+        """Login akışı için sadece hash'i döndürür (User snapshot dışında)."""
+
+    @abc.abstractmethod
+    async def update_user_password(
+        self,
+        user_id: int,
+        new_password_hash: str,
+    ) -> bool:
+        """Kullanıcının parolasını günceller, ``must_change_password=False`` set eder.
+
+        Dönüş: kayıt bulunduysa True.
+        """
+
+    @abc.abstractmethod
+    async def update_last_login(self, user_id: int) -> None:
+        """``last_login_at = NOW()`` set eder (login başarılı sonrası)."""
+
+    @abc.abstractmethod
+    async def set_user_enabled(self, user_id: int, enabled: bool) -> bool:
+        """Kullanıcıyı devre dışı/aktif yapar. Devre dışı kullanıcı login olamaz."""
+
+    @abc.abstractmethod
+    async def list_users(self) -> list[User]:
+        """Tüm kullanıcıları döndürür (Settings → Kullanıcılar sayfası)."""
+
+    @abc.abstractmethod
+    async def create_session(
+        self,
+        user_id: int,
+        token: str,
+        expires_at: datetime,
+        ip_addr: str = "",
+        user_agent: str = "",
+    ) -> Session:
+        """Aktif oturum kaydı oluşturur. Cookie token DB'de UNIQUE."""
+
+    @abc.abstractmethod
+    async def get_session_by_token(self, token: str) -> Session | None:
+        """Cookie token'ı geçerli session'a çevirir (JOIN users → role).
+
+        Süresi geçmiş veya kullanıcısı devre dışı session için ``None``
+        döner — auth dependency cookie'yi temizler.
+        """
+
+    @abc.abstractmethod
+    async def delete_session(self, token: str) -> bool:
+        """Logout — token'ı siler. Dönüş: kayıt bulunduysa True."""
+
+    @abc.abstractmethod
+    async def cleanup_expired_sessions(self) -> int:
+        """Süresi dolmuş session'ları siler. Dönüş: silinen kayıt sayısı."""
+
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
-_ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "name", "host", "port", "unit_id_start", "unit_id_end",
-    "status", "last_scan_at",
-    "slave_latency_min_ms", "slave_latency_avg_ms", "slave_latency_max_ms",
-})
+_ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "host",
+        "port",
+        "unit_id_start",
+        "unit_id_end",
+        "status",
+        "last_scan_at",
+        "slave_latency_min_ms",
+        "slave_latency_avg_ms",
+        "slave_latency_max_ms",
+    }
+)
 
 
 def _pick_bucket(desired: int, candidates: list[int]) -> int:
@@ -1080,19 +1220,13 @@ def _row_to_connection_profile(row: asyncpg.Record) -> ConnectionProfile:
         status=row["status"],
         last_scan_at=row["last_scan_at"],
         slave_latency_min_ms=(
-            float(row["slave_latency_min_ms"])
-            if row["slave_latency_min_ms"] is not None
-            else None
+            float(row["slave_latency_min_ms"]) if row["slave_latency_min_ms"] is not None else None
         ),
         slave_latency_avg_ms=(
-            float(row["slave_latency_avg_ms"])
-            if row["slave_latency_avg_ms"] is not None
-            else None
+            float(row["slave_latency_avg_ms"]) if row["slave_latency_avg_ms"] is not None else None
         ),
         slave_latency_max_ms=(
-            float(row["slave_latency_max_ms"])
-            if row["slave_latency_max_ms"] is not None
-            else None
+            float(row["slave_latency_max_ms"]) if row["slave_latency_max_ms"] is not None else None
         ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -1100,12 +1234,23 @@ def _row_to_connection_profile(row: asyncpg.Record) -> ConnectionProfile:
 
 
 # İzin verilen güncelleme alanları — Tag (SQL injection önlemi)
-_ALLOWED_TAG_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "name", "modbus_host", "modbus_port", "unit_id",
-    "register_address", "register_type", "byte_order",
-    "gain", "offset", "unit", "polling_interval_ms",
-    "polling_preset", "status",
-})
+_ALLOWED_TAG_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "modbus_host",
+        "modbus_port",
+        "unit_id",
+        "register_address",
+        "register_type",
+        "byte_order",
+        "gain",
+        "offset",
+        "unit",
+        "polling_interval_ms",
+        "polling_preset",
+        "status",
+    }
+)
 
 
 def _row_to_tag_record(row: asyncpg.Record) -> TagRecord:
@@ -1132,9 +1277,14 @@ def _row_to_tag_record(row: asyncpg.Record) -> TagRecord:
 
 
 # İzin verilen güncelleme alanları — Asset Instance (SQL injection önlemi)
-_ALLOWED_INSTANCE_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "name", "description", "location", "status",
-})
+_ALLOWED_INSTANCE_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "description",
+        "location",
+        "status",
+    }
+)
 
 
 def _row_to_template_role(row: asyncpg.Record) -> TemplateRole:
@@ -1200,15 +1350,28 @@ def _row_to_tag_binding(row: asyncpg.Record) -> TagBinding:
 
 
 # İzin verilen güncelleme alanları — Threshold (SQL injection önlemi)
-_ALLOWED_THRESHOLD_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "name", "direction", "set_point", "severity",
-    "debounce_seconds", "hysteresis", "enabled",
-})
+_ALLOWED_THRESHOLD_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "direction",
+        "set_point",
+        "severity",
+        "debounce_seconds",
+        "hysteresis",
+        "enabled",
+    }
+)
 
 # İzin verilen güncelleme alanları — Alarm Event (SQL injection önlemi)
-_ALLOWED_ALARM_EVENT_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "state", "acknowledged_at", "cleared_at", "clear_value", "notes",
-})
+_ALLOWED_ALARM_EVENT_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "state",
+        "acknowledged_at",
+        "cleared_at",
+        "clear_value",
+        "notes",
+    }
+)
 
 
 def _row_to_threshold(row: asyncpg.Record) -> Threshold:
@@ -1284,9 +1447,14 @@ def _row_to_anomaly_score(row: asyncpg.Record) -> AnomalyScore:
 
 
 # İzin verilen güncelleme alanları — Push Subscription (SQL injection önlemi)
-_ALLOWED_PUSH_SUB_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "notify_warn", "notify_crit", "quiet_start", "quiet_end",
-})
+_ALLOWED_PUSH_SUB_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "notify_warn",
+        "notify_crit",
+        "quiet_start",
+        "quiet_end",
+    }
+)
 
 
 def _row_to_push_subscription(row: asyncpg.Record) -> PushSubscription:
@@ -1470,7 +1638,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "FROM tag_readings "
                 "WHERE tag_id = $1 AND timestamp >= $2 AND timestamp <= $3 "
                 "GROUP BY bucket ORDER BY bucket ASC",
-                tag_id, start, end, bucket_sec,
+                tag_id,
+                start,
+                end,
+                bucket_sec,
             )
         return [
             TagReading(
@@ -1507,7 +1678,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "FROM tag_readings_1min "
                 "WHERE tag_id = $1 AND bucket >= $2 AND bucket <= $3 "
                 "GROUP BY bkt ORDER BY bkt ASC",
-                tag_id, start, end, bucket_min,
+                tag_id,
+                start,
+                end,
+                bucket_min,
             )
         return [
             TagReading(
@@ -1543,7 +1717,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "FROM tag_readings_1hour "
                 "WHERE tag_id = $1 AND bucket >= $2 AND bucket <= $3 "
                 "GROUP BY bkt ORDER BY bkt ASC",
-                tag_id, start, end, bucket_h,
+                tag_id,
+                start,
+                end,
+                bucket_h,
             )
         return [
             TagReading(
@@ -1581,12 +1758,14 @@ class TimescaleDBDatabase(DatabaseInterface):
                 end,
                 prefetch=batch_size,
             ):
-                batch.append({
-                    "timestamp": r["timestamp"],
-                    "tag_id": r["tag_id"],
-                    "value": float(r["value"]),
-                    "quality_flag": int(r["quality_flag"]),
-                })
+                batch.append(
+                    {
+                        "timestamp": r["timestamp"],
+                        "tag_id": r["tag_id"],
+                        "value": float(r["value"]),
+                        "quality_flag": int(r["quality_flag"]),
+                    }
+                )
                 if len(batch) >= batch_size:
                     yield batch
                     batch = []
@@ -1613,20 +1792,20 @@ class TimescaleDBDatabase(DatabaseInterface):
                 end,
                 prefetch=batch_size,
             ):
-                batch.append({
-                    "bucket": r["bucket"],
-                    "tag_id": r["tag_id"],
-                    "avg_value": float(r["avg_value"]),
-                    "min_value": float(r["min_value"]),
-                    "max_value": float(r["max_value"]),
-                    "stddev_value": (
-                        float(r["stddev_value"])
-                        if r["stddev_value"] is not None
-                        else None
-                    ),
-                    "max_quality": int(r["max_quality"]),
-                    "sample_count": int(r["sample_count"]),
-                })
+                batch.append(
+                    {
+                        "bucket": r["bucket"],
+                        "tag_id": r["tag_id"],
+                        "avg_value": float(r["avg_value"]),
+                        "min_value": float(r["min_value"]),
+                        "max_value": float(r["max_value"]),
+                        "stddev_value": (
+                            float(r["stddev_value"]) if r["stddev_value"] is not None else None
+                        ),
+                        "max_quality": int(r["max_quality"]),
+                        "sample_count": int(r["sample_count"]),
+                    }
+                )
                 if len(batch) >= batch_size:
                     yield batch
                     batch = []
@@ -1653,20 +1832,20 @@ class TimescaleDBDatabase(DatabaseInterface):
                 end,
                 prefetch=batch_size,
             ):
-                batch.append({
-                    "bucket": r["bucket"],
-                    "tag_id": r["tag_id"],
-                    "avg_value": float(r["avg_value"]),
-                    "min_value": float(r["min_value"]),
-                    "max_value": float(r["max_value"]),
-                    "stddev_value": (
-                        float(r["stddev_value"])
-                        if r["stddev_value"] is not None
-                        else None
-                    ),
-                    "max_quality": int(r["max_quality"]),
-                    "sample_count": int(r["sample_count"]),
-                })
+                batch.append(
+                    {
+                        "bucket": r["bucket"],
+                        "tag_id": r["tag_id"],
+                        "avg_value": float(r["avg_value"]),
+                        "min_value": float(r["min_value"]),
+                        "max_value": float(r["max_value"]),
+                        "stddev_value": (
+                            float(r["stddev_value"]) if r["stddev_value"] is not None else None
+                        ),
+                        "max_quality": int(r["max_quality"]),
+                        "sample_count": int(r["sample_count"]),
+                    }
+                )
                 if len(batch) >= batch_size:
                     yield batch
                     batch = []
@@ -1708,16 +1887,26 @@ class TimescaleDBDatabase(DatabaseInterface):
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                'INSERT INTO tags '
-                '(tag_id, name, modbus_host, modbus_port, unit_id, '
-                'register_address, register_type, byte_order, '
+                "INSERT INTO tags "
+                "(tag_id, name, modbus_host, modbus_port, unit_id, "
+                "register_address, register_type, byte_order, "
                 'gain, "offset", unit, polling_interval_ms, polling_preset, status) '
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) "
                 "RETURNING *",
-                tag.tag_id, tag.name, tag.modbus_host, tag.modbus_port,
-                tag.unit_id, tag.register_address, tag.register_type,
-                tag.byte_order, tag.gain, tag.offset, tag.unit,
-                tag.polling_interval_ms, tag.polling_preset, tag.status,
+                tag.tag_id,
+                tag.name,
+                tag.modbus_host,
+                tag.modbus_port,
+                tag.unit_id,
+                tag.register_address,
+                tag.register_type,
+                tag.byte_order,
+                tag.gain,
+                tag.offset,
+                tag.unit,
+                tag.polling_interval_ms,
+                tag.polling_preset,
+                tag.status,
             )
         assert row is not None  # INSERT RETURNING her zaman satır döndürür
         return _row_to_tag_record(row)
@@ -1809,8 +1998,12 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "(name, host, port, unit_id_start, unit_id_end, status) "
                 "VALUES ($1, $2, $3, $4, $5, $6) "
                 "RETURNING *",
-                profile.name, profile.host, profile.port,
-                profile.unit_id_start, profile.unit_id_end, profile.status,
+                profile.name,
+                profile.host,
+                profile.port,
+                profile.unit_id_start,
+                profile.unit_id_end,
+                profile.status,
             )
         assert row is not None  # INSERT RETURNING her zaman satır döndürür
         return _row_to_connection_profile(row)
@@ -2027,7 +2220,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                     icon = EXCLUDED.icon
                 RETURNING *
                 """,
-                template.slug, template.name, template.description, template.icon,
+                template.slug,
+                template.name,
+                template.description,
+                template.icon,
             )
             assert tmpl_row is not None
             tmpl_id = int(tmpl_row["id"])
@@ -2046,8 +2242,12 @@ class TimescaleDBDatabase(DatabaseInterface):
                         sort_order = EXCLUDED.sort_order
                     RETURNING *
                     """,
-                    tmpl_id, role.role_key, role.label, role.unit_hint,
-                    role.required, role.sort_order,
+                    tmpl_id,
+                    role.role_key,
+                    role.label,
+                    role.unit_hint,
+                    role.required,
+                    role.sort_order,
                 )
                 assert role_row is not None
                 role_rows.append(_row_to_template_role(role_row))
@@ -2065,7 +2265,11 @@ class TimescaleDBDatabase(DatabaseInterface):
                         description = EXCLUDED.description
                     RETURNING *
                     """,
-                    tmpl_id, kpi.name, kpi.formula, kpi.unit, kpi.description,
+                    tmpl_id,
+                    kpi.name,
+                    kpi.formula,
+                    kpi.unit,
+                    kpi.description,
                 )
                 assert kpi_row is not None
                 kpi_rows.append(_row_to_kpi_definition(kpi_row))
@@ -2086,8 +2290,11 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "(template_id, name, description, location, status) "
                 "VALUES ($1, $2, $3, $4, $5) "
                 "RETURNING *",
-                instance.template_id, instance.name, instance.description,
-                instance.location, instance.status,
+                instance.template_id,
+                instance.name,
+                instance.description,
+                instance.location,
+                instance.status,
             )
         assert row is not None  # INSERT RETURNING her zaman satır döndürür
         return _row_to_asset_instance(row)
@@ -2123,8 +2330,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         values.append(instance_id)
 
         sql = (
-            f"UPDATE asset_instances SET {', '.join(set_parts)} "
-            f"WHERE id = ${idx_where} RETURNING *"
+            f"UPDATE asset_instances SET {', '.join(set_parts)} WHERE id = ${idx_where} RETURNING *"
         )
 
         pool = self._get_pool()
@@ -2195,7 +2401,9 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "INSERT INTO tag_bindings (instance_id, role_id, tag_id) "
                 "VALUES ($1, $2, $3) "
                 "RETURNING *",
-                binding.instance_id, binding.role_id, binding.tag_id,
+                binding.instance_id,
+                binding.role_id,
+                binding.tag_id,
             )
         assert row is not None  # INSERT RETURNING her zaman satır döndürür
         return _row_to_tag_binding(row)
@@ -2238,7 +2446,9 @@ class TimescaleDBDatabase(DatabaseInterface):
                     row = await conn.fetchrow(
                         "INSERT INTO tag_bindings (instance_id, role_id, tag_id) "
                         "VALUES ($1, $2, $3) RETURNING *",
-                        instance_id, b.role_id, b.tag_id,
+                        instance_id,
+                        b.role_id,
+                        b.tag_id,
                     )
                     assert row is not None
                     result.append(_row_to_tag_binding(row))
@@ -2256,9 +2466,13 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "debounce_seconds, hysteresis, enabled) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
                 "RETURNING *",
-                threshold.tag_id, threshold.name, threshold.direction,
-                threshold.set_point, threshold.severity,
-                threshold.debounce_seconds, threshold.hysteresis,
+                threshold.tag_id,
+                threshold.name,
+                threshold.direction,
+                threshold.set_point,
+                threshold.severity,
+                threshold.debounce_seconds,
+                threshold.hysteresis,
                 threshold.enabled,
             )
         assert row is not None
@@ -2292,10 +2506,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         idx_where = len(values) + 1
         values.append(threshold_id)
 
-        sql = (
-            f"UPDATE thresholds SET {', '.join(set_parts)} "
-            f"WHERE id = ${idx_where} RETURNING *"
-        )
+        sql = f"UPDATE thresholds SET {', '.join(set_parts)} WHERE id = ${idx_where} RETURNING *"
 
         pool = self._get_pool()
         async with pool.acquire() as conn:
@@ -2367,9 +2578,15 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "acknowledged_at, cleared_at, trigger_value, clear_value, notes) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) "
                 "RETURNING *",
-                event.threshold_id, event.tag_id, event.state,
-                event.triggered_at, event.acknowledged_at, event.cleared_at,
-                event.trigger_value, event.clear_value, event.notes,
+                event.threshold_id,
+                event.tag_id,
+                event.state,
+                event.triggered_at,
+                event.acknowledged_at,
+                event.cleared_at,
+                event.trigger_value,
+                event.clear_value,
+                event.notes,
             )
         assert row is not None
         return _row_to_alarm_event(row)
@@ -2397,10 +2614,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         idx_where = len(values) + 1
         values.append(event_id)
 
-        sql = (
-            f"UPDATE alarm_events SET {', '.join(set_parts)} "
-            f"WHERE id = ${idx_where} RETURNING *"
-        )
+        sql = f"UPDATE alarm_events SET {', '.join(set_parts)} WHERE id = ${idx_where} RETURNING *"
 
         pool = self._get_pool()
         async with pool.acquire() as conn:
@@ -2446,10 +2660,7 @@ class TimescaleDBDatabase(DatabaseInterface):
 
         where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         params.append(limit)
-        sql = (
-            f"SELECT * FROM alarm_events{where_clause} "
-            f"ORDER BY triggered_at DESC LIMIT ${idx}"
-        )
+        sql = f"SELECT * FROM alarm_events{where_clause} ORDER BY triggered_at DESC LIMIT ${idx}"
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
@@ -2483,8 +2694,11 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "(category, action, entity_type, entity_id, detail) "
                 "VALUES ($1, $2, $3, $4, $5) "
                 "RETURNING *",
-                entry.category, entry.action,
-                entry.entity_type, entry.entity_id, entry.detail,
+                entry.category,
+                entry.action,
+                entry.entity_type,
+                entry.entity_id,
+                entry.detail,
             )
         assert row is not None
         return _row_to_audit_log_entry(row)
@@ -2548,8 +2762,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "ON CONFLICT (instance_id, kpi_definition_id, bucket_start) "
                 "DO UPDATE SET value = EXCLUDED.value "
                 "RETURNING *",
-                result.instance_id, result.kpi_definition_id,
-                result.bucket_start, result.value,
+                result.instance_id,
+                result.kpi_definition_id,
+                result.bucket_start,
+                result.value,
             )
         assert row is not None
         return _row_to_kpi_result(row)
@@ -2566,10 +2782,7 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "VALUES ($1, $2, $3, $4) "
                 "ON CONFLICT (instance_id, kpi_definition_id, bucket_start) "
                 "DO UPDATE SET value = EXCLUDED.value",
-                [
-                    (r.instance_id, r.kpi_definition_id, r.bucket_start, r.value)
-                    for r in results
-                ],
+                [(r.instance_id, r.kpi_definition_id, r.bucket_start, r.value) for r in results],
             )
 
     async def list_kpi_results(
@@ -2590,10 +2803,7 @@ class TimescaleDBDatabase(DatabaseInterface):
             idx += 1
 
         params.append(limit)
-        sql = (
-            f"SELECT * FROM kpi_results {where} "
-            f"ORDER BY bucket_start DESC LIMIT ${idx}"
-        )
+        sql = f"SELECT * FROM kpi_results {where} ORDER BY bucket_start DESC LIMIT ${idx}"
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
@@ -2612,10 +2822,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         )
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, instance_id)
-        return {
-            row["kpi_definition_id"]: _row_to_kpi_result(row)
-            for row in rows
-        }
+        return {row["kpi_definition_id"]: _row_to_kpi_result(row) for row in rows}
 
     # --- Anomaly Scores implementasyonları ---
 
@@ -2628,8 +2835,11 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "(instance_id, timestamp, score, is_anomaly, feature_vector) "
                 "VALUES ($1, $2, $3, $4, $5) "
                 "RETURNING *",
-                score.instance_id, score.timestamp,
-                score.score, score.is_anomaly, score.feature_vector,
+                score.instance_id,
+                score.timestamp,
+                score.score,
+                score.is_anomaly,
+                score.feature_vector,
             )
         assert row is not None
         return _row_to_anomaly_score(row)
@@ -2641,10 +2851,7 @@ class TimescaleDBDatabase(DatabaseInterface):
     ) -> list[AnomalyScore]:
         """Anomali skor listesini döndürür."""
         pool = self._get_pool()
-        sql = (
-            "SELECT * FROM anomaly_scores WHERE instance_id = $1 "
-            "ORDER BY timestamp DESC LIMIT $2"
-        )
+        sql = "SELECT * FROM anomaly_scores WHERE instance_id = $1 ORDER BY timestamp DESC LIMIT $2"
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, instance_id, limit)
         return [_row_to_anomaly_score(row) for row in rows]
@@ -2655,10 +2862,7 @@ class TimescaleDBDatabase(DatabaseInterface):
     ) -> AnomalyScore | None:
         """En son anomali skorunu döndürür."""
         pool = self._get_pool()
-        sql = (
-            "SELECT * FROM anomaly_scores WHERE instance_id = $1 "
-            "ORDER BY timestamp DESC LIMIT 1"
-        )
+        sql = "SELECT * FROM anomaly_scores WHERE instance_id = $1 ORDER BY timestamp DESC LIMIT 1"
         async with pool.acquire() as conn:
             row = await conn.fetchrow(sql, instance_id)
         if row is None:
@@ -2672,10 +2876,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         """Anomali sayısını döndürür."""
         pool = self._get_pool()
         if since is not None:
-            sql = (
-                "SELECT COUNT(*) FROM anomaly_scores "
-                "WHERE is_anomaly = TRUE AND timestamp >= $1"
-            )
+            sql = "SELECT COUNT(*) FROM anomaly_scores WHERE is_anomaly = TRUE AND timestamp >= $1"
             async with pool.acquire() as conn:
                 count = await conn.fetchval(sql, since)
         else:
@@ -2683,7 +2884,6 @@ class TimescaleDBDatabase(DatabaseInterface):
             async with pool.acquire() as conn:
                 count = await conn.fetchval(sql)
         return int(count or 0)
-
 
     # --- Push Subscriptions implementasyonları ---
 
@@ -2703,9 +2903,13 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, "
                 "updated_at = NOW() "
                 "RETURNING *",
-                sub.endpoint, sub.p256dh, sub.auth,
-                sub.notify_warn, sub.notify_crit,
-                sub.quiet_start, sub.quiet_end,
+                sub.endpoint,
+                sub.p256dh,
+                sub.auth,
+                sub.notify_warn,
+                sub.notify_crit,
+                sub.quiet_start,
+                sub.quiet_end,
             )
         assert row is not None
         return _row_to_push_subscription(row)
@@ -2724,9 +2928,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         """Tüm push subscription'ları döndürür."""
         pool = self._get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM push_subscriptions ORDER BY created_at DESC"
-            )
+            rows = await conn.fetch("SELECT * FROM push_subscriptions ORDER BY created_at DESC")
         return [_row_to_push_subscription(row) for row in rows]
 
     async def update_push_subscription_settings(
@@ -2767,7 +2969,6 @@ class TimescaleDBDatabase(DatabaseInterface):
             return None
         return _row_to_push_subscription(row)
 
-
     # --- Overview Charts (dinamik slot) implementasyonlari ---
 
     async def list_overview_charts(self) -> list[OverviewChart]:
@@ -2798,7 +2999,9 @@ class TimescaleDBDatabase(DatabaseInterface):
             row = await conn.fetchrow(
                 "INSERT INTO overview_charts (chart_key, title, sort_order) "
                 "VALUES ($1, $2, $3) RETURNING *",
-                chart.chart_key, chart.title, chart.sort_order,
+                chart.chart_key,
+                chart.title,
+                chart.sort_order,
             )
         assert row is not None
         return _row_to_overview_chart(row)
@@ -2828,8 +3031,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                f"UPDATE overview_charts SET {set_clause} "
-                f"WHERE chart_key = ${idx} RETURNING *",
+                f"UPDATE overview_charts SET {set_clause} WHERE chart_key = ${idx} RETURNING *",
                 *values,
             )
         if row is None:
@@ -2857,8 +3059,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         async with pool.acquire() as conn:
             if chart_key is not None:
                 rows = await conn.fetch(
-                    "SELECT * FROM overview_chart_tags "
-                    "WHERE chart_key = $1 ORDER BY sort_order",
+                    "SELECT * FROM overview_chart_tags WHERE chart_key = $1 ORDER BY sort_order",
                     chart_key,
                 )
             else:
@@ -2885,7 +3086,9 @@ class TimescaleDBDatabase(DatabaseInterface):
                     row = await conn.fetchrow(
                         "INSERT INTO overview_chart_tags (chart_key, tag_id, sort_order) "
                         "VALUES ($1, $2, $3) RETURNING *",
-                        chart_key, tid, idx,
+                        chart_key,
+                        tid,
+                        idx,
                     )
                     assert row is not None
                     result.append(_row_to_overview_chart_tag(row))
@@ -2894,7 +3097,8 @@ class TimescaleDBDatabase(DatabaseInterface):
     # --- Maintenance Checklist CRUD ---
 
     async def insert_maintenance_checklist(
-        self, checklist: MaintenanceChecklist,
+        self,
+        checklist: MaintenanceChecklist,
     ) -> MaintenanceChecklist:
         """Checklist + steps'i tek transaction ile oluşturur."""
         pool = self._get_pool()
@@ -2903,8 +3107,11 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "INSERT INTO maintenance_checklists "
                 "(slug, title, description, category, asset_template_id) "
                 "VALUES ($1, $2, $3, $4, $5) RETURNING *",
-                checklist.slug, checklist.title, checklist.description,
-                checklist.category, checklist.asset_template_id,
+                checklist.slug,
+                checklist.title,
+                checklist.description,
+                checklist.category,
+                checklist.asset_template_id,
             )
             assert row is not None
             new_checklist = _row_to_maintenance_checklist(row)
@@ -2914,7 +3121,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                     "INSERT INTO maintenance_checklist_steps "
                     "(checklist_id, sort_order, text, estimated_minutes) "
                     "VALUES ($1, $2, $3, $4) RETURNING *",
-                    new_checklist.id, idx, step.text, step.estimated_minutes,
+                    new_checklist.id,
+                    idx,
+                    step.text,
+                    step.estimated_minutes,
                 )
                 assert srow is not None
                 new_steps.append(_row_to_maintenance_step(srow))
@@ -2922,7 +3132,9 @@ class TimescaleDBDatabase(DatabaseInterface):
             return new_checklist
 
     async def update_maintenance_checklist(
-        self, checklist_id: int, updates: dict[str, object],
+        self,
+        checklist_id: int,
+        updates: dict[str, object],
     ) -> MaintenanceChecklist | None:
         """Checklist alanlarını günceller (steps ayrı replace ile)."""
         invalid = set(updates.keys()) - _ALLOWED_CHECKLIST_UPDATE_FIELDS
@@ -2961,7 +3173,8 @@ class TimescaleDBDatabase(DatabaseInterface):
         return str(status) == "DELETE 1"
 
     async def get_maintenance_checklist(
-        self, checklist_id: int,
+        self,
+        checklist_id: int,
     ) -> MaintenanceChecklist | None:
         """Tekil checklist + steps."""
         pool = self._get_pool()
@@ -2982,7 +3195,8 @@ class TimescaleDBDatabase(DatabaseInterface):
             return checklist
 
     async def list_maintenance_checklists(
-        self, category: str | None = None,
+        self,
+        category: str | None = None,
     ) -> list[MaintenanceChecklist]:
         """Checklist listesi (steps dahil, tek SQL round-trip ile)."""
         pool = self._get_pool()
@@ -2993,8 +3207,7 @@ class TimescaleDBDatabase(DatabaseInterface):
                 )
             else:
                 rows = await conn.fetch(
-                    "SELECT * FROM maintenance_checklists "
-                    "WHERE category = $1 ORDER BY title",
+                    "SELECT * FROM maintenance_checklists WHERE category = $1 ORDER BY title",
                     category,
                 )
             checklists = [_row_to_maintenance_checklist(r) for r in rows]
@@ -3017,7 +3230,8 @@ class TimescaleDBDatabase(DatabaseInterface):
             return checklists
 
     async def replace_maintenance_checklist_steps(
-        self, checklist_id: int,
+        self,
+        checklist_id: int,
         steps: list[MaintenanceChecklistStep],
     ) -> list[MaintenanceChecklistStep]:
         """Tüm adımları atomik olarak yenileriyle değiştirir."""
@@ -3033,7 +3247,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                     "INSERT INTO maintenance_checklist_steps "
                     "(checklist_id, sort_order, text, estimated_minutes) "
                     "VALUES ($1, $2, $3, $4) RETURNING *",
-                    checklist_id, idx, st.text, st.estimated_minutes,
+                    checklist_id,
+                    idx,
+                    st.text,
+                    st.estimated_minutes,
                 )
                 assert row is not None
                 result.append(_row_to_maintenance_step(row))
@@ -3042,7 +3259,8 @@ class TimescaleDBDatabase(DatabaseInterface):
     # --- Maintenance Schedule CRUD ---
 
     async def insert_maintenance_schedule(
-        self, schedule: MaintenanceSchedule,
+        self,
+        schedule: MaintenanceSchedule,
     ) -> MaintenanceSchedule:
         """Yeni periyodik bakım takvimi kaydı."""
         pool = self._get_pool()
@@ -3053,17 +3271,23 @@ class TimescaleDBDatabase(DatabaseInterface):
                 " period_kind, period_value, anchor_date, next_due_at, "
                 " notify_lead_hours, enabled) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *",
-                schedule.checklist_id, schedule.asset_template_id,
-                schedule.asset_instance_id, schedule.period_kind,
-                schedule.period_value, schedule.anchor_date,
-                schedule.next_due_at, schedule.notify_lead_hours,
+                schedule.checklist_id,
+                schedule.asset_template_id,
+                schedule.asset_instance_id,
+                schedule.period_kind,
+                schedule.period_value,
+                schedule.anchor_date,
+                schedule.next_due_at,
+                schedule.notify_lead_hours,
                 schedule.enabled,
             )
         assert row is not None
         return _row_to_maintenance_schedule(row)
 
     async def update_maintenance_schedule(
-        self, schedule_id: int, updates: dict[str, object],
+        self,
+        schedule_id: int,
+        updates: dict[str, object],
     ) -> MaintenanceSchedule | None:
         """Schedule alanlarını günceller."""
         invalid = set(updates.keys()) - _ALLOWED_SCHEDULE_UPDATE_FIELDS
@@ -3102,7 +3326,8 @@ class TimescaleDBDatabase(DatabaseInterface):
         return str(status) == "DELETE 1"
 
     async def get_maintenance_schedule(
-        self, schedule_id: int,
+        self,
+        schedule_id: int,
     ) -> MaintenanceSchedule | None:
         """Tekil schedule."""
         pool = self._get_pool()
@@ -3116,7 +3341,8 @@ class TimescaleDBDatabase(DatabaseInterface):
         return _row_to_maintenance_schedule(row)
 
     async def list_maintenance_schedules(
-        self, enabled: bool | None = None,
+        self,
+        enabled: bool | None = None,
     ) -> list[MaintenanceSchedule]:
         """Schedule listesi."""
         pool = self._get_pool()
@@ -3127,14 +3353,14 @@ class TimescaleDBDatabase(DatabaseInterface):
                 )
             else:
                 rows = await conn.fetch(
-                    "SELECT * FROM maintenance_schedules "
-                    "WHERE enabled = $1 ORDER BY next_due_at",
+                    "SELECT * FROM maintenance_schedules WHERE enabled = $1 ORDER BY next_due_at",
                     enabled,
                 )
         return [_row_to_maintenance_schedule(r) for r in rows]
 
     async def list_due_maintenance_schedules(
-        self, now: datetime,
+        self,
+        now: datetime,
     ) -> list[MaintenanceSchedule]:
         """Scheduler için — vadesi gelmiş aktif schedule'lar."""
         pool = self._get_pool()
@@ -3150,7 +3376,8 @@ class TimescaleDBDatabase(DatabaseInterface):
     # --- Maintenance Task CRUD ---
 
     async def insert_maintenance_task(
-        self, task: MaintenanceTask,
+        self,
+        task: MaintenanceTask,
     ) -> MaintenanceTask:
         """Yeni maintenance task kaydı."""
         pool = self._get_pool()
@@ -3162,16 +3389,26 @@ class TimescaleDBDatabase(DatabaseInterface):
                 " completed_at, completed_by, notes, status) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) "
                 "RETURNING *",
-                task.schedule_id, task.checklist_id, task.asset_instance_id,
-                task.source, task.alarm_event_id, task.title_snapshot,
-                task.due_at, task.started_at, task.completed_at,
-                task.completed_by, task.notes, task.status,
+                task.schedule_id,
+                task.checklist_id,
+                task.asset_instance_id,
+                task.source,
+                task.alarm_event_id,
+                task.title_snapshot,
+                task.due_at,
+                task.started_at,
+                task.completed_at,
+                task.completed_by,
+                task.notes,
+                task.status,
             )
         assert row is not None
         return _row_to_maintenance_task(row)
 
     async def update_maintenance_task(
-        self, task_id: int, updates: dict[str, object],
+        self,
+        task_id: int,
+        updates: dict[str, object],
     ) -> MaintenanceTask | None:
         """Task alanlarını günceller."""
         invalid = set(updates.keys()) - _ALLOWED_TASK_UPDATE_FIELDS
@@ -3191,8 +3428,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                f"UPDATE maintenance_tasks SET {set_clause} "
-                f"WHERE id = ${idx} RETURNING *",
+                f"UPDATE maintenance_tasks SET {set_clause} WHERE id = ${idx} RETURNING *",
                 *values,
             )
         if row is None:
@@ -3200,7 +3436,8 @@ class TimescaleDBDatabase(DatabaseInterface):
         return _row_to_maintenance_task(row)
 
     async def get_maintenance_task(
-        self, task_id: int,
+        self,
+        task_id: int,
     ) -> MaintenanceTask | None:
         """Tekil task."""
         pool = self._get_pool()
@@ -3214,7 +3451,8 @@ class TimescaleDBDatabase(DatabaseInterface):
         return _row_to_maintenance_task(row)
 
     async def list_upcoming_maintenance_tasks(
-        self, within_hours: int = 48,
+        self,
+        within_hours: int = 48,
     ) -> list[MaintenanceTask]:
         """Yaklaşan pending/in_progress task'lar (Overview widget)."""
         pool = self._get_pool()
@@ -3230,7 +3468,8 @@ class TimescaleDBDatabase(DatabaseInterface):
         return [_row_to_maintenance_task(r) for r in rows]
 
     async def list_recent_maintenance_tasks(
-        self, limit: int = 50,
+        self,
+        limit: int = 50,
     ) -> list[MaintenanceTask]:
         """Son tamamlanmış / atlanmış / missed task'lar."""
         pool = self._get_pool()
@@ -3246,7 +3485,8 @@ class TimescaleDBDatabase(DatabaseInterface):
         return [_row_to_maintenance_task(r) for r in rows]
 
     async def list_maintenance_tasks_for_schedule(
-        self, schedule_id: int,
+        self,
+        schedule_id: int,
     ) -> list[MaintenanceTask]:
         """Bir schedule'a ait tüm task'lar."""
         pool = self._get_pool()
@@ -3261,7 +3501,8 @@ class TimescaleDBDatabase(DatabaseInterface):
     # --- Maintenance Task Step Result ---
 
     async def upsert_maintenance_task_step_result(
-        self, result: MaintenanceTaskStepResult,
+        self,
+        result: MaintenanceTaskStepResult,
     ) -> MaintenanceTaskStepResult:
         """Task + step unique constraint ile upsert."""
         pool = self._get_pool()
@@ -3275,14 +3516,18 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "  note = EXCLUDED.note, "
                 "  completed_at = EXCLUDED.completed_at "
                 "RETURNING *",
-                result.task_id, result.step_id, result.checked,
-                result.note, result.completed_at,
+                result.task_id,
+                result.step_id,
+                result.checked,
+                result.note,
+                result.completed_at,
             )
         assert row is not None
         return _row_to_maintenance_step_result(row)
 
     async def list_maintenance_task_step_results(
-        self, task_id: int,
+        self,
+        task_id: int,
     ) -> list[MaintenanceTaskStepResult]:
         """Task'ın tüm adım sonuçları (step sort_order sırasında)."""
         pool = self._get_pool()
@@ -3298,7 +3543,9 @@ class TimescaleDBDatabase(DatabaseInterface):
     # --- Alarm Checklist Mapping ---
 
     async def upsert_alarm_checklist_mapping(
-        self, threshold_id: int, checklist_id: int,
+        self,
+        threshold_id: int,
+        checklist_id: int,
     ) -> AlarmChecklistMapping:
         """Threshold → checklist eşlemesi (1:1)."""
         pool = self._get_pool()
@@ -3309,13 +3556,15 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "ON CONFLICT (threshold_id) DO UPDATE SET "
                 "  checklist_id = EXCLUDED.checklist_id "
                 "RETURNING *",
-                threshold_id, checklist_id,
+                threshold_id,
+                checklist_id,
             )
         assert row is not None
         return _row_to_alarm_checklist_mapping(row)
 
     async def delete_alarm_checklist_mapping(
-        self, threshold_id: int,
+        self,
+        threshold_id: int,
     ) -> bool:
         """Threshold eşlemesini kaldırır."""
         pool = self._get_pool()
@@ -3327,14 +3576,14 @@ class TimescaleDBDatabase(DatabaseInterface):
         return str(status) == "DELETE 1"
 
     async def get_alarm_checklist_mapping(
-        self, threshold_id: int,
+        self,
+        threshold_id: int,
     ) -> AlarmChecklistMapping | None:
         """Bir threshold'un eşlemesi (varsa)."""
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM alarm_checklist_mappings "
-                "WHERE threshold_id = $1",
+                "SELECT * FROM alarm_checklist_mappings WHERE threshold_id = $1",
                 threshold_id,
             )
         if row is None:
@@ -3348,13 +3597,14 @@ class TimescaleDBDatabase(DatabaseInterface):
         pool = self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM alarm_checklist_mappings "
-                "ORDER BY threshold_id",
+                "SELECT * FROM alarm_checklist_mappings ORDER BY threshold_id",
             )
         return [_row_to_alarm_checklist_mapping(r) for r in rows]
 
     async def count_alarm_events_for_threshold(
-        self, threshold_id: int, since: datetime,
+        self,
+        threshold_id: int,
+        since: datetime,
     ) -> int:
         """Verilen zaman sonrası threshold'un tetiklenme sayısı."""
         pool = self._get_pool()
@@ -3362,7 +3612,8 @@ class TimescaleDBDatabase(DatabaseInterface):
             row = await conn.fetchrow(
                 "SELECT COUNT(*) AS cnt FROM alarm_events "
                 "WHERE threshold_id = $1 AND triggered_at >= $2",
-                threshold_id, since,
+                threshold_id,
+                since,
             )
         assert row is not None
         return int(row["cnt"])
@@ -3428,7 +3679,9 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "WHERE id = 1 "
                 "RETURNING raw_retention_days, auto_clean_enabled, "
                 "          updated_at, updated_by",
-                raw_retention_days, auto_clean_enabled, updated_by,
+                raw_retention_days,
+                auto_clean_enabled,
+                updated_by,
             )
             assert row is not None, "retention_config satırı güncellenemedi"
             new_days = int(row["raw_retention_days"])
@@ -3438,8 +3691,7 @@ class TimescaleDBDatabase(DatabaseInterface):
             # ham veri, features türev) aynı kullanıcı tercihini takip eder.
             for hypertable in ("tag_readings", "features"):
                 await conn.execute(
-                    f"SELECT remove_retention_policy("
-                    f"    '{hypertable}', if_exists => true);",
+                    f"SELECT remove_retention_policy(    '{hypertable}', if_exists => true);",
                 )
                 if new_auto:
                     # INTERVAL değeri server-side oluşturulur; new_days int
@@ -3461,6 +3713,220 @@ class TimescaleDBDatabase(DatabaseInterface):
             updated_at=row["updated_at"],
             updated_by=row["updated_by"],
         )
+
+    # --- Auth: users + sessions (V11-101) ---
+
+    async def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        role: str,
+        must_change_password: bool = False,
+    ) -> User:
+        """Yeni kullanıcı kaydı oluşturur. UNIQUE çakışmasında asyncpg fırlatır."""
+        if role not in ("operator", "developer"):
+            msg = f"Geçersiz rol: {role!r} (operator|developer)"
+            raise ValueError(msg)
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO users "
+                "(username, password_hash, role, must_change_password) "
+                "VALUES ($1, $2, $3, $4) "
+                "RETURNING id, username, role, enabled, must_change_password",
+                username,
+                password_hash,
+                role,
+                must_change_password,
+            )
+        assert row is not None
+        return User(
+            id=int(row["id"]),
+            username=row["username"],
+            role=row["role"],
+            enabled=bool(row["enabled"]),
+            must_change_password=bool(row["must_change_password"]),
+        )
+
+    async def get_user_by_username(self, username: str) -> User | None:
+        """Username üzerinden kullanıcıyı döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, username, role, enabled, must_change_password "
+                "FROM users WHERE username = $1",
+                username,
+            )
+        if row is None:
+            return None
+        return User(
+            id=int(row["id"]),
+            username=row["username"],
+            role=row["role"],
+            enabled=bool(row["enabled"]),
+            must_change_password=bool(row["must_change_password"]),
+        )
+
+    async def get_user_password_hash(self, username: str) -> str | None:
+        """Login akışı: parola hash'i döndürür (kullanıcı yoksa None)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT password_hash FROM users WHERE username = $1 AND enabled = TRUE",
+                username,
+            )
+        if row is None:
+            return None
+        return str(row["password_hash"])
+
+    async def update_user_password(
+        self,
+        user_id: int,
+        new_password_hash: str,
+    ) -> bool:
+        """Parolayı günceller; must_change_password False yapar."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result: str = await conn.execute(
+                "UPDATE users SET "
+                "    password_hash = $1, "
+                "    must_change_password = FALSE, "
+                "    updated_at = NOW() "
+                "WHERE id = $2",
+                new_password_hash,
+                user_id,
+            )
+        # asyncpg execute "UPDATE N" döndürür; N=0 ise kayıt bulunamadı.
+        return result.endswith(" 1")
+
+    async def update_last_login(self, user_id: int) -> None:
+        """``last_login_at = NOW()`` — sessizce best-effort."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET last_login_at = NOW() WHERE id = $1",
+                user_id,
+            )
+
+    async def set_user_enabled(self, user_id: int, enabled: bool) -> bool:
+        """Kullanıcıyı aktif/pasif yapar. enabled=False olunca login engellenir."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result: str = await conn.execute(
+                "UPDATE users SET enabled = $1, updated_at = NOW() WHERE id = $2",
+                enabled,
+                user_id,
+            )
+        return result.endswith(" 1")
+
+    async def list_users(self) -> list[User]:
+        """Tüm kullanıcıları döndürür (id ASC)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, username, role, enabled, must_change_password "
+                "FROM users ORDER BY id ASC",
+            )
+        return [
+            User(
+                id=int(r["id"]),
+                username=r["username"],
+                role=r["role"],
+                enabled=bool(r["enabled"]),
+                must_change_password=bool(r["must_change_password"]),
+            )
+            for r in rows
+        ]
+
+    async def create_session(
+        self,
+        user_id: int,
+        token: str,
+        expires_at: datetime,
+        ip_addr: str = "",
+        user_agent: str = "",
+    ) -> Session:
+        """Yeni oturum kaydı + JOIN users ile snapshot döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "WITH new_session AS ("
+                "    INSERT INTO sessions "
+                "    (user_id, token, expires_at, ip_addr, user_agent) "
+                "    VALUES ($1, $2, $3, $4, $5) "
+                "    RETURNING id, user_id, expires_at"
+                ") "
+                "SELECT s.id, s.user_id, u.username, u.role, "
+                "       u.enabled, u.must_change_password, s.expires_at "
+                "FROM new_session s JOIN users u ON u.id = s.user_id",
+                user_id,
+                token,
+                expires_at,
+                ip_addr,
+                user_agent,
+            )
+        assert row is not None
+        return Session(
+            id=int(row["id"]),
+            user_id=int(row["user_id"]),
+            username=row["username"],
+            role=row["role"],
+            enabled=bool(row["enabled"]),
+            must_change_password=bool(row["must_change_password"]),
+            expires_at=row["expires_at"],
+        )
+
+    async def get_session_by_token(self, token: str) -> Session | None:
+        """Cookie token → Session snapshot. Süresi geçmiş veya pasif user → None.
+
+        Tek query; auth dependency her request'te çağırır, indeks
+        ``idx_sessions_token`` üzerinden.
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT s.id, s.user_id, u.username, u.role, "
+                "       u.enabled, u.must_change_password, s.expires_at "
+                "FROM sessions s JOIN users u ON u.id = s.user_id "
+                "WHERE s.token = $1 "
+                "  AND s.expires_at > NOW() "
+                "  AND u.enabled = TRUE",
+                token,
+            )
+        if row is None:
+            return None
+        return Session(
+            id=int(row["id"]),
+            user_id=int(row["user_id"]),
+            username=row["username"],
+            role=row["role"],
+            enabled=bool(row["enabled"]),
+            must_change_password=bool(row["must_change_password"]),
+            expires_at=row["expires_at"],
+        )
+
+    async def delete_session(self, token: str) -> bool:
+        """Logout — token'ı siler."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result: str = await conn.execute(
+                "DELETE FROM sessions WHERE token = $1",
+                token,
+            )
+        return result.endswith(" 1")
+
+    async def cleanup_expired_sessions(self) -> int:
+        """Süresi dolmuş session'ları toplu siler. Dönüş: silinen kayıt sayısı."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result: str = await conn.execute(
+                "DELETE FROM sessions WHERE expires_at < NOW()",
+            )
+        # "DELETE N" formatından N'i çek
+        try:
+            return int(result.split()[-1])
+        except (ValueError, IndexError):
+            return 0
 
 
 def _row_to_overview_chart_tag(row: asyncpg.Record) -> OverviewChartTag:
@@ -3486,26 +3952,49 @@ def _row_to_overview_chart(row: asyncpg.Record) -> OverviewChart:
 
 
 # Overview chart update icin izin verilen alanlar (SQL injection onlemi)
-_ALLOWED_OVERVIEW_CHART_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "title", "sort_order", "time_window_minutes",
-})
+_ALLOWED_OVERVIEW_CHART_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "title",
+        "sort_order",
+        "time_window_minutes",
+    }
+)
 
 
 # Maintenance update whitelist'leri (SQL injection önlemi)
-_ALLOWED_CHECKLIST_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "title", "description", "category", "asset_template_id",
-})
+_ALLOWED_CHECKLIST_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "title",
+        "description",
+        "category",
+        "asset_template_id",
+    }
+)
 
-_ALLOWED_SCHEDULE_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "checklist_id", "asset_template_id", "asset_instance_id",
-    "period_kind", "period_value", "anchor_date", "next_due_at",
-    "notify_lead_hours", "enabled",
-})
+_ALLOWED_SCHEDULE_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "checklist_id",
+        "asset_template_id",
+        "asset_instance_id",
+        "period_kind",
+        "period_value",
+        "anchor_date",
+        "next_due_at",
+        "notify_lead_hours",
+        "enabled",
+    }
+)
 
-_ALLOWED_TASK_UPDATE_FIELDS: frozenset[str] = frozenset({
-    "status", "started_at", "completed_at",
-    "completed_by", "notes", "due_at",
-})
+_ALLOWED_TASK_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "status",
+        "started_at",
+        "completed_at",
+        "completed_by",
+        "notes",
+        "due_at",
+    }
+)
 
 
 def _row_to_maintenance_checklist(

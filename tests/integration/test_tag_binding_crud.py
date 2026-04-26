@@ -47,15 +47,19 @@ async def db() -> TimescaleDBDatabase:
     pool = database._get_pool()
     # Test öncesi temizlik
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM tag_bindings WHERE instance_id IN "
-                           "(SELECT id FROM asset_instances WHERE name LIKE 'TEST_%')")
+        await conn.execute(
+            "DELETE FROM tag_bindings WHERE instance_id IN "
+            "(SELECT id FROM asset_instances WHERE name LIKE 'TEST_%')"
+        )
         await conn.execute("DELETE FROM asset_instances WHERE name LIKE 'TEST_%'")
         await conn.execute("DELETE FROM tags WHERE tag_id LIKE 'TEST_BIND_%'")
     yield database  # type: ignore[misc]
     # Test sonrası temizlik
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM tag_bindings WHERE instance_id IN "
-                           "(SELECT id FROM asset_instances WHERE name LIKE 'TEST_%')")
+        await conn.execute(
+            "DELETE FROM tag_bindings WHERE instance_id IN "
+            "(SELECT id FROM asset_instances WHERE name LIKE 'TEST_%')"
+        )
         await conn.execute("DELETE FROM asset_instances WHERE name LIKE 'TEST_%'")
         await conn.execute("DELETE FROM tags WHERE tag_id LIKE 'TEST_BIND_%'")
     await database.close()
@@ -74,9 +78,12 @@ async def _setup_binding_fixtures(
     assert pump.id is not None
 
     # Instance oluştur
-    instance = await db.insert_asset_instance(AssetInstance(
-        template_id=pump.id, name="TEST_Binding_Instance",
-    ))
+    instance = await db.insert_asset_instance(
+        AssetInstance(
+            template_id=pump.id,
+            name="TEST_Binding_Instance",
+        )
+    )
     assert instance.id is not None
 
     # Test tag'leri oluştur
@@ -84,8 +91,10 @@ async def _setup_binding_fixtures(
     for i in range(len(pump.roles)):
         tid = f"TEST_BIND_{i:03d}"
         tag = TagRecord(
-            tag_id=tid, name=f"Bind Tag {i}",
-            modbus_host="127.0.0.1", register_address=i,
+            tag_id=tid,
+            name=f"Bind Tag {i}",
+            modbus_host="127.0.0.1",
+            register_address=i,
         )
         try:
             await db.insert_tag(tag)
@@ -151,9 +160,13 @@ async def test_list_bindings_for_instance(db: TimescaleDBDatabase) -> None:
     assert len(empty) == 0
 
     # Binding ekle
-    await db.insert_tag_binding(TagBinding(
-        instance_id=instance_id, role_id=role_ids[0], tag_id=tag_ids[0],
-    ))
+    await db.insert_tag_binding(
+        TagBinding(
+            instance_id=instance_id,
+            role_id=role_ids[0],
+            tag_id=tag_ids[0],
+        )
+    )
     after = await db.list_tag_bindings(instance_id)
     assert len(after) == 1
 
@@ -163,9 +176,13 @@ async def test_delete_binding(db: TimescaleDBDatabase) -> None:
     """Tag binding silme çalışıyor mu?"""
     instance_id, role_ids, tag_ids = await _setup_binding_fixtures(db)
 
-    created = await db.insert_tag_binding(TagBinding(
-        instance_id=instance_id, role_id=role_ids[0], tag_id=tag_ids[0],
-    ))
+    created = await db.insert_tag_binding(
+        TagBinding(
+            instance_id=instance_id,
+            role_id=role_ids[0],
+            tag_id=tag_ids[0],
+        )
+    )
     assert created.id is not None
 
     assert await db.delete_tag_binding(created.id) is True

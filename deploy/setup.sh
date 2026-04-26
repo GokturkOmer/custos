@@ -47,7 +47,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # --- 2. Pre-flight sistem kontrolleri ---
-echo "[1/11] Sistem onkosullari kontrol ediliyor..."
+echo "[1/12] Sistem onkosullari kontrol ediliyor..."
 
 # Ubuntu versiyon — 22.04+ zorunlu, 24.04 onerilen
 if ! command -v lsb_release >/dev/null 2>&1; then
@@ -103,9 +103,9 @@ fi
 echo "  Disk bos: ${AVAIL_GB} GB — OK."
 
 # --- 3. APT repo'lari — deadsnakes PPA (Python 3.12) + PGDG (PG 16) + TimescaleDB ---
-# Tum repo eklemeleri TEK apt-get update ile sonlanir, paket kurulumu [3/11]'de
+# Tum repo eklemeleri TEK apt-get update ile sonlanir, paket kurulumu [3/12]'de
 # tek transaction. Bu dry-run'daki "4 kez rerun" sorununu giderir (kalem 13).
-echo "[2/11] APT repo'lari hazirlaniyor..."
+echo "[2/12] APT repo'lari hazirlaniyor..."
 
 # Temel repo araclari (sonraki repo eklemeleri icin gerekli)
 apt-get update -qq
@@ -151,7 +151,7 @@ apt-get update -qq
 # postgresql-16 explicit (kalem 8) — meta paket "postgresql" PGDG ile latest
 # (PG 18'e) yonleniyordu, cluster upgrade dialog'u tetikliyordu.
 # timescaledb-2-postgresql-16 TimescaleDB repo ile ayni transaction'a eklendi.
-echo "[3/11] Sistem paketleri kuruluyor (Python ${PYTHON_VERSION} + PG ${PG_VERSION} + TimescaleDB)..."
+echo "[3/12] Sistem paketleri kuruluyor (Python ${PYTHON_VERSION} + PG ${PG_VERSION} + TimescaleDB)..."
 apt-get install -y -qq \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
     postgresql-${PG_VERSION} postgresql-client-${PG_VERSION} \
@@ -167,7 +167,7 @@ echo "  Paketler kuruldu."
 #      dolu -> uyari + exit 2 (kullanici manuel karar versin, Q2).
 #   2. PG 16/main yok veya port 5432 degil -> dropcluster + createcluster.
 #   3. timescaledb-tune explicit --pg-config ile preload + restart.
-echo "[4/11] PostgreSQL ${PG_VERSION} cluster hazirlaniyor..."
+echo "[4/12] PostgreSQL ${PG_VERSION} cluster hazirlaniyor..."
 
 if command -v pg_lsclusters >/dev/null 2>&1; then
     # PG 14/main boslugu (kalem 10, Q2): user DB sayisi (postgres/template0/template1 haric)
@@ -227,7 +227,7 @@ systemctl restart postgresql@${PG_VERSION}-main
 echo "  TimescaleDB preload aktif, PG ${PG_VERSION} cluster hazir."
 
 # --- 6. Custos kullanicisi ---
-echo "[5/11] Custos kullanicisi hazirlaniyor..."
+echo "[5/12] Custos kullanicisi hazirlaniyor..."
 if ! id "$CUSTOS_USER" &>/dev/null; then
     useradd --system --create-home --shell /bin/bash "$CUSTOS_USER"
     echo "  Kullanici '$CUSTOS_USER' olusturuldu."
@@ -242,7 +242,7 @@ fi
 usermod -aG systemd-journal "$CUSTOS_USER"
 
 # --- 7. Kurulum dizinleri + veri/log klasorleri ---
-echo "[6/11] Kurulum ve veri dizinleri hazirlaniyor..."
+echo "[6/12] Kurulum ve veri dizinleri hazirlaniyor..."
 mkdir -p "$INSTALL_DIR"
 if [[ -d "$(dirname "$0")/../src" ]]; then
     # shopt dotglob: `*` glob'u .env.example gibi dotfile'lari da kapsasin (kalem 7).
@@ -278,7 +278,7 @@ echo "  $INSTALL_DIR, $ARCHIVE_DIR, $BACKUP_DIR, $LOG_DIR hazir."
 #   - setuptools<82 kisitlamasi +cpu wheel'de yok (kalem 12);
 #   - A3 denetim setuptools>=78.1.1 korunur (PYSEC-2025-49 path-traversal RCE);
 #   - sentence-transformers + faiss otomatik CPU backend.
-echo "[7/11] Python sanal ortami kuruluyor (torch CPU-only wheel)..."
+echo "[7/12] Python sanal ortami kuruluyor (torch CPU-only wheel)..."
 if [[ ! -d "$INSTALL_DIR/.venv" ]]; then
     sudo -u "$CUSTOS_USER" python${PYTHON_VERSION} -m venv "$INSTALL_DIR/.venv"
 fi
@@ -301,7 +301,7 @@ sudo -u "$CUSTOS_USER" \
 echo "  Bagimoliklar yuklendi (torch 2.11.0+cpu)."
 
 # --- 9. Veritabani + .env ---
-echo "[8/11] Veritabani hazirlaniyor..."
+echo "[8/12] Veritabani hazirlaniyor..."
 DB_EXISTS=0
 if sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw custos; then
     DB_EXISTS=1
@@ -351,7 +351,7 @@ if ! sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/alembic" upgrade head; then
 fi
 
 # --- 10. Seed — AVM Template Pack + bakim checklist'leri ---
-echo "[9/11] Seed script'leri calistiriliyor..."
+echo "[9/12] Seed script'leri calistiriliyor..."
 # F9 raporu karari: idempotent upsert, hata durumunda uyari ver ama exit etme
 # (sablonlar sonradan dashboard API'sinden de tetiklenebilir).
 if ! sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
@@ -364,13 +364,49 @@ if ! sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
 fi
 
 # --- 11. VAPID anahtari (otomatik uret + .env'e yaz) ---
-echo "[10/11] VAPID anahtarlari kontrol ediliyor..."
+echo "[10/12] VAPID anahtarlari kontrol ediliyor..."
 if ! grep -qE '^CUSTOS_VAPID_PRIVATE_KEY=.+' "$INSTALL_DIR/.env"; then
     echo "  VAPID anahtarlari uretiliyor..."
     sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
         "$INSTALL_DIR/scripts/generate_vapid_keys.py" --write-env "$INSTALL_DIR/.env"
 else
     echo "  VAPID anahtarlari zaten .env'de mevcut."
+fi
+
+# --- 11.5. Bootstrap developer user (V11-101) ---
+# users/sessions tablolari migration 027 ile kuruldu (8/12 alembic upgrade
+# adiminda). Burada ilk developer hesabi 'gokturk' olusturulur. Parola
+# rastgele uretilir, .env'e CUSTOS_DEV_INITIAL_PASSWORD anahtariyla yazilir.
+# Idempotent: ON CONFLICT DO NOTHING — yeniden calistirilinca duplike olmaz.
+echo "[11/12] Bootstrap developer user olusturuluyor..."
+if ! grep -qE '^CUSTOS_DEV_INITIAL_PASSWORD=.+' "$INSTALL_DIR/.env"; then
+    # 20 karakter URL-safe rastgele parola (slash/+ /= karakterleri ayikla)
+    DEV_PW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)
+    # bcrypt hash hesapla — parolayi stdin uzerinden gecir (komut satiri arg
+    # injection riski yok, ps -ef listesine sizmaz).
+    DEV_PW_HASH=$(printf '%s' "$DEV_PW" | sudo -u "$CUSTOS_USER" \
+        "$INSTALL_DIR/.venv/bin/python" -c '
+import sys
+from custos.shared.auth import hash_password
+print(hash_password(sys.stdin.read()), end="")
+')
+    if [[ -z "$DEV_PW_HASH" ]]; then
+        echo "HATA: Bootstrap user icin bcrypt hash hesaplanamadi." >&2
+        exit 3
+    fi
+    sudo -u postgres psql -d custos -v ON_ERROR_STOP=1 >/dev/null <<SQL
+INSERT INTO users (username, password_hash, role, must_change_password)
+VALUES ('gokturk', '${DEV_PW_HASH}', 'developer', TRUE)
+ON CONFLICT (username) DO NOTHING;
+SQL
+    # .env'e parolayi ekle (chmod 600 zaten — adim 8/12'de set edilmis).
+    echo "CUSTOS_DEV_INITIAL_PASSWORD=${DEV_PW}" >> "$INSTALL_DIR/.env"
+    chmod 600 "$INSTALL_DIR/.env"
+    BOOTSTRAP_DEV_PW="$DEV_PW"
+    echo "  Developer user olusturuldu: kullanici='gokturk', ilk parola .env'de."
+else
+    BOOTSTRAP_DEV_PW=""
+    echo "  CUSTOS_DEV_INITIAL_PASSWORD .env'de zaten mevcut, atlanildi."
 fi
 
 # --- 12. Log rotation (placeholder — structlog file handler iin) ---
@@ -380,7 +416,7 @@ if [[ -f "$INSTALL_DIR/deploy/logrotate.custos" ]]; then
 fi
 
 # --- 13. Systemd service'ler (analytics + critical) ---
-echo "[11/11] Systemd service'ler kuruluyor..."
+echo "[12/12] Systemd service'ler kuruluyor..."
 cp "$INSTALL_DIR/deploy/custos.service" /etc/systemd/system/custos.service
 if [[ -f "$INSTALL_DIR/deploy/custos-critical.service" ]]; then
     cp "$INSTALL_DIR/deploy/custos-critical.service" /etc/systemd/system/custos-critical.service
@@ -413,10 +449,18 @@ fi
 echo ""
 echo "=== Kurulum tamamlandi ==="
 echo ""
+if [[ -n "$BOOTSTRAP_DEV_PW" ]]; then
+    echo "ILK GIRIS BILGILERI (V11-101):"
+    echo "  Kullanici adi : gokturk"
+    echo "  Ilk parola    : $BOOTSTRAP_DEV_PW"
+    echo "  (Ayrica .env dosyasinda CUSTOS_DEV_INITIAL_PASSWORD altinda)"
+    echo "  NOT: Ilk girisinizden sonra parolayi degistirmeniz zorunludur."
+    echo ""
+fi
 echo "Siradaki adimlar:"
-echo "  1. .env dosyasini gozden gecir: $INSTALL_DIR/.env (VAPID ve DB sifre otomatik dolu)"
+echo "  1. .env dosyasini gozden gecir: $INSTALL_DIR/.env (VAPID, DB sifre, dev parola)"
 echo "  2. Servisleri baslat: sudo systemctl start custos.service custos-critical.service"
 echo "  3. Durum kontrolu: sudo systemctl status custos.service custos-critical.service"
 echo "  4. Healthcheck: sudo -u $CUSTOS_USER $INSTALL_DIR/.venv/bin/python $INSTALL_DIR/scripts/healthcheck.py --json"
-echo "  5. Tarayicida ac: http://custos.local:8000/dashboard"
+echo "  5. Tarayicida ac: http://custos.local:8000/login"
 echo ""

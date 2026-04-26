@@ -66,7 +66,9 @@ async def db() -> TimescaleDBDatabase:
                 "INSERT INTO overview_charts (chart_key, title, sort_order) "
                 "VALUES ($1, $2, $3) "
                 "ON CONFLICT (chart_key) DO NOTHING",
-                ck, f"Test {ck}", 1000 + idx,
+                ck,
+                f"Test {ck}",
+                1000 + idx,
             )
     yield database  # type: ignore[misc]
     # Test sonrasi temizlik: overview_charts silinince chart_tags FK CASCADE ile duser.
@@ -86,12 +88,14 @@ async def _create_test_tags(
     """Test icin tag'lar olusturur ve tag_id listesi dondurur."""
     tag_ids: list[str] = []
     for i in range(count):
-        tag = await db.insert_tag(TagRecord(
-            tag_id=f"TEST_CHART_{i:03d}",
-            name=f"Test Chart Tag {i}",
-            modbus_host="127.0.0.1",
-            register_address=40001 + i,
-        ))
+        tag = await db.insert_tag(
+            TagRecord(
+                tag_id=f"TEST_CHART_{i:03d}",
+                name=f"Test Chart Tag {i}",
+                modbus_host="127.0.0.1",
+                register_address=40001 + i,
+            )
+        )
         tag_ids.append(tag.tag_id)
     return tag_ids
 

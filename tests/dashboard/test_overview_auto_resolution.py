@@ -79,7 +79,9 @@ class _GatedMockDB:
     # --- Overview için lazım olan metotlar ---
 
     async def list_alarm_events(
-        self, state: str | None = None, limit: int = 100,
+        self,
+        state: str | None = None,
+        limit: int = 100,
     ) -> list[Any]:
         return []
 
@@ -96,14 +98,13 @@ class _GatedMockDB:
         return list(self._charts)
 
     async def list_overview_chart_tags(
-        self, chart_key: str | None = None,
+        self,
+        chart_key: str | None = None,
     ) -> list[OverviewChartTag]:
         if chart_key is None:
             out: list[OverviewChartTag] = []
             for ck, tids in self._chart_tag_bindings.items():
-                out.extend(
-                    OverviewChartTag(chart_key=ck, tag_id=tid) for tid in tids
-                )
+                out.extend(OverviewChartTag(chart_key=ck, tag_id=tid) for tid in tids)
             return out
         return [
             OverviewChartTag(chart_key=chart_key, tag_id=tid)
@@ -111,7 +112,8 @@ class _GatedMockDB:
         ]
 
     async def list_upcoming_maintenance_tasks(
-        self, within_hours: int = 48,
+        self,
+        within_hours: int = 48,
     ) -> list[Any]:
         return []
 
@@ -131,10 +133,15 @@ class _GatedMockDB:
         target_points: int = 600,
         tag_count: int = 1,
     ) -> list[TagReading]:
-        self.auto_calls.append({
-            "tag_id": tag_id, "start": start, "end": end,
-            "target_points": target_points, "tag_count": tag_count,
-        })
+        self.auto_calls.append(
+            {
+                "tag_id": tag_id,
+                "start": start,
+                "end": end,
+                "target_points": target_points,
+                "tag_count": tag_count,
+            }
+        )
         if self.gate is not None:
             # Beklenen sayıya ulaşınca aç — paralel çalışıyorsa hepsi geçer.
             if len(self.auto_calls) >= self.expected_query_count:
@@ -153,7 +160,10 @@ class _GatedMockDB:
         return []
 
     async def query_tag_readings(
-        self, tag_id: str, start: datetime, end: datetime,
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
     ) -> list[TagReading]:
         self.raw_calls.append({"tag_id": tag_id})
         return []
@@ -161,7 +171,8 @@ class _GatedMockDB:
     # --- Detail için ek metotlar ---
 
     async def get_overview_chart(
-        self, chart_key: str,
+        self,
+        chart_key: str,
     ) -> OverviewChart | None:
         for c in self._charts:
             if c.chart_key == chart_key:
@@ -241,13 +252,14 @@ def test_overview_chart_parallel_execution(
 @pytest.mark.parametrize(
     ("minutes", "expected_hint"),
     [
-        (15, "ham"),         # ≤ 1 saat
-        (360, "dakika"),     # 6 saat (≤ 1 gün)
-        (1440, "dakika"),    # tam 24 saat — inclusive eşik 'dakika'
+        (15, "ham"),  # ≤ 1 saat
+        (360, "dakika"),  # 6 saat (≤ 1 gün)
+        (1440, "dakika"),  # tam 24 saat — inclusive eşik 'dakika'
     ],
 )
 def test_resolution_hint_in_response_context(
-    minutes: int, expected_hint: str,
+    minutes: int,
+    expected_hint: str,
 ) -> None:
     """Pencere büyüklüğüne göre rozet HTML'de görünür (parametrize)."""
     charts = [_mk_chart("solo", minutes=minutes)]

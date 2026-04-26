@@ -56,19 +56,11 @@ async def test_compression_enabled_on_tag_readings(
             "FROM timescaledb_information.compression_settings "
             "WHERE hypertable_name = 'tag_readings'"
         )
-        segmentby = [
-            r["attname"]
-            for r in rows
-            if r["segmentby_column_index"] is not None
-        ]
+        segmentby = [r["attname"] for r in rows if r["segmentby_column_index"] is not None]
         orderby = [
-            (r["attname"], r["orderby_asc"])
-            for r in rows
-            if r["orderby_column_index"] is not None
+            (r["attname"], r["orderby_asc"]) for r in rows if r["orderby_column_index"] is not None
         ]
-        assert segmentby == ["tag_id"], (
-            f"segmentby beklenen ['tag_id'], alınan: {segmentby!r}"
-        )
+        assert segmentby == ["tag_id"], f"segmentby beklenen ['tag_id'], alınan: {segmentby!r}"
         # orderby_asc=False → DESC
         assert orderby == [("timestamp", False)], (
             f"orderby beklenen [('timestamp', False)], alınan: {orderby!r}"
@@ -91,8 +83,7 @@ async def test_compression_policy_7_days(
         assert raw is not None, "compression policy kaydı bulunamadı"
         config = _parse_config(raw)
         assert config.get("compress_after") == "7 days", (
-            f"compress_after beklenen '7 days', alınan: "
-            f"{config.get('compress_after')!r}"
+            f"compress_after beklenen '7 days', alınan: {config.get('compress_after')!r}"
         )
 
 
@@ -112,8 +103,7 @@ async def test_retention_policy_365_days_tag_readings(
         assert raw is not None, "retention policy kaydı bulunamadı"
         config = _parse_config(raw)
         assert config.get("drop_after") == "365 days", (
-            f"drop_after beklenen '365 days', alınan: "
-            f"{config.get('drop_after')!r}"
+            f"drop_after beklenen '365 days', alınan: {config.get('drop_after')!r}"
         )
 
 
@@ -165,15 +155,9 @@ async def test_features_hypertable_also_hardened(
             "FROM timescaledb_information.compression_settings "
             "WHERE hypertable_name = 'features'"
         )
-        segmentby = [
-            r["attname"]
-            for r in rows
-            if r["segmentby_column_index"] is not None
-        ]
+        segmentby = [r["attname"] for r in rows if r["segmentby_column_index"] is not None]
         orderby = [
-            (r["attname"], r["orderby_asc"])
-            for r in rows
-            if r["orderby_column_index"] is not None
+            (r["attname"], r["orderby_asc"]) for r in rows if r["orderby_column_index"] is not None
         ]
         assert segmentby == ["tag_id"]
         assert orderby == [("timestamp", False)]

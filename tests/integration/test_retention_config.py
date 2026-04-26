@@ -15,7 +15,8 @@ from custos.shared.database import TimescaleDBDatabase
 
 
 async def _policy_drop_after(
-    db: TimescaleDBDatabase, hypertable: str,
+    db: TimescaleDBDatabase,
+    hypertable: str,
 ) -> str | None:
     """timescaledb_information.jobs'dan ``drop_after`` config değerini okur.
 
@@ -50,7 +51,9 @@ async def _restore_defaults(
     """
     yield
     await db.update_retention_config(
-        raw_retention_days=365, auto_clean_enabled=True, updated_by="test_restore",
+        raw_retention_days=365,
+        auto_clean_enabled=True,
+        updated_by="test_restore",
     )
 
 
@@ -68,15 +71,15 @@ async def test_update_retention_syncs_timescale_policy(
 ) -> None:
     """raw_retention_days=60 yapınca policy drop_after='60 days' olmalı."""
     cfg = await db.update_retention_config(
-        raw_retention_days=60, auto_clean_enabled=True, updated_by="test",
+        raw_retention_days=60,
+        auto_clean_enabled=True,
+        updated_by="test",
     )
     assert cfg.raw_retention_days == 60
     assert cfg.auto_clean_enabled is True
 
     drop_after = await _policy_drop_after(db, "tag_readings")
-    assert drop_after == "60 days", (
-        f"tag_readings retention policy güncellenmedi: {drop_after!r}"
-    )
+    assert drop_after == "60 days", f"tag_readings retention policy güncellenmedi: {drop_after!r}"
     drop_after_feat = await _policy_drop_after(db, "features")
     assert drop_after_feat == "60 days", (
         f"features retention policy güncellenmedi: {drop_after_feat!r}"
@@ -87,7 +90,8 @@ async def test_update_retention_syncs_timescale_policy(
 async def test_auto_clean_off_removes_policy(db: TimescaleDBDatabase) -> None:
     """auto_clean_enabled=False iken iki hypertable'ın policy'si kaldırılmalı."""
     cfg = await db.update_retention_config(
-        auto_clean_enabled=False, updated_by="test",
+        auto_clean_enabled=False,
+        updated_by="test",
     )
     assert cfg.auto_clean_enabled is False
 
@@ -101,12 +105,15 @@ async def test_auto_clean_on_reinstates_policy(
 ) -> None:
     """Auto-clean'i kapatıp tekrar açınca policy yeni aralıkla geri gelmeli."""
     await db.update_retention_config(
-        auto_clean_enabled=False, updated_by="test",
+        auto_clean_enabled=False,
+        updated_by="test",
     )
     assert await _policy_drop_after(db, "tag_readings") is None
 
     cfg = await db.update_retention_config(
-        raw_retention_days=180, auto_clean_enabled=True, updated_by="test",
+        raw_retention_days=180,
+        auto_clean_enabled=True,
+        updated_by="test",
     )
     assert cfg.raw_retention_days == 180
     assert cfg.auto_clean_enabled is True

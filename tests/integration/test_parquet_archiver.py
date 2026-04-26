@@ -39,7 +39,9 @@ from custos.shared.database import (
 
 
 async def _refresh_1min(
-    db: TimescaleDBDatabase, start: datetime, end: datetime,
+    db: TimescaleDBDatabase,
+    start: datetime,
+    end: datetime,
 ) -> None:
     """1min CA'yı verilen aralık için manuel refresh eder."""
     pool = db._get_pool()
@@ -49,12 +51,15 @@ async def _refresh_1min(
             "CALL refresh_continuous_aggregate("
             "    'tag_readings_1min', $1::timestamptz, $2::timestamptz"
             ");",
-            start, end,
+            start,
+            end,
         )
 
 
 async def _refresh_1hour(
-    db: TimescaleDBDatabase, start: datetime, end: datetime,
+    db: TimescaleDBDatabase,
+    start: datetime,
+    end: datetime,
 ) -> None:
     """1hour CA'yı verilen aralık için manuel refresh eder."""
     pool = db._get_pool()
@@ -64,12 +69,16 @@ async def _refresh_1hour(
             "CALL refresh_continuous_aggregate("
             "    'tag_readings_1hour', $1::timestamptz, $2::timestamptz"
             ");",
-            start, end,
+            start,
+            end,
         )
 
 
 async def _seed_month(
-    db: TimescaleDBDatabase, tag_id: str, year: int, month: int,
+    db: TimescaleDBDatabase,
+    tag_id: str,
+    year: int,
+    month: int,
 ) -> tuple[int, datetime, datetime]:
     """Verilen TRT ayı içine 3 satır insert eder ve iki agregatı refresh eder.
 
@@ -91,7 +100,9 @@ async def _seed_month(
     batch = [
         TagReading(
             timestamp=base + timedelta(seconds=i),
-            tag_id=tag_id, value=10.0 + i, quality_flag=0,
+            tag_id=tag_id,
+            value=10.0 + i,
+            quality_flag=0,
         )
         for i in range(3)
     ]
@@ -107,15 +118,20 @@ async def _seed_month(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_archive_month_writes_three_files(
-    db: TimescaleDBDatabase, tmp_path: Path,
+    db: TimescaleDBDatabase,
+    tmp_path: Path,
 ) -> None:
     """Archiver belirtilen ay için 3 Parquet dosyası oluşturmalı."""
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_ARC_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="Archive Test",
-        modbus_host="127.0.0.1", register_address=40800,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="Archive Test",
+            modbus_host="127.0.0.1",
+            register_address=40800,
+        )
+    )
     await _seed_month(db, tag_id, 2025, 6)
 
     archiver = ParquetArchiver(db=db, archive_dir=tmp_path)
@@ -133,15 +149,20 @@ async def test_archive_month_writes_three_files(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_archive_month_is_idempotent(
-    db: TimescaleDBDatabase, tmp_path: Path,
+    db: TimescaleDBDatabase,
+    tmp_path: Path,
 ) -> None:
     """Aynı ay iki kez çağrılırsa ikinci çalışma dosyayı üzerine yazar (hata vermez)."""
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_ARC_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="Archive Idempotent",
-        modbus_host="127.0.0.1", register_address=40801,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="Archive Idempotent",
+            modbus_host="127.0.0.1",
+            register_address=40801,
+        )
+    )
     await _seed_month(db, tag_id, 2025, 7)
 
     archiver = ParquetArchiver(db=db, archive_dir=tmp_path)
@@ -156,15 +177,20 @@ async def test_archive_month_is_idempotent(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_archive_result_row_counts_match_db(
-    db: TimescaleDBDatabase, tmp_path: Path,
+    db: TimescaleDBDatabase,
+    tmp_path: Path,
 ) -> None:
     """ArchiveResult.raw_rows veritabanındaki ay içindeki satır sayısına eşit olmalı."""
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_ARC_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="Archive Count",
-        modbus_host="127.0.0.1", register_address=40802,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="Archive Count",
+            modbus_host="127.0.0.1",
+            register_address=40802,
+        )
+    )
     inserted, start_utc, end_utc = await _seed_month(db, tag_id, 2025, 8)
 
     archiver = ParquetArchiver(db=db, archive_dir=tmp_path)
@@ -175,7 +201,9 @@ async def test_archive_result_row_counts_match_db(
         db_raw_count = await conn.fetchval(
             "SELECT COUNT(*) FROM tag_readings "
             "WHERE tag_id = $1 AND timestamp >= $2 AND timestamp < $3",
-            tag_id, start_utc, end_utc,
+            tag_id,
+            start_utc,
+            end_utc,
         )
     # Diğer paralel testler de bu aya yazmış olabilir; TEST_ARC_ prefix'li
     # 3 okumamız dahil olmak üzere tüm satırlar dahildir.
@@ -186,15 +214,20 @@ async def test_archive_result_row_counts_match_db(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_parquet_can_be_read_back(
-    db: TimescaleDBDatabase, tmp_path: Path,
+    db: TimescaleDBDatabase,
+    tmp_path: Path,
 ) -> None:
     """Yazılan Parquet ``pq.read_table`` ile okunabilmeli ve satır sayısı eşleşmeli."""
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_ARC_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="Archive Readback",
-        modbus_host="127.0.0.1", register_address=40803,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="Archive Readback",
+            modbus_host="127.0.0.1",
+            register_address=40803,
+        )
+    )
     await _seed_month(db, tag_id, 2025, 9)
 
     archiver = ParquetArchiver(db=db, archive_dir=tmp_path)
@@ -225,22 +258,47 @@ class _FakeArchiver:
     async def archive_month(self, year: int, month: int) -> ArchiveResult:
         self.calls.append((year, month))
         return ArchiveResult(
-            year=year, month=month,
-            raw_rows=42, raw_file_bytes=1024,
-            agg_1min_rows=7, agg_1min_file_bytes=256,
-            agg_1hour_rows=1, agg_1hour_file_bytes=128,
+            year=year,
+            month=month,
+            raw_rows=42,
+            raw_file_bytes=1024,
+            agg_1min_rows=7,
+            agg_1min_file_bytes=256,
+            agg_1hour_rows=1,
+            agg_1hour_file_bytes=128,
             duration_seconds=0.05,
             output_dir=Path(f"/tmp/mock/{year:04d}-{month:02d}"),
         )
 
 
 def _build_test_app(archiver: _FakeArchiver) -> TestClient:
-    """Router'ı tek başına yükleyen, state.archiver = archiver olan TestClient."""
+    """Router'ı tek başına yükleyen, state.archiver = archiver olan TestClient.
+
+    V11-101 sonrası ``/api/archive/run`` route'u developer-only oldu;
+    minimal app'te ``require_developer`` dependency override ile bypass
+    edilir (gerçek session/cookie yok).
+    """
+    from datetime import UTC
+    from datetime import datetime as _dt
+
     from fastapi import FastAPI
+
+    from custos.analytics.dashboard.auth_dependencies import require_developer
+    from custos.shared.database import Session
 
     app = FastAPI()
     app.include_router(router)
     app.state.archiver = archiver
+    fake_session = Session(
+        id=1,
+        user_id=1,
+        username="test_dev",
+        role="developer",
+        enabled=True,
+        must_change_password=False,
+        expires_at=_dt(2099, 1, 1, tzinfo=UTC),
+    )
+    app.dependency_overrides[require_developer] = lambda: fake_session
     return TestClient(app)
 
 
@@ -281,10 +339,26 @@ async def test_manual_endpoint_conflict_when_lock_held() -> None:
             await asyncio.sleep(0.2)
             return await super().archive_month(year, month)
 
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from custos.analytics.dashboard.auth_dependencies import require_developer
+    from custos.shared.database import Session
+
     slow = SlowArchiver()
     app = FastAPI()
     app.include_router(router)
     app.state.archiver = slow
+    fake_session = Session(
+        id=1,
+        user_id=1,
+        username="test_dev",
+        role="developer",
+        enabled=True,
+        must_change_password=False,
+        expires_at=_dt(2099, 1, 1, tzinfo=UTC),
+    )
+    app.dependency_overrides[require_developer] = lambda: fake_session
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -313,15 +387,21 @@ async def test_stream_raw_readings_returns_all_inserted(
     """stream_raw_readings cursor üzerinden tüm satırları döndürmeli."""
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_ARC_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="Stream Test",
-        modbus_host="127.0.0.1", register_address=40804,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="Stream Test",
+            modbus_host="127.0.0.1",
+            register_address=40804,
+        )
+    )
     start = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
     batch = [
         TagReading(
             timestamp=start + timedelta(seconds=i),
-            tag_id=tag_id, value=float(i), quality_flag=0,
+            tag_id=tag_id,
+            value=float(i),
+            quality_flag=0,
         )
         for i in range(25)
     ]
@@ -329,7 +409,9 @@ async def test_stream_raw_readings_returns_all_inserted(
 
     collected: list[dict[str, Any]] = []
     stream: AsyncIterator[list[dict[str, Any]]] = db.stream_raw_readings(
-        start, start + timedelta(minutes=1), batch_size=10,
+        start,
+        start + timedelta(minutes=1),
+        batch_size=10,
     )
     async for chunk in stream:
         collected.extend(chunk)

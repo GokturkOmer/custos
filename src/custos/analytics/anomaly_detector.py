@@ -80,10 +80,7 @@ async def train_model_for_instance(
         return False
 
     # Feature matrix: her satır = [tag1_val, tag2_val, ...]
-    feature_matrix = np.column_stack([
-        np.array(tag_readings_map[tid][:min_len])
-        for tid in tag_ids
-    ])
+    feature_matrix = np.column_stack([np.array(tag_readings_map[tid][:min_len]) for tid in tag_ids])
 
     # Isolation Forest eğitimi
     model = IsolationForest(
@@ -225,23 +222,27 @@ class AnomalyDetector:
                     {tid: v for tid, v in zip(tag_ids, feature_values, strict=True)},
                 )
 
-                await self._db.insert_anomaly_score(AnomalyScore(
-                    instance_id=instance.id,
-                    timestamp=now,
-                    score=score,
-                    is_anomaly=is_anomaly,
-                    feature_vector=feature_json,
-                ))
+                await self._db.insert_anomaly_score(
+                    AnomalyScore(
+                        instance_id=instance.id,
+                        timestamp=now,
+                        score=score,
+                        is_anomaly=is_anomaly,
+                        feature_vector=feature_json,
+                    )
+                )
 
                 if is_anomaly:
                     anomaly_count += 1
-                    await self._db.insert_audit_log(AuditLogEntry(
-                        category="anomaly",
-                        action="detected",
-                        entity_type="asset_instance",
-                        entity_id=str(instance.id),
-                        detail=f"Anomali skoru: {score:.4f}",
-                    ))
+                    await self._db.insert_audit_log(
+                        AuditLogEntry(
+                            category="anomaly",
+                            action="detected",
+                            entity_type="asset_instance",
+                            entity_id=str(instance.id),
+                            detail=f"Anomali skoru: {score:.4f}",
+                        )
+                    )
 
         if anomaly_count > 0:
             await logger.awarn(

@@ -75,12 +75,14 @@ async def send_push_notifications(
     # Sessiz saat karsilastirmasi kullanicinin yerel saatinde yapilmali
     local_tz = ZoneInfo(settings.custos_timezone)
     now_time = datetime.now(UTC).astimezone(local_tz).time()
-    payload = json.dumps({
-        "title": title,
-        "body": body,
-        "tag": f"custos-{severity}",
-        "url": "/dashboard/alarms",
-    })
+    payload = json.dumps(
+        {
+            "title": title,
+            "body": body,
+            "tag": f"custos-{severity}",
+            "url": "/dashboard/alarms",
+        }
+    )
 
     sent = 0
     for sub in subs:

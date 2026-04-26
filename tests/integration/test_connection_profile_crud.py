@@ -42,15 +42,11 @@ async def db() -> TimescaleDBDatabase:
     # Test öncesi temizlik
     pool = database._get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM connection_profiles WHERE name LIKE 'TEST_%'"
-        )
+        await conn.execute("DELETE FROM connection_profiles WHERE name LIKE 'TEST_%'")
     yield database  # type: ignore[misc]
     # Test sonrası temizlik
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM connection_profiles WHERE name LIKE 'TEST_%'"
-        )
+        await conn.execute("DELETE FROM connection_profiles WHERE name LIKE 'TEST_%'")
     await database.close()
 
 
@@ -121,9 +117,7 @@ async def test_update_profile_rejects_invalid_fields(
     assert created.id is not None
 
     with pytest.raises(ValueError, match="Güncellenemeyen alanlar"):
-        await db.update_connection_profile(
-            created.id, {"nonexistent_field": "value"}
-        )
+        await db.update_connection_profile(created.id, {"nonexistent_field": "value"})
 
 
 @pytest.mark.usefixtures("_check_db_available")

@@ -73,13 +73,16 @@ def test_safe_eval_syntax_error() -> None:
     assert _safe_eval("", {}) is None
 
 
-@pytest.mark.parametrize("formula", [
-    "exec('import os')",
-    "eval('1+1')",
-    "open('/etc/passwd')",
-    "type(42)",
-    "getattr(42, '__class__')",
-])
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "exec('import os')",
+        "eval('1+1')",
+        "open('/etc/passwd')",
+        "type(42)",
+        "getattr(42, '__class__')",
+    ],
+)
 def test_safe_eval_rejects_builtins(formula: str) -> None:
     """Tüm builtin fonksiyon çağrılarını reddetmeli."""
     assert _safe_eval(formula, {}) is None

@@ -78,8 +78,11 @@ def test_workhours_only_drops_off_hours() -> None:
 def test_compute_base_value_uses_pattern() -> None:
     """compute_base_value pattern parametrelerini uygular."""
     pattern = SensorPattern(
-        base=100.0, diurnal_amp=10.0, diurnal_peak_hour=12.0,
-        workhours_boost=1.0, noise_amp=0.0,
+        base=100.0,
+        diurnal_amp=10.0,
+        diurnal_peak_hour=12.0,
+        workhours_boost=1.0,
+        noise_amp=0.0,
     )
     # Öğlen 12:00 peak — base + amp
     noon = datetime(2026, 4, 19, 12, 0, 0, tzinfo=UTC)
@@ -89,7 +92,9 @@ def test_compute_base_value_uses_pattern() -> None:
 def test_compute_base_value_respects_workhours_boost() -> None:
     """workhours_boost uygulanmalı."""
     pattern = SensorPattern(
-        base=100.0, diurnal_amp=0.0, workhours_boost=1.5,
+        base=100.0,
+        diurnal_amp=0.0,
+        workhours_boost=1.5,
     )
     open_hour = datetime(2026, 4, 19, 14, 0, 0, tzinfo=UTC)
     closed_hour = datetime(2026, 4, 19, 3, 0, 0, tzinfo=UTC)
@@ -101,8 +106,10 @@ def test_anomaly_daily_spike_triggers_at_target_hour() -> None:
     """daily_spike hedef saatte maksimuma yakın değer vermeli."""
     sim_start = datetime(2026, 4, 19, 0, 0, 0, tzinfo=UTC)
     anomaly = Anomaly(
-        kind="daily_spike", delta=50.0,
-        hours=(14,), duration_minutes=10,
+        kind="daily_spike",
+        delta=50.0,
+        hours=(14,),
+        duration_minutes=10,
     )
     # Spike 14:00 - 14:10 arası; en yüksek nokta ortada
     peak_time = datetime(2026, 4, 19, 14, 5, 0, tzinfo=UTC)
@@ -115,8 +122,11 @@ def test_anomaly_weekly_dropout_only_on_weekday() -> None:
     """weekly_dropout yalnızca belirtilen günde tetiklenmeli."""
     sim_start = datetime(2026, 4, 19, 0, 0, 0, tzinfo=UTC)
     anomaly = Anomaly(
-        kind="weekly_dropout", delta=-100.0,
-        hours=(11,), duration_minutes=5, weekday=2,  # Çarşamba
+        kind="weekly_dropout",
+        delta=-100.0,
+        hours=(11,),
+        duration_minutes=5,
+        weekday=2,  # Çarşamba
     )
     # 2026-04-22 Çarşamba, 2026-04-19 Pazar
     wednesday_11am = datetime(2026, 4, 22, 11, 2, 0, tzinfo=UTC)

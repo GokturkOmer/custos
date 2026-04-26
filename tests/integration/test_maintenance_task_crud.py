@@ -29,12 +29,16 @@ async def _ensure_checklist_with_steps(
         title="Test Task CL",
         steps=[
             MaintenanceChecklistStep(
-                checklist_id=0, sort_order=0,
-                text="Adım 1", estimated_minutes=5,
+                checklist_id=0,
+                sort_order=0,
+                text="Adım 1",
+                estimated_minutes=5,
             ),
             MaintenanceChecklistStep(
-                checklist_id=0, sort_order=1,
-                text="Adım 2", estimated_minutes=5,
+                checklist_id=0,
+                sort_order=1,
+                text="Adım 2",
+                estimated_minutes=5,
             ),
         ],
     )
@@ -67,7 +71,8 @@ async def test_update_task_to_completed(db: TimescaleDBDatabase) -> None:
     assert cl.id is not None
     created = await db.insert_maintenance_task(
         MaintenanceTask(
-            checklist_id=cl.id, source="manual",
+            checklist_id=cl.id,
+            source="manual",
             title_snapshot=cl.title,
         ),
     )
@@ -95,7 +100,8 @@ async def test_list_upcoming_maintenance_tasks(
     # Due: 1 saat sonra — upcoming
     near = await db.insert_maintenance_task(
         MaintenanceTask(
-            checklist_id=cl.id, source="schedule",
+            checklist_id=cl.id,
+            source="schedule",
             title_snapshot=cl.title,
             due_at=datetime.now(UTC) + timedelta(hours=1),
         ),
@@ -103,7 +109,8 @@ async def test_list_upcoming_maintenance_tasks(
     # Due: 200 saat sonra — upcoming (48h içinde değil)
     far = await db.insert_maintenance_task(
         MaintenanceTask(
-            checklist_id=cl.id, source="schedule",
+            checklist_id=cl.id,
+            source="schedule",
             title_snapshot=cl.title,
             due_at=datetime.now(UTC) + timedelta(hours=200),
         ),
@@ -125,7 +132,8 @@ async def test_list_recent_maintenance_tasks(
 
     task = await db.insert_maintenance_task(
         MaintenanceTask(
-            checklist_id=cl.id, source="manual",
+            checklist_id=cl.id,
+            source="manual",
             title_snapshot=cl.title,
         ),
     )
@@ -150,7 +158,8 @@ async def test_upsert_step_result(db: TimescaleDBDatabase) -> None:
 
     task = await db.insert_maintenance_task(
         MaintenanceTask(
-            checklist_id=cl.id, source="manual",
+            checklist_id=cl.id,
+            source="manual",
             title_snapshot=cl.title,
         ),
     )
@@ -158,8 +167,10 @@ async def test_upsert_step_result(db: TimescaleDBDatabase) -> None:
 
     first = await db.upsert_maintenance_task_step_result(
         MaintenanceTaskStepResult(
-            task_id=task.id, step_id=cl.steps[0].id,
-            checked=True, note="ilk not",
+            task_id=task.id,
+            step_id=cl.steps[0].id,
+            checked=True,
+            note="ilk not",
         ),
     )
     assert first.id is not None
@@ -168,8 +179,10 @@ async def test_upsert_step_result(db: TimescaleDBDatabase) -> None:
     # Aynı (task, step) — upsert güncellemeli
     second = await db.upsert_maintenance_task_step_result(
         MaintenanceTaskStepResult(
-            task_id=task.id, step_id=cl.steps[0].id,
-            checked=False, note="ikinci not",
+            task_id=task.id,
+            step_id=cl.steps[0].id,
+            checked=False,
+            note="ikinci not",
         ),
     )
     assert second.id == first.id
@@ -190,7 +203,9 @@ async def test_update_task_rejects_invalid_fields(
     assert cl.id is not None
     task = await db.insert_maintenance_task(
         MaintenanceTask(
-            checklist_id=cl.id, source="manual", title_snapshot=cl.title,
+            checklist_id=cl.id,
+            source="manual",
+            title_snapshot=cl.title,
         ),
     )
     assert task.id is not None

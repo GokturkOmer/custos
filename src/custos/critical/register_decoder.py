@@ -72,10 +72,7 @@ def _combine_words(raw_values: tuple[int, ...], byte_order: str) -> bytes:
     elif byte_order == "little":
         hi, lo = raw_values[1], raw_values[0]
     else:
-        msg = (
-            f"Desteklenmeyen byte_order: {byte_order!r}. "
-            f"'big' veya 'little' bekleniyor."
-        )
+        msg = f"Desteklenmeyen byte_order: {byte_order!r}. 'big' veya 'little' bekleniyor."
         raise RegisterDecodeError(msg)
     return struct.pack(">HH", hi, lo)
 

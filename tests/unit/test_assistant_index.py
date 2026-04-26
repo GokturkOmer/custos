@@ -130,9 +130,7 @@ def test_top_k_larger_than_chunks_is_clamped() -> None:
 def test_empty_query_returns_empty_results() -> None:
     """Boş/whitespace sorgu erken çıkış — embedding çağırılmaz."""
     c1 = _make_chunk("c1", "metin")
-    encoder = _FakeEncoder(
-        {"metin": _unit_vec(1.0, 0.0, 0.0)}
-    )
+    encoder = _FakeEncoder({"metin": _unit_vec(1.0, 0.0, 0.0)})
     idx = AssistantIndex(encoder=encoder)
     idx.build([c1])
     assert idx.search("") == []

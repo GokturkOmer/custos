@@ -62,7 +62,8 @@ class MaintenanceScheduler:
                     await self.run_once()
                 except Exception:
                     await logger.aerror(
-                        "Scheduler tick hatası", exc_info=True,
+                        "Scheduler tick hatası",
+                        exc_info=True,
                     )
                 await asyncio.sleep(self._tick_seconds)
         except asyncio.CancelledError:
@@ -92,7 +93,9 @@ class MaintenanceScheduler:
         await self._mark_overdue_as_missed(now)
 
     async def _process_due_schedule(
-        self, sched: MaintenanceSchedule, now: datetime,
+        self,
+        sched: MaintenanceSchedule,
+        now: datetime,
     ) -> None:
         """Schedule için task'(lar) açıp next_due_at'i ilerletir."""
         if sched.id is None:
@@ -101,7 +104,8 @@ class MaintenanceScheduler:
         if checklist is None:
             await logger.awarning(
                 "Schedule checklist'i bulunamadı",
-                schedule_id=sched.id, checklist_id=sched.checklist_id,
+                schedule_id=sched.id,
+                checklist_id=sched.checklist_id,
             )
             return
 
@@ -135,10 +139,13 @@ class MaintenanceScheduler:
 
         # next_due_at'i ilerlet
         new_due = compute_next_due_at(
-            sched.next_due_at, sched.period_kind, sched.period_value,
+            sched.next_due_at,
+            sched.period_kind,
+            sched.period_value,
         )
         await self._db.update_maintenance_schedule(
-            sched.id, {"next_due_at": new_due},
+            sched.id,
+            {"next_due_at": new_due},
         )
         await logger.ainfo(
             "Bakım task(lar)ı oluşturuldu",
@@ -161,5 +168,6 @@ class MaintenanceScheduler:
                 and task.id is not None
             ):
                 await self._db.update_maintenance_task(
-                    task.id, {"status": "missed"},
+                    task.id,
+                    {"status": "missed"},
                 )

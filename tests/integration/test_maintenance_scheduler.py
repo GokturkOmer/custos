@@ -26,12 +26,15 @@ async def _make_checklist(db: TimescaleDBDatabase) -> int:
     unique = uuid.uuid4().hex[:8]
     c = await db.insert_maintenance_checklist(
         MaintenanceChecklist(
-            slug=f"test-sch-{unique}", title="Scheduler Test CL",
+            slug=f"test-sch-{unique}",
+            title="Scheduler Test CL",
             category="periodic",
             steps=[
                 MaintenanceChecklistStep(
-                    checklist_id=0, sort_order=0,
-                    text="Adım", estimated_minutes=5,
+                    checklist_id=0,
+                    sort_order=0,
+                    text="Adım",
+                    estimated_minutes=5,
                 ),
             ],
         ),
@@ -55,8 +58,10 @@ async def test_scheduler_tick_creates_task_for_due_schedule(
     past_due = datetime.now(UTC) - timedelta(hours=1)
     sched = await db.insert_maintenance_schedule(
         MaintenanceSchedule(
-            checklist_id=cid, asset_instance_id=iid,
-            period_kind="daily", period_value=1,
+            checklist_id=cid,
+            asset_instance_id=iid,
+            period_kind="daily",
+            period_value=1,
             anchor_date=date.today(),
             next_due_at=past_due,
         ),
@@ -94,8 +99,10 @@ async def test_scheduler_tick_skips_future_schedule(
     future = datetime.now(UTC) + timedelta(hours=6)
     sched = await db.insert_maintenance_schedule(
         MaintenanceSchedule(
-            checklist_id=cid, asset_instance_id=iid,
-            period_kind="weekly", anchor_date=date.today(),
+            checklist_id=cid,
+            asset_instance_id=iid,
+            period_kind="weekly",
+            anchor_date=date.today(),
             next_due_at=future,
         ),
     )
@@ -123,9 +130,12 @@ async def test_scheduler_tick_skips_disabled_schedule(
     past = datetime.now(UTC) - timedelta(hours=1)
     sched = await db.insert_maintenance_schedule(
         MaintenanceSchedule(
-            checklist_id=cid, asset_instance_id=iid,
-            period_kind="daily", anchor_date=date.today(),
-            next_due_at=past, enabled=False,
+            checklist_id=cid,
+            asset_instance_id=iid,
+            period_kind="daily",
+            anchor_date=date.today(),
+            next_due_at=past,
+            enabled=False,
         ),
     )
     assert sched.id is not None

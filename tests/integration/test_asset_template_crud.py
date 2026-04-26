@@ -52,8 +52,14 @@ async def test_list_templates_returns_seed_data(db: TimescaleDBDatabase) -> None
     assert len(templates) >= 6
 
     slugs = {t.slug for t in templates}
-    expected = {"pump", "chiller", "plate_heat_exchanger", "air_compressor",
-                "generic_motor", "generic_tank"}
+    expected = {
+        "pump",
+        "chiller",
+        "plate_heat_exchanger",
+        "air_compressor",
+        "generic_motor",
+        "generic_tank",
+    }
     assert expected.issubset(slugs)
 
 

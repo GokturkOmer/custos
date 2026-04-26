@@ -52,7 +52,7 @@ def test_parse_csv_missing_required_column_raises() -> None:
 
 def test_parse_csv_with_bom() -> None:
     """UTF-8 BOM'lu dosya (Excel export) parse edilebilmeli."""
-    csv_body = b"tag_id,name,modbus_host,register_address\n" b"CHIL_01,Chiller,10.0.0.1,40001\n"
+    csv_body = b"tag_id,name,modbus_host,register_address\nCHIL_01,Chiller,10.0.0.1,40001\n"
     content = codecs.BOM_UTF8 + csv_body
     rows = parse_csv(content)
     assert len(rows) == 1
@@ -61,17 +61,14 @@ def test_parse_csv_with_bom() -> None:
 
 def test_parse_csv_invalid_utf8_raises() -> None:
     """UTF-8 olmayan bayt dizisi → ParseError."""
-    content = b"tag_id,name,modbus_host,register_address\n" b"\xff\xfe,name,host,1\n"
+    content = b"tag_id,name,modbus_host,register_address\n\xff\xfe,name,host,1\n"
     with pytest.raises(BulkImportParseError, match="UTF-8"):
         parse_csv(content)
 
 
 def test_parse_csv_blank_cells_become_missing() -> None:
     """Boş hücreler row dict'inden düşer → pydantic default uygulanır."""
-    content = (
-        b"tag_id,name,modbus_host,register_address,modbus_port\n"
-        b"TAG_A,Test,10.0.0.1,40001,\n"
-    )
+    content = b"tag_id,name,modbus_host,register_address,modbus_port\nTAG_A,Test,10.0.0.1,40001,\n"
     rows = parse_csv(content)
     assert len(rows) == 1
     # modbus_port boş → key listede yok

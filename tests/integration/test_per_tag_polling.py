@@ -45,7 +45,7 @@ def test_compute_base_tick_single() -> None:
 def test_compute_base_tick_multiple() -> None:
     """Farklı interval'li tag'ler için GCD hesaplanmalı."""
     tags = [
-        _make_tag("T1", 1000),   # 1s
+        _make_tag("T1", 1000),  # 1s
         _make_tag("T2", 10000),  # 10s
     ]
     assert _compute_base_tick_ms(tags) == 1000
@@ -64,8 +64,8 @@ def test_compute_base_tick_minimum() -> None:
 def test_compute_base_tick_mixed_intervals() -> None:
     """Karışık interval'ler için GCD doğru hesaplanmalı."""
     tags = [
-        _make_tag("T1", 100),    # fast
-        _make_tag("T2", 1000),   # normal
+        _make_tag("T1", 100),  # fast
+        _make_tag("T2", 1000),  # normal
         _make_tag("T3", 10000),  # slow
     ]
     assert _compute_base_tick_ms(tags) == 100

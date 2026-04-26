@@ -94,9 +94,7 @@ def load_knowledge_base(knowledge_dir: Path) -> list[Chunk]:
 
     chunks: list[Chunk] = []
     md_files = sorted(knowledge_dir.rglob("*.md"))
-    yaml_files = sorted(
-        [*knowledge_dir.rglob("*.yaml"), *knowledge_dir.rglob("*.yml")]
-    )
+    yaml_files = sorted([*knowledge_dir.rglob("*.yaml"), *knowledge_dir.rglob("*.yml")])
 
     for path in md_files:
         # README.md bilgi tabanı için rehber — indeksleme dışı bırak.

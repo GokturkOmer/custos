@@ -22,45 +22,85 @@ from custos.simulator.modbus_server import ModbusSimulator
 # tag_id'ler WS_ ile prefixli: makinede paralel custos.critical çalışıyorsa
 # üretim T001 vb. kayıtlarıyla karışmaz, sorgu/cleanup yalnız bu test'e aittir.
 TAG_RANGES: dict[str, tuple[float, float]] = {
-    "WS_T001": (5.0, 40.0),    # Supply Air Temp °C
-    "WS_T002": (10.0, 40.0),   # Return Air Temp °C
+    "WS_T001": (5.0, 40.0),  # Supply Air Temp °C
+    "WS_T002": (10.0, 40.0),  # Return Air Temp °C
     "WS_T003": (-10.0, 45.0),  # Outdoor Air Temp °C
-    "WS_T004": (5.0, 35.0),    # Mixed Air Temp °C
-    "WS_H001": (15.0, 95.0),   # Indoor Humidity %
+    "WS_T004": (5.0, 35.0),  # Mixed Air Temp °C
+    "WS_H001": (15.0, 95.0),  # Indoor Humidity %
 }
 
 # Test tag'leri — simülatörün ilk 5 register adresi
 # polling_interval_ms=1000, simulator update 500ms ile 5 saniyede ~5 okuma beklenir
 TEST_TAGS: list[TagRecord] = [
     TagRecord(
-        tag_id="WS_T001", name="WS Supply Air Temp", modbus_host="127.0.0.1",
-        modbus_port=5030, unit_id=1, register_address=0,
-        register_type="uint16", gain=0.1, offset=0.0, unit="°C",
-        polling_interval_ms=1000, polling_preset="normal",
+        tag_id="WS_T001",
+        name="WS Supply Air Temp",
+        modbus_host="127.0.0.1",
+        modbus_port=5030,
+        unit_id=1,
+        register_address=0,
+        register_type="uint16",
+        gain=0.1,
+        offset=0.0,
+        unit="°C",
+        polling_interval_ms=1000,
+        polling_preset="normal",
     ),
     TagRecord(
-        tag_id="WS_T002", name="WS Return Air Temp", modbus_host="127.0.0.1",
-        modbus_port=5030, unit_id=1, register_address=1,
-        register_type="uint16", gain=0.1, offset=0.0, unit="°C",
-        polling_interval_ms=1000, polling_preset="normal",
+        tag_id="WS_T002",
+        name="WS Return Air Temp",
+        modbus_host="127.0.0.1",
+        modbus_port=5030,
+        unit_id=1,
+        register_address=1,
+        register_type="uint16",
+        gain=0.1,
+        offset=0.0,
+        unit="°C",
+        polling_interval_ms=1000,
+        polling_preset="normal",
     ),
     TagRecord(
-        tag_id="WS_T003", name="WS Outdoor Air Temp", modbus_host="127.0.0.1",
-        modbus_port=5030, unit_id=1, register_address=2,
-        register_type="uint16", gain=0.1, offset=0.0, unit="°C",
-        polling_interval_ms=1000, polling_preset="normal",
+        tag_id="WS_T003",
+        name="WS Outdoor Air Temp",
+        modbus_host="127.0.0.1",
+        modbus_port=5030,
+        unit_id=1,
+        register_address=2,
+        register_type="uint16",
+        gain=0.1,
+        offset=0.0,
+        unit="°C",
+        polling_interval_ms=1000,
+        polling_preset="normal",
     ),
     TagRecord(
-        tag_id="WS_T004", name="WS Mixed Air Temp", modbus_host="127.0.0.1",
-        modbus_port=5030, unit_id=1, register_address=3,
-        register_type="uint16", gain=0.1, offset=0.0, unit="°C",
-        polling_interval_ms=1000, polling_preset="normal",
+        tag_id="WS_T004",
+        name="WS Mixed Air Temp",
+        modbus_host="127.0.0.1",
+        modbus_port=5030,
+        unit_id=1,
+        register_address=3,
+        register_type="uint16",
+        gain=0.1,
+        offset=0.0,
+        unit="°C",
+        polling_interval_ms=1000,
+        polling_preset="normal",
     ),
     TagRecord(
-        tag_id="WS_H001", name="WS Indoor Humidity", modbus_host="127.0.0.1",
-        modbus_port=5030, unit_id=1, register_address=4,
-        register_type="uint16", gain=0.1, offset=0.0, unit="%",
-        polling_interval_ms=1000, polling_preset="normal",
+        tag_id="WS_H001",
+        name="WS Indoor Humidity",
+        modbus_host="127.0.0.1",
+        modbus_port=5030,
+        unit_id=1,
+        register_address=4,
+        register_type="uint16",
+        gain=0.1,
+        offset=0.0,
+        unit="%",
+        polling_interval_ms=1000,
+        polling_preset="normal",
     ),
 ]
 
@@ -151,9 +191,7 @@ async def test_walking_skeleton() -> None:
 
             # Her tag'den en az 3, en fazla 8 okuma bekliyoruz
             assert len(readings) >= 3, f"{tag_id}: en az 3 okuma beklendi, {len(readings)} geldi"
-            assert len(readings) <= 8, (
-                f"{tag_id}: en fazla 8 okuma beklendi, {len(readings)} geldi"
-            )
+            assert len(readings) <= 8, f"{tag_id}: en fazla 8 okuma beklendi, {len(readings)} geldi"
 
             # Değerler beklenen aralıkta mı?
             for reading in readings:

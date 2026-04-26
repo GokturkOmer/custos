@@ -46,7 +46,7 @@ def test_disk_usage_missing_mount_raises() -> None:
 
 def _fake_usage(used_percent: float) -> DiskUsage:
     """Test helper'ı — istediğimiz yüzdede sahte DiskUsage üretir."""
-    total = 1000 * 1024 ** 3  # 1000 GB
+    total = 1000 * 1024**3  # 1000 GB
     used = int(total * used_percent / 100.0)
     return DiskUsage(
         mount_point="/fake",
@@ -64,21 +64,23 @@ async def test_high_usage_triggers_push_notification(
     """%85 üstü ilk tick push gönderir; cooldown içinde ikinci tick sessiz."""
     # get_disk_usage'ı sabit %90 döndürecek stub ile değiştir
     monkeypatch.setattr(
-        disk_telemetry, "get_disk_usage", lambda _path: _fake_usage(90.0),
+        disk_telemetry,
+        "get_disk_usage",
+        lambda _path: _fake_usage(90.0),
     )
 
     # send_push_notifications'ı AsyncMock ile stub'la — gerçek VAPID/DB gerekmez
     push_mock = AsyncMock(return_value=1)
     monkeypatch.setattr(
-        disk_telemetry, "send_push_notifications", push_mock,
+        disk_telemetry,
+        "send_push_notifications",
+        push_mock,
     )
 
     monitor = DiskMonitor(db=None, mount_point="/fake")  # type: ignore[arg-type]
     usage = await monitor.run_once()
     assert usage.used_percent == 90.0
-    assert push_mock.await_count == 1, (
-        "Eşik aşıldı, push bir kez çağrılmalıydı"
-    )
+    assert push_mock.await_count == 1, "Eşik aşıldı, push bir kez çağrılmalıydı"
     # Çağrı argümanları — severity warn, body yüzde içermeli
     call_kwargs = push_mock.await_args.kwargs
     assert call_kwargs["severity"] == "warn"
@@ -93,11 +95,15 @@ async def test_high_usage_triggers_push_notification(
 async def test_below_threshold_no_push(monkeypatch: pytest.MonkeyPatch) -> None:
     """%70'te eşik altı; push çağrılmamalı."""
     monkeypatch.setattr(
-        disk_telemetry, "get_disk_usage", lambda _path: _fake_usage(70.0),
+        disk_telemetry,
+        "get_disk_usage",
+        lambda _path: _fake_usage(70.0),
     )
     push_mock = AsyncMock(return_value=0)
     monkeypatch.setattr(
-        disk_telemetry, "send_push_notifications", push_mock,
+        disk_telemetry,
+        "send_push_notifications",
+        push_mock,
     )
 
     monitor = DiskMonitor(db=None, mount_point="/fake")  # type: ignore[arg-type]
@@ -111,11 +117,15 @@ async def test_cooldown_expired_sends_again(
 ) -> None:
     """Cooldown süresi geçtiyse ikinci uyarı gönderilebilmeli."""
     monkeypatch.setattr(
-        disk_telemetry, "get_disk_usage", lambda _path: _fake_usage(95.0),
+        disk_telemetry,
+        "get_disk_usage",
+        lambda _path: _fake_usage(95.0),
     )
     push_mock = AsyncMock(return_value=1)
     monkeypatch.setattr(
-        disk_telemetry, "send_push_notifications", push_mock,
+        disk_telemetry,
+        "send_push_notifications",
+        push_mock,
     )
 
     monitor = DiskMonitor(db=None, mount_point="/fake")  # type: ignore[arg-type]
@@ -124,6 +134,7 @@ async def test_cooldown_expired_sends_again(
 
     # Cooldown'ı geçmişe taşı — süre geçmiş varsayılacak
     from datetime import UTC, datetime, timedelta
+
     monitor._last_alert_at = datetime.now(UTC) - timedelta(
         seconds=ALERT_COOLDOWN_SECONDS + 1,
     )

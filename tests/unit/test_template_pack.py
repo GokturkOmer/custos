@@ -15,17 +15,19 @@ from custos.analytics.templates import (
 )
 
 # F9 planında tanımlı 9 şablon — kapsam kaymasın diye sabitledik.
-_EXPECTED_AVM_SLUGS: frozenset[str] = frozenset({
-    "chiller",
-    "energy_analyzer",
-    "ahu",
-    "fcu",
-    "cooling_tower",
-    "booster_pump_set",
-    "circulation_pump",
-    "lift_station_waste",
-    "lift_station_fresh",
-})
+_EXPECTED_AVM_SLUGS: frozenset[str] = frozenset(
+    {
+        "chiller",
+        "energy_analyzer",
+        "ahu",
+        "fcu",
+        "cooling_tower",
+        "booster_pump_set",
+        "circulation_pump",
+        "lift_station_waste",
+        "lift_station_fresh",
+    }
+)
 
 
 def test_avm_pack_has_all_nine_templates() -> None:
@@ -42,9 +44,7 @@ def test_avm_pack_every_template_has_required_role() -> None:
     loaded = load_templates(default_template_dir())
     for entry in loaded:
         required_roles = [r for r in entry.schema.roles if r.required]
-        assert required_roles, (
-            f"{entry.schema.slug}: hiç zorunlu rol yok — şablon geçersiz"
-        )
+        assert required_roles, f"{entry.schema.slug}: hiç zorunlu rol yok — şablon geçersiz"
 
 
 def test_avm_pack_kpi_formulas_reference_only_roles() -> None:
@@ -75,10 +75,8 @@ def test_avm_pack_alarm_and_maintenance_advisory_only() -> None:
     for entry in loaded:
         schema: TemplateSchema = entry.schema
         assert len(schema.alarm_defaults) <= 8, (
-            f"{schema.slug}: {len(schema.alarm_defaults)} alarm default "
-            "çok fazla (maks 8)"
+            f"{schema.slug}: {len(schema.alarm_defaults)} alarm default çok fazla (maks 8)"
         )
         assert len(schema.maintenance_defaults) <= 8, (
-            f"{schema.slug}: {len(schema.maintenance_defaults)} bakım default "
-            "çok fazla (maks 8)"
+            f"{schema.slug}: {len(schema.maintenance_defaults)} bakım default çok fazla (maks 8)"
         )

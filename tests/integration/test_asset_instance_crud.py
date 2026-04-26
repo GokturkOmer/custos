@@ -42,14 +42,18 @@ async def db() -> TimescaleDBDatabase:
     pool = database._get_pool()
     # Test öncesi temizlik
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM tag_bindings WHERE instance_id IN "
-                           "(SELECT id FROM asset_instances WHERE name LIKE 'TEST_%')")
+        await conn.execute(
+            "DELETE FROM tag_bindings WHERE instance_id IN "
+            "(SELECT id FROM asset_instances WHERE name LIKE 'TEST_%')"
+        )
         await conn.execute("DELETE FROM asset_instances WHERE name LIKE 'TEST_%'")
     yield database  # type: ignore[misc]
     # Test sonrası temizlik
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM tag_bindings WHERE instance_id IN "
-                           "(SELECT id FROM asset_instances WHERE name LIKE 'TEST_%')")
+        await conn.execute(
+            "DELETE FROM tag_bindings WHERE instance_id IN "
+            "(SELECT id FROM asset_instances WHERE name LIKE 'TEST_%')"
+        )
         await conn.execute("DELETE FROM asset_instances WHERE name LIKE 'TEST_%'")
     await database.close()
 
@@ -85,16 +89,22 @@ async def test_insert_instance(db: TimescaleDBDatabase) -> None:
 async def test_update_instance(db: TimescaleDBDatabase) -> None:
     """Asset instance güncellemesi çalışıyor mu?"""
     tmpl_id = await _get_pump_template_id(db)
-    created = await db.insert_asset_instance(AssetInstance(
-        template_id=tmpl_id, name="TEST_Pompa_UPD",
-    ))
+    created = await db.insert_asset_instance(
+        AssetInstance(
+            template_id=tmpl_id,
+            name="TEST_Pompa_UPD",
+        )
+    )
     assert created.id is not None
 
-    updated = await db.update_asset_instance(created.id, {
-        "name": "TEST_Pompa_Updated",
-        "location": "Yeni Konum",
-        "status": "inactive",
-    })
+    updated = await db.update_asset_instance(
+        created.id,
+        {
+            "name": "TEST_Pompa_Updated",
+            "location": "Yeni Konum",
+            "status": "inactive",
+        },
+    )
     assert updated is not None
     assert updated.name == "TEST_Pompa_Updated"
     assert updated.location == "Yeni Konum"
@@ -109,9 +119,12 @@ async def test_update_instance(db: TimescaleDBDatabase) -> None:
 async def test_delete_instance(db: TimescaleDBDatabase) -> None:
     """Asset instance silme çalışıyor mu?"""
     tmpl_id = await _get_pump_template_id(db)
-    created = await db.insert_asset_instance(AssetInstance(
-        template_id=tmpl_id, name="TEST_Pompa_DEL",
-    ))
+    created = await db.insert_asset_instance(
+        AssetInstance(
+            template_id=tmpl_id,
+            name="TEST_Pompa_DEL",
+        )
+    )
     assert created.id is not None
 
     assert await db.delete_asset_instance(created.id) is True
@@ -125,11 +138,16 @@ async def test_delete_instance(db: TimescaleDBDatabase) -> None:
 async def test_list_instances_filter_by_template(db: TimescaleDBDatabase) -> None:
     """Template ve status filtreleri çalışıyor mu?"""
     tmpl_id = await _get_pump_template_id(db)
-    await db.insert_asset_instance(AssetInstance(
-        template_id=tmpl_id, name="TEST_Pompa_F1",
-    ))
+    await db.insert_asset_instance(
+        AssetInstance(
+            template_id=tmpl_id,
+            name="TEST_Pompa_F1",
+        )
+    )
     inst2 = AssetInstance(
-        template_id=tmpl_id, name="TEST_Pompa_F2", status="inactive",
+        template_id=tmpl_id,
+        name="TEST_Pompa_F2",
+        status="inactive",
     )
     await db.insert_asset_instance(inst2)
 
@@ -149,13 +167,17 @@ async def test_delete_instance_cascades_bindings(db: TimescaleDBDatabase) -> Non
     tmpl = await db.get_asset_template(tmpl_id)
     assert tmpl is not None and len(tmpl.roles) > 0
 
-    created = await db.insert_asset_instance(AssetInstance(
-        template_id=tmpl_id, name="TEST_Pompa_CASCADE",
-    ))
+    created = await db.insert_asset_instance(
+        AssetInstance(
+            template_id=tmpl_id,
+            name="TEST_Pompa_CASCADE",
+        )
+    )
     assert created.id is not None
 
     # Binding oluşturmak için test tag lazım — önce tag oluştur
     from custos.shared.database import TagRecord
+
     tag = TagRecord(
         tag_id="TEST_CASCADE_TAG",
         name="Cascade Test Tag",

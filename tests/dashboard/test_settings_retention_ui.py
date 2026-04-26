@@ -56,6 +56,4 @@ def test_disk_usage_api_returns_partial() -> None:
     # Route her zaman 200 döner — mount yoksa "ölçülemedi" partial'ı gider
     assert response.status_code == 200
     # Partial mutlaka şu iki durumdan birini gösterir
-    assert ("Disk Doluluk" in response.text) or (
-        "ölçülemedi" in response.text
-    )
+    assert ("Disk Doluluk" in response.text) or ("ölçülemedi" in response.text)

@@ -67,10 +67,7 @@ class ModbusScanner:
         if not self._client.connected:
             connected: bool = await self._client.connect()
             if not connected:
-                msg = (
-                    f"Modbus bağlantısı kurulamadı: "
-                    f"{self._profile.host}:{self._profile.port}"
-                )
+                msg = f"Modbus bağlantısı kurulamadı: {self._profile.host}:{self._profile.port}"
                 raise ConnectionError(msg)
         return self._client
 
@@ -254,7 +251,9 @@ class ModbusScanner:
             try:
                 response = await asyncio.wait_for(
                     client.read_holding_registers(
-                        address, count=1, device_id=slave_id,
+                        address,
+                        count=1,
+                        device_id=slave_id,
                     ),
                     timeout=_READ_TIMEOUT_SEC,
                 )
@@ -279,7 +278,9 @@ class ModbusScanner:
             try:
                 response = await asyncio.wait_for(
                     client.read_holding_registers(
-                        address, count=1, device_id=slave_id,
+                        address,
+                        count=1,
+                        device_id=slave_id,
                     ),
                     timeout=_READ_TIMEOUT_SEC,
                 )
@@ -331,8 +332,7 @@ class ModbusScanner:
         # Mevcut tag'leri kontrol et (duplicate önleme)
         existing_tags = await self._database.list_tags()
         existing_keys: set[tuple[str, int, int, int]] = {
-            (t.modbus_host, t.modbus_port, t.unit_id, t.register_address)
-            for t in existing_tags
+            (t.modbus_host, t.modbus_port, t.unit_id, t.register_address) for t in existing_tags
         }
 
         for result in results:

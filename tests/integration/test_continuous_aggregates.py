@@ -63,12 +63,12 @@ async def test_1min_aggregate_exists_and_has_policy(
         )
         assert raw is not None, "1min refresh policy yok"
         config = _parse_config(raw)
-        assert _interval_matches(
-            config.get("start_offset"), ["3 hours", "03:00:00"]
-        ), f"1min start_offset beklenmedik: {config.get('start_offset')!r}"
-        assert _interval_matches(
-            config.get("end_offset"), ["1 min", "1 minute", "00:01:00"]
-        ), f"1min end_offset beklenmedik: {config.get('end_offset')!r}"
+        assert _interval_matches(config.get("start_offset"), ["3 hours", "03:00:00"]), (
+            f"1min start_offset beklenmedik: {config.get('start_offset')!r}"
+        )
+        assert _interval_matches(config.get("end_offset"), ["1 min", "1 minute", "00:01:00"]), (
+            f"1min end_offset beklenmedik: {config.get('end_offset')!r}"
+        )
 
 
 @pytest.mark.usefixtures("_check_db_available")
@@ -95,9 +95,9 @@ async def test_1hour_aggregate_exists_and_has_policy(
         assert _interval_matches(
             config.get("start_offset"), ["1 day", "1 day 00:00:00", "24:00:00"]
         ), f"1hour start_offset beklenmedik: {config.get('start_offset')!r}"
-        assert _interval_matches(
-            config.get("end_offset"), ["1 hour", "01:00:00"]
-        ), f"1hour end_offset beklenmedik: {config.get('end_offset')!r}"
+        assert _interval_matches(config.get("end_offset"), ["1 hour", "01:00:00"]), (
+            f"1hour end_offset beklenmedik: {config.get('end_offset')!r}"
+        )
 
 
 @pytest.mark.usefixtures("_check_db_available")
@@ -115,8 +115,7 @@ async def test_1min_retention_3_years(
         assert raw is not None, "1min retention policy yok"
         config = _parse_config(raw)
         assert config.get("drop_after") == "3 years", (
-            f"1min drop_after beklenen '3 years', alınan: "
-            f"{config.get('drop_after')!r}"
+            f"1min drop_after beklenen '3 years', alınan: {config.get('drop_after')!r}"
         )
 
 
@@ -132,9 +131,7 @@ async def test_1hour_has_no_retention(
             "WHERE proc_name = 'policy_retention' "
             "  AND hypertable_name = 'tag_readings_1hour'"
         )
-        assert count == 0, (
-            "1hour için retention policy olmamalıydı, sınırsız saklanır"
-        )
+        assert count == 0, "1hour için retention policy olmamalıydı, sınırsız saklanır"
 
 
 @pytest.mark.usefixtures("_check_db_available")
@@ -148,10 +145,14 @@ async def test_aggregate_returns_correct_avg(
     """
     unique = uuid.uuid4().hex[:8]
     tag_id = f"TEST_CA_{unique}"
-    await db.insert_tag(TagRecord(
-        tag_id=tag_id, name="CA Avg Test",
-        modbus_host="127.0.0.1", register_address=40100,
-    ))
+    await db.insert_tag(
+        TagRecord(
+            tag_id=tag_id,
+            name="CA Avg Test",
+            modbus_host="127.0.0.1",
+            register_address=40100,
+        )
+    )
 
     # Dakikanın başına hizalı bir bucket seç (2 dk geri — real-time penceresinden uzak)
     now = datetime.now(UTC).replace(microsecond=0)

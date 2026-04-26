@@ -35,23 +35,27 @@ _TRT = ZoneInfo("Europe/Istanbul")
 
 # PyArrow şemaları — tüm kolonlar explicit tiplenir ki Parquet metadata'sı
 # düzgün olsun ve okuyan tarafta sürpriz dönüşüm olmasın.
-_RAW_SCHEMA = pa.schema([
-    ("timestamp", pa.timestamp("us", tz="UTC")),
-    ("tag_id", pa.string()),
-    ("value", pa.float64()),
-    ("quality_flag", pa.int16()),
-])
+_RAW_SCHEMA = pa.schema(
+    [
+        ("timestamp", pa.timestamp("us", tz="UTC")),
+        ("tag_id", pa.string()),
+        ("value", pa.float64()),
+        ("quality_flag", pa.int16()),
+    ]
+)
 
-_AGG_SCHEMA = pa.schema([
-    ("bucket", pa.timestamp("us", tz="UTC")),
-    ("tag_id", pa.string()),
-    ("avg_value", pa.float64()),
-    ("min_value", pa.float64()),
-    ("max_value", pa.float64()),
-    ("stddev_value", pa.float64()),
-    ("max_quality", pa.int16()),
-    ("sample_count", pa.int64()),
-])
+_AGG_SCHEMA = pa.schema(
+    [
+        ("bucket", pa.timestamp("us", tz="UTC")),
+        ("tag_id", pa.string()),
+        ("avg_value", pa.float64()),
+        ("min_value", pa.float64()),
+        ("max_value", pa.float64()),
+        ("stddev_value", pa.float64()),
+        ("max_quality", pa.int16()),
+        ("sample_count", pa.int64()),
+    ]
+)
 
 
 @dataclass
@@ -132,8 +136,10 @@ class ParquetArchiver:
 
         await logger.ainfo(
             "Parquet arşiv başlıyor",
-            year=year, month=month,
-            start_utc=start_utc.isoformat(), end_utc=end_utc.isoformat(),
+            year=year,
+            month=month,
+            start_utc=start_utc.isoformat(),
+            end_utc=end_utc.isoformat(),
             output_dir=str(month_dir),
         )
 
@@ -170,14 +176,13 @@ class ParquetArchiver:
         result.duration_seconds = time.monotonic() - t0
         await logger.ainfo(
             "Parquet arşiv tamamlandı",
-            year=year, month=month,
+            year=year,
+            month=month,
             raw_rows=result.raw_rows,
             agg_1min_rows=result.agg_1min_rows,
             agg_1hour_rows=result.agg_1hour_rows,
             total_bytes=(
-                result.raw_file_bytes
-                + result.agg_1min_file_bytes
-                + result.agg_1hour_file_bytes
+                result.raw_file_bytes + result.agg_1min_file_bytes + result.agg_1hour_file_bytes
             ),
             duration_seconds=round(result.duration_seconds, 3),
         )

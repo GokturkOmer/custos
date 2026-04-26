@@ -42,7 +42,9 @@ from custos.shared.query_guard import (
 def test_small_query_allowed_raw() -> None:
     """5 tag × 1 gün × raw → 5 ≤ 7 → allow (override yok)."""
     decision = evaluate_query(
-        tag_count=5, time_range_days=1.0, requested_layer="raw",
+        tag_count=5,
+        time_range_days=1.0,
+        requested_layer="raw",
     )
     assert decision.allowed is True
     assert decision.forced_aggregate is None
@@ -52,7 +54,9 @@ def test_small_query_allowed_raw() -> None:
 def test_large_raw_forced_to_1min() -> None:
     """200 tag × 1 gün × raw → 200 > 7 → forced 1min."""
     decision = evaluate_query(
-        tag_count=200, time_range_days=1.0, requested_layer="raw",
+        tag_count=200,
+        time_range_days=1.0,
+        requested_layer="raw",
     )
     assert decision.allowed is True
     assert decision.forced_aggregate == "1min"
@@ -62,7 +66,9 @@ def test_large_raw_forced_to_1min() -> None:
 def test_very_large_1min_forced_to_1hour() -> None:
     """200 tag × 7 gün × 1min → 1400 > 200 → forced 1hour."""
     decision = evaluate_query(
-        tag_count=200, time_range_days=7.0, requested_layer="1min",
+        tag_count=200,
+        time_range_days=7.0,
+        requested_layer="1min",
     )
     assert decision.allowed is True
     assert decision.forced_aggregate == "1hour"
@@ -87,7 +93,8 @@ _HelperFn = Callable[..., Awaitable[list[TagReading]]]
 
 
 def _install_dispatch_spy(
-    db: TimescaleDBDatabase, monkeypatch: pytest.MonkeyPatch,
+    db: TimescaleDBDatabase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> list[str]:
     """Üç private helper'ı sar, hangisinin çağrıldığını kaydet.
 
@@ -118,7 +125,8 @@ def _install_dispatch_spy(
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_query_readings_auto_applies_guard(
-    db: TimescaleDBDatabase, monkeypatch: pytest.MonkeyPatch,
+    db: TimescaleDBDatabase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Guard iki yönü de etkiler: forced_aggregate override + reject exception.
 
@@ -144,7 +152,10 @@ async def test_query_readings_auto_applies_guard(
 
     # tag_count=500 × 0.0208 gün = 10.42 > 7 → forced 1min
     await db.query_readings_auto(
-        "TEST_NONEXISTENT_GUARD", start, end, tag_count=500,
+        "TEST_NONEXISTENT_GUARD",
+        start,
+        end,
+        tag_count=500,
     )
 
     # Guard override → 1min helper'ı çağrıldı, raw çağrılmadı
@@ -155,7 +166,10 @@ async def test_query_readings_auto_applies_guard(
     long_start = long_end - timedelta(days=15 * 365)
     with pytest.raises(QueryGuardError) as excinfo:
         await db.query_readings_auto(
-            "TEST_NONEXISTENT_GUARD", long_start, long_end, tag_count=1,
+            "TEST_NONEXISTENT_GUARD",
+            long_start,
+            long_end,
+            tag_count=1,
         )
     assert "parçalı" in str(excinfo.value) or "uzun" in str(excinfo.value)
 
@@ -174,8 +188,10 @@ def _mk_chart(chart_key: str, minutes: int) -> OverviewChart:
 
 def _mk_tag(tag_id: str) -> TagRecord:
     return TagRecord(
-        tag_id=tag_id, name=tag_id,
-        modbus_host="127.0.0.1", register_address=0,
+        tag_id=tag_id,
+        name=tag_id,
+        modbus_host="127.0.0.1",
+        register_address=0,
     )
 
 
@@ -192,7 +208,9 @@ class _RejectingMockDB:
         self._tags = tags
 
     async def list_alarm_events(
-        self, state: str | None = None, limit: int = 100,
+        self,
+        state: str | None = None,
+        limit: int = 100,
     ) -> list[Any]:
         return []
 
@@ -209,7 +227,8 @@ class _RejectingMockDB:
         return list(self._charts)
 
     async def list_overview_chart_tags(
-        self, chart_key: str | None = None,
+        self,
+        chart_key: str | None = None,
     ) -> list[OverviewChartTag]:
         if not self._charts:
             return []
@@ -217,7 +236,8 @@ class _RejectingMockDB:
         return [OverviewChartTag(chart_key=ck, tag_id=self._tags[0].tag_id)]
 
     async def list_upcoming_maintenance_tasks(
-        self, within_hours: int = 48,
+        self,
+        within_hours: int = 48,
     ) -> list[Any]:
         return []
 
@@ -228,7 +248,8 @@ class _RejectingMockDB:
         return None
 
     async def get_overview_chart(
-        self, chart_key: str,
+        self,
+        chart_key: str,
     ) -> OverviewChart | None:
         for c in self._charts:
             if c.chart_key == chart_key:
@@ -236,8 +257,12 @@ class _RejectingMockDB:
         return None
 
     async def query_readings_auto(
-        self, tag_id: str, start: datetime, end: datetime,
-        target_points: int = 600, tag_count: int = 1,
+        self,
+        tag_id: str,
+        start: datetime,
+        end: datetime,
+        target_points: int = 600,
+        tag_count: int = 1,
     ) -> list[TagReading]:
         msg = "Çok uzun pencere (5475 gün > 3650 gün) — parçalı sorgu yapın."
         raise QueryGuardError(msg)

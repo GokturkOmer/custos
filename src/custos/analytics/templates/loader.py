@@ -30,20 +30,22 @@ from custos.shared.database import (
 # KPI formül AST doğrulamasında izin verilen node tipleri.
 # ``kpi_engine._ALLOWED_NODE_TYPES`` ile aynı kümede tutulur — kpi engine
 # runtime'da bu formülü değerlendirecektir, YAML yüklemesinde önden reddedilir.
-_ALLOWED_FORMULA_NODE_TYPES: frozenset[type] = frozenset({
-    ast.Expression,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Constant,
-    ast.Name,
-    ast.Load,
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.Div,
-    ast.USub,
-    ast.UAdd,
-})
+_ALLOWED_FORMULA_NODE_TYPES: frozenset[type] = frozenset(
+    {
+        ast.Expression,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Constant,
+        ast.Name,
+        ast.Load,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.USub,
+        ast.UAdd,
+    }
+)
 
 # Slug / role_key / KPI adı için kabul edilen tek biçim — snake_case küçük harf.
 _SLUG_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
@@ -232,13 +234,11 @@ def _validate_formula_ast(formula: str, allowed_variables: set[str]) -> None:
     for node in ast.walk(tree):
         if type(node) not in _ALLOWED_FORMULA_NODE_TYPES:
             raise ValueError(
-                f"KPI formülünde izinsiz AST node: {type(node).__name__} "
-                f"({formula!r})",
+                f"KPI formülünde izinsiz AST node: {type(node).__name__} ({formula!r})",
             )
         if isinstance(node, ast.Name) and node.id not in allowed_variables:
             raise ValueError(
-                f"KPI formülü tanımsız role_key referansı içeriyor: "
-                f"{node.id!r} ({formula!r})",
+                f"KPI formülü tanımsız role_key referansı içeriyor: {node.id!r} ({formula!r})",
             )
 
 

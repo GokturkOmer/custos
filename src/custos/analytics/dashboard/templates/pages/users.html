@@ -1,0 +1,176 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Kullanıcı Yönetimi — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">Kullanıcı Yönetimi</h1>
+    <a href="/dashboard/settings"
+       class="text-small text-text-secondary hover:text-text-primary transition-colors">
+      ← Settings
+    </a>
+  </div>
+
+  {# Bilgi/uyarı banner'ları #}
+  {% if error == 'invalid' %}
+  <div class="p-3 bg-status-crit/10 border border-status-crit rounded text-small text-status-crit">
+    Geçersiz form: kullanıcı adı boş olamaz, parola ≥ 8 karakter, rol operator|developer.
+  </div>
+  {% elif error == 'duplicate' %}
+  <div class="p-3 bg-status-crit/10 border border-status-crit rounded text-small text-status-crit">
+    Bu kullanıcı adı zaten mevcut.
+  </div>
+  {% elif error == 'self_disable' %}
+  <div class="p-3 bg-status-warn/10 border border-status-warn rounded text-small text-status-warn">
+    Kendi hesabınızı devre dışı bırakamazsınız.
+  </div>
+  {% endif %}
+
+  {% if success == 'created' %}
+  <div class="p-3 bg-status-ok/10 border border-status-ok rounded text-small text-status-ok">
+    Yeni kullanıcı oluşturuldu. Kullanıcı ilk girişte parolasını değiştirmek zorunda.
+  </div>
+  {% elif success == 'toggled' %}
+  <div class="p-3 bg-status-ok/10 border border-status-ok rounded text-small text-status-ok">
+    Kullanıcı durumu güncellendi.
+  </div>
+  {% endif %}
+
+  {# A) Mevcut kullanıcılar #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Mevcut Kullanıcılar</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-body">
+        <thead class="bg-bg-base text-small text-text-secondary">
+          <tr>
+            <th class="px-4 py-2 text-left">ID</th>
+            <th class="px-4 py-2 text-left">Kullanıcı Adı</th>
+            <th class="px-4 py-2 text-left">Rol</th>
+            <th class="px-4 py-2 text-left">Durum</th>
+            <th class="px-4 py-2 text-left">Parola</th>
+            <th class="px-4 py-2 text-right">İşlem</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% for u in users %}
+          <tr>
+            <td class="px-4 py-2 text-text-disabled">{{ u.id }}</td>
+            <td class="px-4 py-2 text-text-primary font-medium">{{ u.username }}</td>
+            <td class="px-4 py-2">
+              <span class="inline-block px-2 py-0.5 rounded text-small
+                           {{ 'bg-accent-primary/10 text-accent-primary' if u.role == 'developer' else 'bg-bg-base text-text-secondary' }}">
+                {{ 'Geliştirici' if u.role == 'developer' else 'Operatör' }}
+              </span>
+            </td>
+            <td class="px-4 py-2">
+              {% if u.enabled %}
+              <span class="text-status-ok">Aktif</span>
+              {% else %}
+              <span class="text-text-disabled">Pasif</span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-2 text-small text-text-secondary">
+              {% if u.must_change_password %}
+              <span class="text-status-warn">Değişim bekliyor</span>
+              {% else %}
+              <span class="text-text-disabled">—</span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-2 text-right">
+              <form method="POST"
+                    action="/dashboard/settings/users/{{ u.id }}/toggle"
+                    class="inline">
+                <button type="submit"
+                        class="text-small px-2 py-1 rounded border border-border-weak
+                               hover:bg-bg-base text-text-secondary hover:text-text-primary
+                               transition-colors">
+                  {{ 'Devre Dışı' if u.enabled else 'Etkinleştir' }}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="px-4 py-6 text-center text-text-disabled">
+              Henüz kullanıcı yok.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# B) Yeni kullanıcı ekle #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Yeni Kullanıcı Ekle</h2>
+    </div>
+    <form method="POST" action="/dashboard/settings/users/new" class="p-4 space-y-4">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <label for="username" class="block text-small text-text-secondary mb-1">
+            Kullanıcı Adı
+          </label>
+          <input
+            id="username"
+            name="username"
+            type="text"
+            required
+            pattern="[a-zA-Z0-9_-]+"
+            minlength="3"
+            class="w-full px-3 py-2 bg-bg-base border border-border-weak rounded
+                   focus:outline-none focus:border-accent-primary
+                   text-body text-text-primary"
+          >
+        </div>
+        <div>
+          <label for="initial_password" class="block text-small text-text-secondary mb-1">
+            Başlangıç Parolası (≥ 8 karakter)
+          </label>
+          <input
+            id="initial_password"
+            name="initial_password"
+            type="text"
+            required
+            minlength="8"
+            class="w-full px-3 py-2 bg-bg-base border border-border-weak rounded
+                   focus:outline-none focus:border-accent-primary
+                   text-body text-text-primary font-mono"
+          >
+        </div>
+        <div>
+          <label for="role" class="block text-small text-text-secondary mb-1">
+            Rol
+          </label>
+          <select
+            id="role"
+            name="role"
+            class="w-full px-3 py-2 bg-bg-base border border-border-weak rounded
+                   focus:outline-none focus:border-accent-primary
+                   text-body text-text-primary"
+          >
+            <option value="operator">Operatör</option>
+            <option value="developer">Geliştirici</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-small text-text-secondary">
+        Kullanıcı ilk girişte parolayı değiştirmek zorunda kalır
+        (<code>must_change_password = TRUE</code>).
+      </p>
+      <button
+        type="submit"
+        class="px-4 py-2 bg-accent-primary text-white font-medium rounded
+               hover:bg-accent-primary/90 transition-colors"
+      >
+        Kullanıcı Oluştur
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -128,7 +128,8 @@ class DiskMonitor:
                     )
                 except Exception:
                     await logger.aerror(
-                        "Disk monitor tick hatası", exc_info=True,
+                        "Disk monitor tick hatası",
+                        exc_info=True,
                     )
                 await asyncio.sleep(self._tick_seconds)
         except asyncio.CancelledError:
@@ -164,7 +165,10 @@ class DiskMonitor:
             f"süresini kısaltabilir veya eski ayları arşivleyebilirsiniz."
         )
         await send_push_notifications(
-            db=self._db, title=title, body=body, severity="warn",
+            db=self._db,
+            title=title,
+            body=body,
+            severity="warn",
         )
         self._last_alert_at = now
         await logger.ainfo(

@@ -143,9 +143,7 @@ class ModbusCollector:
     def _count_fast_tags(self, tags: list[TagRecord] | None = None) -> int:
         """Fast polling (polling_interval_ms <= eşik) tag sayısını döndürür."""
         source = tags if tags is not None else self._tags
-        return sum(
-            1 for t in source if t.polling_interval_ms <= _FAST_POLLING_THRESHOLD_MS
-        )
+        return sum(1 for t in source if t.polling_interval_ms <= _FAST_POLLING_THRESHOLD_MS)
 
     def _enforce_fast_polling_budget(self) -> None:
         """Init-time bütçe kontrolü — aşımda FastPollingBudgetError atar."""
@@ -292,17 +290,13 @@ class ModbusCollector:
             return await asyncio.gather(*[_one(t) for t in tags])
 
         # Batch path — gruplama aynı host'ta unit_id bazında da ayırır.
-        batches = group_tags_for_batch_read(
-            tags, gap_tolerance=self._batch_gap_tolerance
-        )
+        batches = group_tags_for_batch_read(tags, gap_tolerance=self._batch_gap_tolerance)
 
         async def _one_batch(batch: BatchGroup) -> list[TagReading]:
             async with sem:
                 return await self._read_batch(batch)
 
-        batch_results = await asyncio.gather(
-            *[_one_batch(b) for b in batches]
-        )
+        batch_results = await asyncio.gather(*[_one_batch(b) for b in batches])
         return [r for batch_readings in batch_results for r in batch_readings]
 
     async def _read_batch(self, batch: BatchGroup) -> list[TagReading]:
@@ -316,13 +310,9 @@ class ModbusCollector:
               başarılı.
         """
         now = datetime.now(UTC)
-        client = await self._get_or_create_client(
-            batch.modbus_host, batch.modbus_port
-        )
+        client = await self._get_or_create_client(batch.modbus_host, batch.modbus_port)
 
-        if not await self._ensure_connected(
-            client, batch.modbus_host, batch.modbus_port
-        ):
+        if not await self._ensure_connected(client, batch.modbus_host, batch.modbus_port):
             await logger.awarning(
                 "Batch okunamadı: bağlantı yok",
                 host=batch.modbus_host,
@@ -442,9 +432,7 @@ class ModbusCollector:
                 )
         return readings
 
-    async def _fallback_read_tags(
-        self, tags: list[TagRecord]
-    ) -> list[TagReading]:
+    async def _fallback_read_tags(self, tags: list[TagRecord]) -> list[TagReading]:
         """Batch başarısız olduğunda tag bazlı per-tag retry.
 
         Eski single-read path'i kullanır; tek bozuk tag tüm batch'i düşürmez.
@@ -463,10 +451,7 @@ class ModbusCollector:
         now = asyncio.get_event_loop().time()
 
         # Süresi gelen tag'leri bul
-        due_tags = [
-            t for t in self._tags
-            if self._next_due.get(t.tag_id, 0.0) <= now
-        ]
+        due_tags = [t for t in self._tags if self._next_due.get(t.tag_id, 0.0) <= now]
 
         if not due_tags:
             return

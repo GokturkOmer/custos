@@ -63,14 +63,27 @@ async def test_upsert_inserts_new_template(db: TimescaleDBDatabase) -> None:
         icon="activity",
     )
     tmpl.roles = [
-        TemplateRole(template_id=0, role_key="inlet", label="Giriş",
-                     unit_hint="°C", required=True, sort_order=1),
-        TemplateRole(template_id=0, role_key="outlet", label="Çıkış",
-                     unit_hint="°C", required=True, sort_order=2),
+        TemplateRole(
+            template_id=0,
+            role_key="inlet",
+            label="Giriş",
+            unit_hint="°C",
+            required=True,
+            sort_order=1,
+        ),
+        TemplateRole(
+            template_id=0,
+            role_key="outlet",
+            label="Çıkış",
+            unit_hint="°C",
+            required=True,
+            sort_order=2,
+        ),
     ]
     tmpl.kpi_definitions = [
-        KpiDefinition(template_id=0, name="delta", formula="outlet - inlet",
-                      unit="°C", description="Fark"),
+        KpiDefinition(
+            template_id=0, name="delta", formula="outlet - inlet", unit="°C", description="Fark"
+        ),
     ]
 
     try:
@@ -86,7 +99,8 @@ async def test_upsert_inserts_new_template(db: TimescaleDBDatabase) -> None:
         pool = db._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "DELETE FROM asset_templates WHERE slug = $1", slug,
+                "DELETE FROM asset_templates WHERE slug = $1",
+                slug,
             )
 
 
@@ -95,21 +109,45 @@ async def test_upsert_updates_existing_template(db: TimescaleDBDatabase) -> None
     """Aynı slug ikinci kez upsert edilince güncellenir (insert değil)."""
     slug = "_f9_test_update_asset"
     first = AssetTemplate(
-        slug=slug, name="İlk İsim", description="v1", icon="cpu",
+        slug=slug,
+        name="İlk İsim",
+        description="v1",
+        icon="cpu",
     )
     first.roles = [
-        TemplateRole(template_id=0, role_key="speed", label="Hız",
-                     unit_hint="rpm", required=True, sort_order=1),
+        TemplateRole(
+            template_id=0,
+            role_key="speed",
+            label="Hız",
+            unit_hint="rpm",
+            required=True,
+            sort_order=1,
+        ),
     ]
 
     second = AssetTemplate(
-        slug=slug, name="İkinci İsim", description="v2", icon="activity",
+        slug=slug,
+        name="İkinci İsim",
+        description="v2",
+        icon="activity",
     )
     second.roles = [
-        TemplateRole(template_id=0, role_key="speed", label="Hız (güncel)",
-                     unit_hint="rpm", required=True, sort_order=1),
-        TemplateRole(template_id=0, role_key="torque", label="Tork",
-                     unit_hint="Nm", required=False, sort_order=2),
+        TemplateRole(
+            template_id=0,
+            role_key="speed",
+            label="Hız (güncel)",
+            unit_hint="rpm",
+            required=True,
+            sort_order=1,
+        ),
+        TemplateRole(
+            template_id=0,
+            role_key="torque",
+            label="Tork",
+            unit_hint="Nm",
+            required=False,
+            sort_order=2,
+        ),
     ]
 
     try:
@@ -130,7 +168,8 @@ async def test_upsert_updates_existing_template(db: TimescaleDBDatabase) -> None
         pool = db._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "DELETE FROM asset_templates WHERE slug = $1", slug,
+                "DELETE FROM asset_templates WHERE slug = $1",
+                slug,
             )
 
 
@@ -173,6 +212,4 @@ async def test_seed_is_idempotent_on_repeat(db: TimescaleDBDatabase) -> None:
         await db.upsert_asset_template(entry.schema.to_asset_template())
     second_count = len(await db.list_asset_templates())
 
-    assert first_count == second_count, (
-        "Idempotent değil — seed template satır sayısını artırıyor"
-    )
+    assert first_count == second_count, "Idempotent değil — seed template satır sayısını artırıyor"

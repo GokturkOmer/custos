@@ -12,7 +12,9 @@ from datetime import datetime, timedelta
 
 
 def compute_next_due_at(
-    current: datetime, kind: str, value: int = 1,
+    current: datetime,
+    kind: str,
+    value: int = 1,
 ) -> datetime:
     """Bir schedule'ın sonraki vade tarihini hesaplar.
 

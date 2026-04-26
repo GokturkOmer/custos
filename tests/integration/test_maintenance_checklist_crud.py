@@ -76,7 +76,8 @@ async def test_update_checklist(db: TimescaleDBDatabase) -> None:
     assert created.id is not None
 
     updated = await db.update_maintenance_checklist(
-        created.id, {"title": "Yeni Başlık", "category": "periodic"},
+        created.id,
+        {"title": "Yeni Başlık", "category": "periodic"},
     )
     assert updated is not None
     assert updated.title == "Yeni Başlık"
@@ -137,20 +138,27 @@ async def test_replace_checklist_steps(db: TimescaleDBDatabase) -> None:
 
     new_steps = [
         MaintenanceChecklistStep(
-            checklist_id=created.id, sort_order=0,
-            text="Yeni A", estimated_minutes=3,
+            checklist_id=created.id,
+            sort_order=0,
+            text="Yeni A",
+            estimated_minutes=3,
         ),
         MaintenanceChecklistStep(
-            checklist_id=created.id, sort_order=1,
-            text="Yeni B", estimated_minutes=4,
+            checklist_id=created.id,
+            sort_order=1,
+            text="Yeni B",
+            estimated_minutes=4,
         ),
         MaintenanceChecklistStep(
-            checklist_id=created.id, sort_order=2,
-            text="Yeni C", estimated_minutes=5,
+            checklist_id=created.id,
+            sort_order=2,
+            text="Yeni C",
+            estimated_minutes=5,
         ),
     ]
     result = await db.replace_maintenance_checklist_steps(
-        created.id, new_steps,
+        created.id,
+        new_steps,
     )
     assert len(result) == 3
     assert result[0].text == "Yeni A"
