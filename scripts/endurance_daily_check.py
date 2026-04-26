@@ -8,8 +8,8 @@ Kırmızı bayrak kriterleri (prompt/kılavuz ile aynı):
     RSS memory     : 24 saatte >%5 artış → WARN, >%10 artış → CRIT
     DB connections : max kullanım > %90 pool → CRIT
     Tick miss      : 24 saat ortalaması > 0.01 AND slope > 0 → CRIT
-    Disk           : kullanım 24 saatte lineer büyüyor + avail düşüyor → WARN
-                     7 günden fazla retention'a rağmen büyüyor → CRIT
+    Disk           : %15 boş alan altında CRIT;
+                     kullanım artışı + boş alan azalma trendi varsa WARN
     tag_readings   : insert hızı ilk 12 saat - son 12 saat arası %10'dan
                      fazla düşmüş → WARN
 
@@ -49,7 +49,7 @@ _DB_POOL_CRIT_PCT = 90.0
 _TICK_MISS_WARN = 0.01
 _TICK_MISS_CRIT = 0.05
 _READINGS_RATE_DROP_WARN_PCT = 10.0
-_DISK_AVAIL_WARN_PCT = 15.0  # healthcheck ile aynı eşik
+_DISK_AVAIL_CRIT_PCT = 15.0  # healthcheck ile aynı eşik
 
 
 class Status(IntEnum):
@@ -322,7 +322,7 @@ def check_disk(rows: list[dict[str, str]]) -> Check:
     # Disk büyüyor + boş alan azalıyor → warn; eşik altı boş → crit
     growing = used_last > used_first
     tightening = avail_last < avail_first
-    if avail_pct < _DISK_AVAIL_WARN_PCT:
+    if avail_pct < _DISK_AVAIL_CRIT_PCT:
         status = Status.CRIT
     elif growing and tightening:
         status = Status.WARN
@@ -493,7 +493,8 @@ def format_markdown(report: DailyReport) -> str:
         "- RSS memory: WARN ≥ %5 artış, CRIT ≥ %10 artış\n"
         "- DB pool: WARN ≥ %80, CRIT ≥ %90 (max_connections=100)\n"
         "- Tick miss: WARN ≥ 0.01 + slope ≥ 0, CRIT ≥ 0.05 + slope > 0\n"
-        "- Disk avail: CRIT < %15 boş alan\n"
+        "- Disk avail: WARN = kullanım artıyor + boş alan azalıyor (trend); "
+        "CRIT < %15 boş alan\n"
         "- Okuma hızı: WARN ≥ %10 düşüş (ilk yarı vs ikinci yarı)\n",
     )
     return buf.getvalue()
