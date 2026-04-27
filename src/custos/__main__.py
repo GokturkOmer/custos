@@ -29,6 +29,7 @@ from custos.analytics.dashboard.auth_routes import auth_router
 from custos.analytics.disk_telemetry import DiskMonitor
 from custos.analytics.heartbeat import check_heartbeats, write_heartbeat
 from custos.analytics.kpi_engine import KpiEngine
+from custos.analytics.liveness_engine import LivenessEngine
 from custos.analytics.maintenance_mode import expire_check_loop as maintenance_expire_loop
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
 from custos.analytics.templates import (
@@ -143,6 +144,9 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     hb_check_task: asyncio.Task[None] | None = None
     # P-04: Bakım modu süre-doldu otomatik kapama loop'u
     maint_expire_task: asyncio.Task[None] | None = None
+    # P-05: Stuck-at + counter mode liveness engine
+    liveness: LivenessEngine | None = None
+    liveness_task: asyncio.Task[None] | None = None
     try:
         await db.connect()
         application.state.db = db
@@ -213,6 +217,12 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         # P-04 Bakım modu expire check loop — süresi dolan per-instance ve
         # global bakımları her 60 sn otomatik kapatır.
         maint_expire_task = asyncio.create_task(maintenance_expire_loop(db))
+
+        # P-05 Liveness engine — stuck-at + counter mode kural-bazlı
+        # sensör donma tespiti. 30 sn tick, bakım modu saygılı.
+        liveness = LivenessEngine(db=db)
+        liveness_task = asyncio.create_task(liveness.start())
+        application.state.liveness_engine = liveness
     except Exception:
         await logger.aerror("DB bağlantısı kurulamadı", exc_info=True)
         application.state.db = None
@@ -231,6 +241,15 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         maint_expire_task.cancel()
         try:
             await maint_expire_task
+        except asyncio.CancelledError:
+            pass
+    # P-05 Liveness engine'i durdur
+    if liveness is not None:
+        await liveness.stop()
+    if liveness_task is not None and not liveness_task.done():
+        liveness_task.cancel()
+        try:
+            await liveness_task
         except asyncio.CancelledError:
             pass
     # Disk monitor'ı durdur

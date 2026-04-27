@@ -211,6 +211,44 @@
       {% endif %}
     </fieldset>
 
+    {# Sensör Sağlık (Stuck-at) — V11-108 / P-05 #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3"
+              x-data="{ preset: '{{ tag.stuck_at_preset if tag else 'auto' }}' }">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Sensör Sağlık (Stuck-at)</legend>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label for="stuck_at_preset" class="block text-small font-medium text-text-secondary mb-1">Preset</label>
+          <select id="stuck_at_preset" name="stuck_at_preset"
+                  x-model="preset"
+                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                         text-text-primary
+                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+            <option value="auto">Otomatik (birime göre)</option>
+            <option value="none">Kapalı</option>
+            <option value="fast">Hızlı (5 dk) — basınç, akış</option>
+            <option value="slow">Yavaş (30 dk) — sıcaklık</option>
+            <option value="very_slow">Çok yavaş (1 saat)</option>
+            <option value="counter">Counter (sayaç) — kWh, m³</option>
+          </select>
+        </div>
+        <div x-show="preset !== 'none'" x-transition>
+          <label for="stuck_at_seconds" class="block text-small font-medium text-text-secondary mb-1">
+            Override (saniye, boş = preset)
+          </label>
+          <input type="number" id="stuck_at_seconds" name="stuck_at_seconds"
+                 value="{{ tag.stuck_at_seconds if tag and tag.stuck_at_seconds is not none else '' }}"
+                 min="1" placeholder="ör. 600"
+                 class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                        text-text-primary placeholder-text-disabled
+                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+        </div>
+      </div>
+      <p class="text-small text-text-tertiary">
+        Sensör değeri eşik kadar süre değişmezse "donuk" alarmı tetiklenir. Counter modunda
+        ek olarak değer azalırsa veya eşik kadar süre artmazsa alarm yazılır.
+      </p>
+    </fieldset>
+
     {# Status (sadece edit modunda) #}
     {% if edit_mode %}
     <div>

@@ -183,7 +183,9 @@ class ThresholdEngine:
                     self._db, instance_id, now,
                 )
 
-        # Debounce süresi doldu → alarm tetikle
+        # Debounce süresi doldu → alarm tetikle. P-05: source='threshold'
+        # default ama severity threshold'dan denormalize ediliyor — threshold
+        # silinse bile alarm geçmişi severity'yi taşır.
         event = AlarmEvent(
             threshold_id=tid,
             tag_id=threshold.tag_id,
@@ -191,6 +193,8 @@ class ThresholdEngine:
             triggered_at=now,
             trigger_value=value,
             is_test=is_test,
+            source="threshold",
+            severity=threshold.severity,
         )
         created = await self._db.insert_alarm_event(event)
 

@@ -58,6 +58,7 @@ from custos.analytics.templates import (
 from custos.shared.auth import hash_password
 from custos.shared.config import settings
 from custos.shared.database import (
+    AlarmEvent,
     AssetInstance,
     AuditLogEntry,
     ConnectionProfile,
@@ -139,6 +140,47 @@ def _budget_error_detail(current: int, budget: int) -> str:
         f"Fast polling bütçesi dolu ({current}/{budget}). "
         f"Mevcut bir fast tag'i Slow'a çekin veya bütçeyi artırın."
     )
+
+
+# Stuck-at preset (P-05) — geçerli değerler. Migration 032 CHECK constraint
+# ile aynı liste; form input'un sıçrama yapması durumunda 400 döneriz.
+_VALID_STUCK_AT_PRESETS: frozenset[str] = frozenset(
+    {"auto", "none", "fast", "slow", "very_slow", "counter"}
+)
+
+
+def _validate_stuck_at_preset(preset: str) -> str:
+    """Form'dan gelen stuck_at_preset değerini doğrular."""
+    if preset not in _VALID_STUCK_AT_PRESETS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz stuck_at_preset: {preset}",
+        )
+    return preset
+
+
+def _parse_stuck_at_seconds(raw: str) -> int | None:
+    """Form'daki saniye override'ını parse eder.
+
+    Boş string veya whitespace → ``None`` (preset kullanılır). 0 ve
+    negatif değerler kabul edilmez (CHECK constraint yok ama mantıksız).
+    """
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    try:
+        value = int(cleaned)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="stuck_at_seconds tam sayı olmalı",
+        ) from exc
+    if value <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="stuck_at_seconds 0'dan büyük olmalı",
+        )
+    return value
 
 
 # Overview sayfası için sabit timedelta'lar (her çağrıda nesne oluşturmamak için)
@@ -375,8 +417,13 @@ async def overview(request: Request) -> HTMLResponse:
                 "long_window_hint": long_window,
             }
 
-        # Threshold adlarini cek
-        thr_ids = {e.threshold_id for e in recent_events}
+        # Threshold adlarini cek (P-05: liveness/watchdog kaynaklı alarm'larda
+        # threshold_id None — listeden çıkarıyoruz).
+        thr_ids = {
+            e.threshold_id
+            for e in recent_events
+            if e.threshold_id is not None
+        }
         thr_map: dict[int, Threshold] = {}
         for thr_id in thr_ids:
             t = await db_instance.get_threshold(thr_id)
@@ -395,7 +442,11 @@ async def overview(request: Request) -> HTMLResponse:
                     maint_asset_names[inst.id] = inst.name
 
         for event in recent_events:
-            t = thr_map.get(event.threshold_id)
+            t = (
+                thr_map.get(event.threshold_id)
+                if event.threshold_id is not None
+                else None
+            )
             state_label = {
                 "triggered": "Critical",
                 "acknowledged": "Warning",
@@ -406,13 +457,21 @@ async def overview(request: Request) -> HTMLResponse:
                 "acknowledged": "warn",
                 "cleared": "ok",
             }.get(event.state, "neutral")
+            # P-05: liveness/watchdog kaynaklı alarmlarda threshold yok;
+            # source label'a düşeriz.
+            if t is not None:
+                type_label: str = t.name
+            elif event.threshold_id is not None:
+                type_label = f"Threshold #{event.threshold_id}"
+            else:
+                type_label = event.source.capitalize()
             alarms.append(
                 {
                     "time": (
                         event.triggered_at.strftime("%H:%M:%S") if event.triggered_at else "-"
                     ),
                     "sensor": event.tag_id,
-                    "type": t.name if t else f"Threshold #{event.threshold_id}",
+                    "type": type_label,
                     "status": state_status,
                     "status_label": state_label,
                 }
@@ -1112,6 +1171,8 @@ async def sensor_create(
     unit: str = Form(""),
     polling_preset: str = Form("slow"),
     polling_interval_ms: int = Form(10000),
+    stuck_at_preset: str = Form("auto"),
+    stuck_at_seconds: str = Form(""),
 ) -> RedirectResponse:
     """Yeni tag kaydı oluşturur."""
     db = _get_db(request)
@@ -1136,6 +1197,10 @@ async def sensor_create(
                 detail=_budget_error_detail(current_fast, budget),
             )
 
+    # P-05: stuck_at preset doğrulaması + boş string → None saniye override
+    stuck_at_preset = _validate_stuck_at_preset(stuck_at_preset)
+    stuck_at_seconds_value = _parse_stuck_at_seconds(stuck_at_seconds)
+
     tag = TagRecord(
         tag_id=tag_id,
         name=name,
@@ -1150,6 +1215,8 @@ async def sensor_create(
         unit=unit,
         polling_interval_ms=polling_interval_ms,
         polling_preset=polling_preset,
+        stuck_at_preset=stuck_at_preset,
+        stuck_at_seconds=stuck_at_seconds_value,
     )
 
     try:
@@ -1199,6 +1266,8 @@ async def sensor_update(
     polling_preset: str = Form("slow"),
     polling_interval_ms: int = Form(10000),
     status: str = Form("active"),
+    stuck_at_preset: str = Form("auto"),
+    stuck_at_seconds: str = Form(""),
 ) -> RedirectResponse:
     """Tag kaydını günceller."""
     db = _get_db(request)
@@ -1224,6 +1293,10 @@ async def sensor_update(
                 detail=_budget_error_detail(current_fast, budget),
             )
 
+    # P-05: stuck_at preset doğrulaması + boş string → None saniye override
+    stuck_at_preset = _validate_stuck_at_preset(stuck_at_preset)
+    stuck_at_seconds_value = _parse_stuck_at_seconds(stuck_at_seconds)
+
     updates: dict[str, object] = {
         "name": name,
         "modbus_host": modbus_host,
@@ -1238,6 +1311,8 @@ async def sensor_update(
         "polling_interval_ms": polling_interval_ms,
         "polling_preset": polling_preset,
         "status": status,
+        "stuck_at_preset": stuck_at_preset,
+        "stuck_at_seconds": stuck_at_seconds_value,
     }
 
     result = await db.update_tag(tag_id, updates)
@@ -2415,8 +2490,8 @@ async def alarms_page(request: Request) -> HTMLResponse:
     """Alarm sayfası — aktif alarmlar ve geçmiş.
 
     ``severity`` query param: info / warn / crit / emergency (V11-107).
-    Filtre uygulanır threshold_id → severity map'i üzerinden; aktif ve
-    geçmiş listeleri de aynı filtreye tabi.
+    ``source`` query param: threshold / anomaly / liveness / watchdog (P-05).
+    İki filtre AND ile uygulanır.
     """
     db = _get_db(request)
 
@@ -2428,9 +2503,22 @@ async def alarms_page(request: Request) -> HTMLResponse:
         else ""
     )
 
-    # Aktif alarmlar (triggered + acknowledged)
-    triggered = await db.list_alarm_events(state="triggered", limit=100)
-    acknowledged = await db.list_alarm_events(state="acknowledged", limit=100)
+    # P-05: Tip (source) filtresi. Bilinmeyen değer → filtre yok.
+    source_filter_raw = request.query_params.get("source") or ""
+    source_filter = (
+        source_filter_raw
+        if source_filter_raw in ("threshold", "anomaly", "liveness", "watchdog")
+        else ""
+    )
+    source_arg: str | None = source_filter or None
+
+    # Aktif alarmlar (triggered + acknowledged) — source filtresi DB'de uygulanır
+    triggered = await db.list_alarm_events(
+        state="triggered", limit=100, source=source_arg,
+    )
+    acknowledged = await db.list_alarm_events(
+        state="acknowledged", limit=100, source=source_arg,
+    )
     active_alarms = triggered + acknowledged
     # Tetiklenme zamanına göre sırala (en yeni üstte)
     active_alarms.sort(
@@ -2439,10 +2527,17 @@ async def alarms_page(request: Request) -> HTMLResponse:
     )
 
     # Geçmiş (cleared)
-    cleared_alarms = await db.list_alarm_events(state="cleared", limit=50)
+    cleared_alarms = await db.list_alarm_events(
+        state="cleared", limit=50, source=source_arg,
+    )
 
-    # Threshold adları ve severity'leri çek (denormalize bilgi için)
-    threshold_ids = {a.threshold_id for a in active_alarms + cleared_alarms}
+    # Threshold adları ve severity'leri çek (denormalize bilgi için).
+    # P-05: liveness/watchdog kaynaklı alarm'ların threshold_id'si None.
+    threshold_ids: set[int] = {
+        a.threshold_id
+        for a in active_alarms + cleared_alarms
+        if a.threshold_id is not None
+    }
     threshold_names: dict[int, str] = {}
     threshold_severities: dict[int, str] = {}
     checklist_by_threshold: dict[int, int] = {}  # threshold_id → checklist_id
@@ -2455,23 +2550,25 @@ async def alarms_page(request: Request) -> HTMLResponse:
         if mapping is not None:
             checklist_by_threshold[tid] = mapping.checklist_id
 
-    # Severity filtresi uygula (threshold_id eşlemesi üzerinden)
+    # Severity filtresi — alarm.severity (denormalize) öncelikli, eski
+    # satırlarda boş veya 'warn' default ise threshold lookup'a düş.
     if severity_filter:
-        active_alarms = [
-            a
-            for a in active_alarms
-            if threshold_severities.get(a.threshold_id) == severity_filter
-        ]
-        cleared_alarms = [
-            a
-            for a in cleared_alarms
-            if threshold_severities.get(a.threshold_id) == severity_filter
-        ]
+        def _matches_severity(a: AlarmEvent) -> bool:
+            sev = a.severity or threshold_severities.get(
+                a.threshold_id or -1, "warn",
+            )
+            return sev == severity_filter
 
-    # "Son 7 günde N kez" rozeti için aktif alarm'ların threshold'larının sayısı
+        active_alarms = [a for a in active_alarms if _matches_severity(a)]
+        cleared_alarms = [a for a in cleared_alarms if _matches_severity(a)]
+
+    # "Son 7 günde N kez" rozeti — yalnızca threshold kaynaklı alarm'lar
+    # için anlamlı (threshold_id None'ları atla).
     seven_days_ago = datetime.now(UTC) - timedelta(days=7)
     recent_alarm_count: dict[int, int] = {}
-    for tid in {a.threshold_id for a in active_alarms}:
+    for tid in {
+        a.threshold_id for a in active_alarms if a.threshold_id is not None
+    }:
         recent_alarm_count[tid] = await db.count_alarm_events_for_threshold(
             tid,
             seven_days_ago,
@@ -2487,6 +2584,7 @@ async def alarms_page(request: Request) -> HTMLResponse:
         checklist_by_threshold=checklist_by_threshold,
         recent_alarm_count=recent_alarm_count,
         severity_filter=severity_filter,
+        source_filter=source_filter,
     )
     return templates.TemplateResponse(request, "pages/alarms.html", ctx)
 
@@ -2504,7 +2602,9 @@ async def alarms_active_partial(request: Request) -> HTMLResponse:
         reverse=True,
     )
 
-    threshold_ids = {a.threshold_id for a in active_alarms}
+    threshold_ids: set[int] = {
+        a.threshold_id for a in active_alarms if a.threshold_id is not None
+    }
     threshold_names: dict[int, str] = {}
     threshold_severities: dict[int, str] = {}
     for tid in threshold_ids:
@@ -4087,6 +4187,13 @@ async def alarm_start_checklist(
     alarm = await db.get_alarm_event(alarm_event_id)
     if alarm is None:
         raise HTTPException(status_code=404, detail="Alarm bulunamadı")
+    # P-05: liveness/watchdog kaynaklı alarmların threshold'u yok →
+    # checklist eşlemesi de yapılmaz (UI buton zaten gizli ama defansif).
+    if alarm.threshold_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Bu alarm tipi için checklist desteklenmiyor",
+        )
     mapping = await db.get_alarm_checklist_mapping(alarm.threshold_id)
     if mapping is None:
         raise HTTPException(

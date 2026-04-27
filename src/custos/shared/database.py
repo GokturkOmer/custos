@@ -65,7 +65,16 @@ class ConnectionProfile:
 
 @dataclass
 class TagRecord:
-    """Tag tanım kaydı — tags tablosunun Python temsili."""
+    """Tag tanım kaydı — tags tablosunun Python temsili.
+
+    P-05 (V11-108) ile stuck-at preset alanları:
+
+    - ``stuck_at_preset``: 'auto' (default — birime göre çözülür),
+      'none' (kontrol kapalı), 'fast'/'slow'/'very_slow' (hardcoded
+      saniye eşikleri), 'counter' (azalma + durağanlık mantığı).
+    - ``stuck_at_seconds``: Manuel saniye override; doluysa preset'in
+      saniyesinin yerine geçer (preset='counter' ise mantığı korur).
+    """
 
     tag_id: str
     name: str
@@ -81,6 +90,8 @@ class TagRecord:
     polling_interval_ms: int = 10000
     polling_preset: str = "slow"
     status: str = "active"
+    stuck_at_preset: str = "auto"
+    stuck_at_seconds: int | None = None
     id: int | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -194,10 +205,24 @@ class AlarmEvent:
     sayfasında görsel olarak ayrılır ve P-12'de anomaly detector eğitim
     setinden filtrelenir. ``threshold_engine`` bakım kontrolünden sonra
     flag'i set eder.
+
+    P-05 (V11-108) ile alarm kaynaklarını çoğullaştırdık:
+
+    - ``threshold_id`` artık nullable — liveness ve watchdog kaynaklı
+      alarmların threshold'u yoktur.
+    - ``source``: 'threshold' (default, geri uyumlu) / 'anomaly' /
+      'liveness' / 'watchdog'. Alarm sayfası "Tip" filtresi bu alanı
+      kullanır.
+    - ``severity``: Threshold'sız alarmlarda denormalize tutulur.
+      Threshold kaynaklı alarmlarda ``threshold_engine`` insert
+      sırasında threshold.severity'yi explicit set eder (filtreyi
+      hızlandırır, threshold silinse bile alarmın severity'si kalır).
+    - ``message``: Kullanıcıya gösterilecek açıklama (ör. liveness için
+      "Sensör donuk: 1820s'dir değer değişmedi").
     """
 
-    threshold_id: int
     tag_id: str
+    threshold_id: int | None = None
     state: str = "triggered"  # 'triggered' / 'acknowledged' / 'cleared'
     triggered_at: datetime | None = None
     acknowledged_at: datetime | None = None
@@ -206,6 +231,9 @@ class AlarmEvent:
     clear_value: float | None = None
     notes: str = ""
     is_test: bool = False
+    source: str = "threshold"
+    severity: str = "warn"
+    message: str = ""
     id: int | None = None
     created_at: datetime | None = None
 
@@ -856,12 +884,16 @@ class DatabaseInterface(abc.ABC):
         tag_id: str | None = None,
         limit: int = 100,
         is_test: bool | None = None,
+        source: str | None = None,
     ) -> list[AlarmEvent]:
         """Alarm event listesini döndürür. Opsiyonel filtreler.
 
         ``is_test=False`` (P-04) bakım modunda üretilen alarm'ları gizler —
         alarms sayfası varsayılanı. ``is_test=True`` sadece bakım test
         alarm'larını gösterir; ``None`` (varsayılan) ikisini de döner.
+
+        ``source`` (P-05): 'threshold' / 'anomaly' / 'liveness' / 'watchdog'
+        filtresi. Alarm sayfası "Tip" dropdown'ı bu parametreyi geçer.
         """
 
     @abc.abstractmethod
@@ -1403,6 +1435,8 @@ _ALLOWED_TAG_UPDATE_FIELDS: frozenset[str] = frozenset(
         "polling_interval_ms",
         "polling_preset",
         "status",
+        "stuck_at_preset",
+        "stuck_at_seconds",
     }
 )
 
@@ -1425,6 +1459,8 @@ def _row_to_tag_record(row: asyncpg.Record) -> TagRecord:
         polling_interval_ms=row["polling_interval_ms"],
         polling_preset=row["polling_preset"],
         status=row["status"],
+        stuck_at_preset=row["stuck_at_preset"],
+        stuck_at_seconds=row["stuck_at_seconds"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -1569,6 +1605,9 @@ def _row_to_alarm_event(row: asyncpg.Record) -> AlarmEvent:
         clear_value=float(row["clear_value"]) if row["clear_value"] is not None else None,
         notes=row["notes"],
         is_test=bool(row["is_test"]),
+        source=row["source"],
+        severity=row["severity"],
+        message=row["message"],
         created_at=row["created_at"],
     )
 
@@ -2068,8 +2107,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "INSERT INTO tags "
                 "(tag_id, name, modbus_host, modbus_port, unit_id, "
                 "register_address, register_type, byte_order, "
-                'gain, "offset", unit, polling_interval_ms, polling_preset, status) '
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) "
+                'gain, "offset", unit, polling_interval_ms, polling_preset, '
+                "status, stuck_at_preset, stuck_at_seconds) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, "
+                "$12, $13, $14, $15, $16) "
                 "RETURNING *",
                 tag.tag_id,
                 tag.name,
@@ -2085,6 +2126,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 tag.polling_interval_ms,
                 tag.polling_preset,
                 tag.status,
+                tag.stuck_at_preset,
+                tag.stuck_at_seconds,
             )
         assert row is not None  # INSERT RETURNING her zaman satır döndürür
         return _row_to_tag_record(row)
@@ -2796,8 +2839,9 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "INSERT INTO alarm_events "
                 "(threshold_id, tag_id, state, triggered_at, "
                 "acknowledged_at, cleared_at, trigger_value, clear_value, "
-                "notes, is_test) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
+                "notes, is_test, source, severity, message) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, "
+                "$11, $12, $13) "
                 "RETURNING *",
                 event.threshold_id,
                 event.tag_id,
@@ -2809,6 +2853,9 @@ class TimescaleDBDatabase(DatabaseInterface):
                 event.clear_value,
                 event.notes,
                 event.is_test,
+                event.source,
+                event.severity,
+                event.message,
             )
         assert row is not None
         return _row_to_alarm_event(row)
@@ -2864,6 +2911,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         tag_id: str | None = None,
         limit: int = 100,
         is_test: bool | None = None,
+        source: str | None = None,
     ) -> list[AlarmEvent]:
         """Alarm event listesini döndürür."""
         pool = self._get_pool()
@@ -2884,6 +2932,11 @@ class TimescaleDBDatabase(DatabaseInterface):
         if is_test is not None:
             conditions.append(f"is_test = ${idx}")
             params.append(is_test)
+            idx += 1
+
+        if source is not None:
+            conditions.append(f"source = ${idx}")
+            params.append(source)
             idx += 1
 
         where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""

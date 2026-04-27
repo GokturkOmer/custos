@@ -10,7 +10,7 @@
   <div class="flex items-center justify-between">
     <h1 class="text-heading text-text-primary font-semibold">Alarms</h1>
     <div class="flex items-center gap-2">
-      {# 4-tier severity filtresi (V11-107). Sayfa GET param ile filtrelenir. #}
+      {# Severity + Tip filtreleri (V11-107 / V11-108). GET param'lar birlikte uygulanır. #}
       <form method="get" action="/dashboard/alarms" class="inline-flex items-center gap-2">
         <label for="severity-filter" class="text-small text-text-secondary">Severity:</label>
         <select id="severity-filter" name="severity" onchange="this.form.submit()"
@@ -22,6 +22,17 @@
           <option value="warn" {{ 'selected' if severity_filter == 'warn' }}>Warning</option>
           <option value="crit" {{ 'selected' if severity_filter == 'crit' }}>Critical</option>
           <option value="emergency" {{ 'selected' if severity_filter == 'emergency' }}>Emergency</option>
+        </select>
+        <label for="source-filter" class="text-small text-text-secondary ml-2">Tip:</label>
+        <select id="source-filter" name="source" onchange="this.form.submit()"
+                class="px-2 py-1 text-small bg-bg-base border border-border-weak rounded-md
+                       text-text-primary
+                       focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+          <option value="" {{ 'selected' if not source_filter }}>Hepsi</option>
+          <option value="threshold" {{ 'selected' if source_filter == 'threshold' }}>Threshold</option>
+          <option value="anomaly" {{ 'selected' if source_filter == 'anomaly' }}>Anomaly</option>
+          <option value="liveness" {{ 'selected' if source_filter == 'liveness' }}>Liveness</option>
+          <option value="watchdog" {{ 'selected' if source_filter == 'watchdog' }}>Watchdog</option>
         </select>
       </form>
       <a href="/dashboard/thresholds"
@@ -44,8 +55,9 @@
         <thead>
           <tr class="bg-bg-elevated">
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Zaman</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tip</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tag</th>
-            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Threshold</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Detay</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tetik Değer</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Severity</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
@@ -73,10 +85,11 @@
         <thead>
           <tr class="bg-bg-elevated">
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tetiklenme</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tip</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Onay</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Temizlenme</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tag</th>
-            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Threshold</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Detay</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tetik Değer</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Temiz Değer</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Severity</th>
@@ -87,14 +100,29 @@
             {% for a in cleared_alarms %}
             <tr class="hover:bg-bg-elevated transition-colors">
               <td class="px-3 py-2 text-cell text-text-primary">{{ a.triggered_at.strftime('%d/%m %H:%M:%S') if a.triggered_at else '-' }}</td>
+              <td class="px-3 py-2 text-cell">
+                {% set src_label = {
+                  'threshold': 'Threshold',
+                  'anomaly': 'Anomaly',
+                  'liveness': 'Liveness',
+                  'watchdog': 'Watchdog'
+                }.get(a.source, a.source) %}
+                <span class="px-2 py-0.5 rounded text-small bg-bg-elevated text-text-secondary border border-border-weak">{{ src_label }}</span>
+              </td>
               <td class="px-3 py-2 text-cell text-text-primary">{{ a.acknowledged_at.strftime('%d/%m %H:%M:%S') if a.acknowledged_at else '-' }}</td>
               <td class="px-3 py-2 text-cell text-text-primary">{{ a.cleared_at.strftime('%d/%m %H:%M:%S') if a.cleared_at else '-' }}</td>
               <td class="px-3 py-2 text-cell text-text-primary">{{ a.tag_id }}</td>
-              <td class="px-3 py-2 text-cell text-text-primary">{{ threshold_names.get(a.threshold_id, '-') }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary">
+                {% if a.threshold_id is not none %}
+                  {{ threshold_names.get(a.threshold_id, '-') }}
+                {% else %}
+                  {{ a.message or '-' }}
+                {% endif %}
+              </td>
               <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(a.trigger_value) }}</td>
               <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(a.clear_value) if a.clear_value is not none else '-' }}</td>
               <td class="px-3 py-2 text-cell">
-                {% set sev = threshold_severities.get(a.threshold_id, 'warn') %}
+                {% set sev = a.severity or threshold_severities.get(a.threshold_id, 'warn') %}
                 {% set sev_label = {
                   'info': 'Info',
                   'warn': 'Warning',
@@ -107,7 +135,7 @@
             {% endfor %}
           {% else %}
             <tr>
-              <td colspan="8" class="px-3 py-8 text-center text-text-disabled text-body">
+              <td colspan="9" class="px-3 py-8 text-center text-text-disabled text-body">
                 Alarm geçmişi boş.
               </td>
             </tr>
