@@ -33,8 +33,37 @@
   <p class="text-body text-text-secondary">{{ instance.description }}</p>
   {% endif %}
 
+  {# P-04: Bakım modu durumu — aktifse sarı bilgilendirme paneli #}
+  {% if maintenance_state and maintenance_state.active %}
+  <div class="bg-status-warn/10 border border-status-warn/40 rounded-md p-3
+              flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-2 text-body text-status-warn">
+      <span>🔧</span>
+      <span class="font-semibold">Bu asset bakım modunda</span>
+      {% if maintenance_state.until %}
+        <span class="text-small">— bitiş: {{ maintenance_state.until.strftime('%d/%m %H:%M') }}</span>
+      {% else %}
+        <span class="text-small">— manuel kapatmaya kadar</span>
+      {% endif %}
+      {% if maintenance_state.reason %}
+        <span class="text-small text-text-secondary">· {{ maintenance_state.reason }}</span>
+      {% endif %}
+    </div>
+    <form method="post"
+          action="/dashboard/processes/{{ instance.id }}/maintenance/stop"
+          class="inline">
+      <button type="submit"
+              class="px-3 py-1 text-small font-medium text-status-warn
+                     border border-status-warn/40 rounded-md
+                     hover:bg-status-warn/20 transition-colors">
+        Bakım modunu kapat
+      </button>
+    </form>
+  </div>
+  {% endif %}
+
   {# Aksiyon butonları #}
-  <div class="flex items-center gap-2">
+  <div class="flex flex-wrap items-center gap-2">
     <a href="/dashboard/processes/{{ instance.id }}/edit"
        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
               text-text-secondary bg-bg-elevated border border-border-weak rounded-md
@@ -42,6 +71,51 @@
       {{ icon_inline('edit', class='w-4 h-4') }}
       Düzenle
     </a>
+
+    {# P-04: Bakım moduna al — aktif değilse açılır panel #}
+    {% if not (maintenance_state and maintenance_state.active) %}
+    <details class="relative">
+      <summary class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                      text-status-warn bg-status-warn/10 border border-status-warn/30
+                      rounded-md hover:bg-status-warn/20 transition-colors cursor-pointer
+                      list-none">
+        {{ icon_inline('tool', class='w-4 h-4') }}
+        Bakım moduna al
+      </summary>
+      <form method="post"
+            action="/dashboard/processes/{{ instance.id }}/maintenance/start"
+            class="absolute z-10 mt-1 left-0 w-72 p-3 bg-bg-surface
+                   border border-border-weak rounded-md shadow-lg space-y-2">
+        <label class="block text-small text-text-secondary">
+          Süre
+          <select name="duration"
+                  class="mt-1 block w-full bg-bg-elevated border border-border-weak
+                         rounded px-2 py-1 text-small text-text-primary">
+            <option value="1h">1 saat</option>
+            <option value="4h">4 saat</option>
+            <option value="12h">12 saat</option>
+            <option value="24h" selected>24 saat (varsayılan)</option>
+            <option value="3d">3 gün</option>
+            <option value="manual">Manuel kapatmaya kadar</option>
+          </select>
+        </label>
+        <label class="block text-small text-text-secondary">
+          Sebep (zorunlu)
+          <textarea name="reason" required minlength="3" rows="2"
+                    placeholder="örn. Filtre değişimi"
+                    class="mt-1 block w-full bg-bg-elevated border border-border-weak
+                           rounded px-2 py-1 text-small text-text-primary"></textarea>
+        </label>
+        <button type="submit"
+                class="w-full px-3 py-1.5 text-small font-medium text-white
+                       bg-status-warn rounded-md hover:bg-status-warn/90
+                       transition-colors">
+          Bakıma al
+        </button>
+      </form>
+    </details>
+    {% endif %}
+
     <form method="post" action="/dashboard/processes/{{ instance.id }}/delete"
           onsubmit="return confirm('Bu asset silinecek. Emin misiniz?');"
           class="inline">

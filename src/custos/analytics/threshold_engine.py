@@ -6,6 +6,10 @@ alarm event'leri oluşturur/günceller.
 
 Debounce: Eşik aşımının belirli süre devam etmesi gerekir.
 Hysteresis: Alarm temizleme için ölü bant (set_point ± hysteresis).
+
+P-04 (V11-104): Bakım modu entegrasyonu — alarm yazmadan önce per-instance
+ve global bakım kontrol edilir; aktifse ``is_test=true`` flag'i ile yazılır
+ve push gönderilmez.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from datetime import UTC, datetime
 
 import structlog
 
+from custos.analytics import maintenance_mode
 from custos.analytics.push_sender import send_push_notifications
 from custos.shared.database import (
     AlarmEvent,
@@ -44,6 +49,10 @@ class ThresholdEngine:
         self._running = False
         # Debounce izleyici: threshold_id → ilk eşik aşım zamanı
         self._debounce_tracker: dict[int, datetime] = {}
+        # P-04: tag_id → instance_id cache, her cycle başında doldurulur.
+        # Threshold'un tag'i bir instance'a binding'li ise per-instance bakım
+        # kontrolü yapılabilir; binding yoksa ``None``.
+        self._tag_instance_map: dict[str, int | None] = {}
 
     async def start(self) -> None:
         """Engine'i başlatır — arka plan task olarak çalışır."""
@@ -87,6 +96,12 @@ class ThresholdEngine:
         # 2. İlgili tag'lerin son değerlerini çek
         tag_ids = list({t.tag_id for t in thresholds})
         readings = await self._db.get_latest_tag_readings(tag_ids)
+
+        # P-04: Bakım modu kontrolü için tag→instance haritası. Binding'ler
+        # nadir değişir ama threshold yönetimi sırasında değişebilir, her
+        # cycle baştan kuruyoruz (bu cycle'da tek query).
+        bindings = await self._db.list_tag_bindings_all()
+        self._tag_instance_map = {b.tag_id: b.instance_id for b in bindings}
 
         now = datetime.now(UTC)
 
@@ -158,6 +173,16 @@ class ThresholdEngine:
             # Debounce süresi dolmamış
             return
 
+        # P-04: Bakım modu kontrolü. Önce ucuz olan global'i sor, ardından
+        # threshold'un instance'ını bul (binding cache) ve per-instance kontrol.
+        is_test = await maintenance_mode.is_global_maintenance(self._db, now)
+        if not is_test:
+            instance_id = self._tag_instance_map.get(threshold.tag_id)
+            if instance_id is not None:
+                is_test = await maintenance_mode.is_instance_in_maintenance(
+                    self._db, instance_id, now,
+                )
+
         # Debounce süresi doldu → alarm tetikle
         event = AlarmEvent(
             threshold_id=tid,
@@ -165,27 +190,36 @@ class ThresholdEngine:
             state="triggered",
             triggered_at=now,
             trigger_value=value,
+            is_test=is_test,
         )
         created = await self._db.insert_alarm_event(event)
 
-        # Audit log — emergency severity'de "emergency_alarm_triggered"
-        # kategorisinde ayrılır (filtrelemede ayrı kanal).
-        audit_category = (
-            "alarm_emergency" if threshold.severity == "emergency" else "alarm"
-        )
+        # Audit log kategorisi:
+        #   - is_test=True   → "maintenance_test_alarm" (operasyonel alarm
+        #     kanalından ayrı; raporlamada filtrelenebilir)
+        #   - emergency      → "alarm_emergency"
+        #   - aksi           → "alarm"
+        if is_test:
+            audit_category = "maintenance_test_alarm"
+            audit_action = "test_triggered"
+        elif threshold.severity == "emergency":
+            audit_category = "alarm_emergency"
+            audit_action = "emergency_alarm_triggered"
+        else:
+            audit_category = "alarm"
+            audit_action = "triggered"
+
         await self._db.insert_audit_log(
             AuditLogEntry(
                 category=audit_category,
-                action="emergency_alarm_triggered"
-                if threshold.severity == "emergency"
-                else "triggered",
+                action=audit_action,
                 entity_type="threshold",
                 entity_id=str(tid),
                 detail=(
                     f"Alarm tetiklendi: {threshold.name} "
                     f"(tag={threshold.tag_id}, değer={value:.2f}, "
                     f"eşik={threshold.set_point:.2f}, yön={threshold.direction}, "
-                    f"severity={threshold.severity})"
+                    f"severity={threshold.severity}, is_test={is_test})"
                 ),
             ),
         )
@@ -201,9 +235,10 @@ class ThresholdEngine:
             value=value,
             set_point=threshold.set_point,
             alarm_event_id=created.id,
+            is_test=is_test,
         )
 
-        # Push bildirim gönder
+        # Push bildirim — bakım modu alarm'larında atlanır (is_test=True).
         try:
             await send_push_notifications(
                 db=self._db,
@@ -213,6 +248,7 @@ class ThresholdEngine:
                     f"(eşik: {threshold.set_point:.2f}, yön: {threshold.direction})"
                 ),
                 severity=threshold.severity,
+                is_test=is_test,
             )
         except Exception:
             await logger.awarning(

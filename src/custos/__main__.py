@@ -16,9 +16,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 
 from custos.analytics.anomaly_detector import AnomalyDetector
 from custos.analytics.archive_scheduler import ArchiveScheduler
@@ -28,6 +29,7 @@ from custos.analytics.dashboard.auth_routes import auth_router
 from custos.analytics.disk_telemetry import DiskMonitor
 from custos.analytics.heartbeat import check_heartbeats, write_heartbeat
 from custos.analytics.kpi_engine import KpiEngine
+from custos.analytics.maintenance_mode import expire_check_loop as maintenance_expire_loop
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
 from custos.analytics.templates import (
     TemplateLoadError,
@@ -139,6 +141,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     sd_task: asyncio.Task[None] | None = None
     hb_writer_task: asyncio.Task[None] | None = None
     hb_check_task: asyncio.Task[None] | None = None
+    # P-04: Bakım modu süre-doldu otomatik kapama loop'u
+    maint_expire_task: asyncio.Task[None] | None = None
     try:
         await db.connect()
         application.state.db = db
@@ -205,6 +209,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         hb_writer_task = asyncio.create_task(_heartbeat_writer(db))
         hb_check_task = asyncio.create_task(_heartbeat_cross_check(db))
         application.state.watchdog = watchdog
+
+        # P-04 Bakım modu expire check loop — süresi dolan per-instance ve
+        # global bakımları her 60 sn otomatik kapatır.
+        maint_expire_task = asyncio.create_task(maintenance_expire_loop(db))
     except Exception:
         await logger.aerror("DB bağlantısı kurulamadı", exc_info=True)
         application.state.db = None
@@ -218,6 +226,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 await task
             except asyncio.CancelledError:
                 pass
+    # P-04 bakım modu expire loop'unu durdur
+    if maint_expire_task is not None and not maint_expire_task.done():
+        maint_expire_task.cancel()
+        try:
+            await maint_expire_task
+        except asyncio.CancelledError:
+            pass
     # Disk monitor'ı durdur
     if disk_monitor is not None:
         await disk_monitor.stop()
@@ -286,6 +301,45 @@ app = FastAPI(
     redoc_url=None,
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def _inject_global_maintenance(
+    request: Request,
+    call_next: Any,
+) -> Response:
+    """P-04: dashboard render'larında base.html üst banner'ı için
+    ``request.state.global_maintenance`` doldurur.
+
+    Sadece dashboard sayfaları için DB sorgusu — statik / API / login
+    yollarında ekstra latency olmasın diye prefix kontrolü.
+    """
+    state_obj: dict[str, Any] | None = None
+    path = request.url.path
+    db_instance: DatabaseInterface | None = getattr(request.app.state, "db", None)
+    if db_instance is not None and path.startswith("/dashboard"):
+        try:
+            cfg = await db_instance.get_retention_config()
+            now = datetime.now(UTC)
+            until = cfg.global_maintenance_until
+            started = cfg.global_maintenance_started_at
+            active = started is not None and (until is None or until > now)
+            if active:
+                state_obj = {
+                    "active": True,
+                    "until": until,
+                    "reason": cfg.global_maintenance_reason,
+                    "started_at": started,
+                }
+        except Exception:
+            await logger.awarning(
+                "Global maintenance state okunamadı — banner atlandı",
+                exc_info=True,
+            )
+    request.state.global_maintenance = state_obj
+    response: Response = await call_next(request)
+    return response
+
 
 # Auth router (login/logout/change-password) — root level, prefix yok
 app.include_router(auth_router)

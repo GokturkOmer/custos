@@ -78,6 +78,95 @@
     </div>
   </div>
 
+  {# B0) Sistem Bakım Modu (P-04 / V11-104) — global maintenance #}
+  <div id="global-maintenance"
+       class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Sistem Bakım Modu</h2>
+    </div>
+    <div class="p-4 space-y-3">
+      <p class="text-small text-text-secondary">
+        Tüm sistem geneli bakım modu. Aktif iken üretilen alarm'lar
+        <code class="text-xs">is_test=true</code> ile yazılır, push gönderilmez,
+        anomali eğitimine girmez. Süre dolunca otomatik kapanır
+        (60 sn kontrol).
+      </p>
+      {% if global_maintenance and global_maintenance.active %}
+      <div class="p-3 bg-status-warn/10 border border-status-warn/40 rounded-md
+                  space-y-1">
+        <p class="text-body text-status-warn font-semibold">
+          🔧 Aktif
+        </p>
+        <p class="text-small text-text-primary">
+          {% if global_maintenance.until %}
+            Bitiş: {{ global_maintenance.until.strftime('%d/%m/%Y %H:%M') }}
+          {% else %}
+            Manuel kapatmaya kadar (sınırsız)
+          {% endif %}
+        </p>
+        {% if global_maintenance.reason %}
+        <p class="text-small text-text-secondary">
+          Sebep: {{ global_maintenance.reason }}
+        </p>
+        {% endif %}
+        {% if global_maintenance.started_at %}
+        <p class="text-small text-text-disabled">
+          Başlangıç: {{ global_maintenance.started_at.strftime('%d/%m/%Y %H:%M') }}
+        </p>
+        {% endif %}
+      </div>
+      <form method="post" action="/dashboard/maintenance/global/stop">
+        <button type="submit"
+                class="px-3 py-1.5 text-small font-medium text-status-warn
+                       border border-status-warn/40 rounded-md
+                       hover:bg-status-warn/20 transition-colors">
+          Bakım modunu kapat
+        </button>
+      </form>
+      {% else %}
+      <details>
+        <summary class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small
+                        font-medium text-status-warn bg-status-warn/10
+                        border border-status-warn/30 rounded-md
+                        hover:bg-status-warn/20 cursor-pointer list-none">
+          {{ icon_inline('tool', class='w-4 h-4') }}
+          Sistemi bakım moduna al
+        </summary>
+        <form method="post" action="/dashboard/maintenance/global/start"
+              class="mt-3 p-3 bg-bg-elevated border border-border-weak
+                     rounded-md space-y-2 max-w-md">
+          <label class="block text-small text-text-secondary">
+            Süre
+            <select name="duration"
+                    class="mt-1 block w-full bg-bg-surface border border-border-weak
+                           rounded px-2 py-1 text-small text-text-primary">
+              <option value="1h">1 saat</option>
+              <option value="4h">4 saat</option>
+              <option value="12h">12 saat</option>
+              <option value="24h" selected>24 saat (varsayılan)</option>
+              <option value="3d">3 gün</option>
+              <option value="manual">Manuel kapatmaya kadar</option>
+            </select>
+          </label>
+          <label class="block text-small text-text-secondary">
+            Sebep (zorunlu)
+            <textarea name="reason" required minlength="3" rows="2"
+                      placeholder="örn. Genel sistem bakımı"
+                      class="mt-1 block w-full bg-bg-surface border border-border-weak
+                             rounded px-2 py-1 text-small text-text-primary"></textarea>
+          </label>
+          <button type="submit"
+                  class="w-full px-3 py-1.5 text-small font-medium text-white
+                         bg-status-warn rounded-md hover:bg-status-warn/90
+                         transition-colors">
+            Bakıma al
+          </button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+  </div>
+
   {# B) Bildirim Ayarları #}
   <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden"
        x-data="pushManager()">

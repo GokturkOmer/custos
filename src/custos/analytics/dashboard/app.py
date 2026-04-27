@@ -38,6 +38,12 @@ from custos.analytics.dashboard.bulk_import import (
     validate_rows,
 )
 from custos.analytics.disk_telemetry import DiskMonitor, DiskUsage, get_disk_usage
+from custos.analytics.maintenance_mode import (
+    start_global_maintenance,
+    start_instance_maintenance,
+    stop_global_maintenance,
+    stop_instance_maintenance,
+)
 from custos.analytics.push_sender import (
     send_push_notifications,
     send_push_to_subscription,
@@ -1745,6 +1751,9 @@ async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
                 }
             )
 
+    # P-04: per-instance bakım state'i UI badge + buton akışı için
+    maintenance_state = _instance_maintenance_state(instance)
+
     ctx = _base_context(
         page_title=f"Asset: {instance.name}",
         active_nav="/dashboard/processes",
@@ -1753,8 +1762,23 @@ async def process_detail(request: Request, instance_id: int) -> HTMLResponse:
         binding_data=binding_data,
         readings=readings,
         kpi_cards=kpi_cards,
+        maintenance_state=maintenance_state,
     )
     return templates.TemplateResponse(request, "pages/process_detail.html", ctx)
+
+
+def _instance_maintenance_state(instance: AssetInstance) -> dict[str, Any]:
+    """Per-instance bakım UI state'i — badge + buton renderı için."""
+    now = datetime.now(UTC)
+    started = instance.maintenance_started_at
+    until = instance.maintenance_mode_until
+    active = started is not None and (until is None or until > now)
+    return {
+        "active": active,
+        "until": until,
+        "started_at": started,
+        "reason": instance.maintenance_reason,
+    }
 
 
 @router.get(
@@ -1885,6 +1909,130 @@ async def process_delete(request: Request, instance_id: int) -> RedirectResponse
         raise HTTPException(status_code=404, detail="Asset bulunamadı")
 
     return RedirectResponse(url="/dashboard/processes", status_code=303)
+
+
+# --- Bakım modu (P-04 / V11-104) — per-instance + global ---
+
+# Süre seçenekleri (UI dropdown). "manual" → until=None (süresiz, manuel kapatma).
+_MAINTENANCE_DURATION_DELTAS: dict[str, timedelta | None] = {
+    "1h": timedelta(hours=1),
+    "4h": timedelta(hours=4),
+    "12h": timedelta(hours=12),
+    "24h": timedelta(hours=24),
+    "3d": timedelta(days=3),
+    "manual": None,
+}
+
+
+def _resolve_maintenance_until(duration: str) -> datetime | None:
+    """Form'dan gelen süre etiketini ``until`` timestamp'ine çevirir.
+
+    Bilinmeyen değer → 24h fallback (defansif). ``manual`` → None.
+    """
+    delta = _MAINTENANCE_DURATION_DELTAS.get(duration, timedelta(hours=24))
+    if delta is None:
+        return None
+    return datetime.now(UTC) + delta
+
+
+@router.post("/processes/{instance_id:int}/maintenance/start")
+async def process_maintenance_start(
+    request: Request,
+    instance_id: int,
+    session: Session = _OPERATOR_DEP,
+) -> RedirectResponse:
+    """Per-instance bakım modunu başlatır. K2 — Operator + Developer."""
+    db = _get_db(request)
+    form = await request.form()
+    duration = str(form.get("duration", "24h")).strip()
+    reason = str(form.get("reason", "")).strip()
+
+    if len(reason) < 3:
+        raise HTTPException(
+            status_code=400, detail="Bakım sebebi en az 3 karakter olmalı"
+        )
+
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    until = _resolve_maintenance_until(duration)
+
+    await start_instance_maintenance(
+        db=db,
+        instance_id=instance_id,
+        until=until,
+        reason=reason,
+        user_id=session.user_id,
+    )
+    return RedirectResponse(
+        url=f"/dashboard/processes/{instance_id}", status_code=303,
+    )
+
+
+@router.post("/processes/{instance_id:int}/maintenance/stop")
+async def process_maintenance_stop(
+    request: Request,
+    instance_id: int,
+    session: Session = _OPERATOR_DEP,
+) -> RedirectResponse:
+    """Per-instance bakım modunu kapatır."""
+    db = _get_db(request)
+
+    result = await stop_instance_maintenance(
+        db=db,
+        instance_id=instance_id,
+        user_id=session.user_id,
+        source="manual",
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    return RedirectResponse(
+        url=f"/dashboard/processes/{instance_id}", status_code=303,
+    )
+
+
+@router.post("/maintenance/global/start")
+async def maintenance_global_start(
+    request: Request,
+    session: Session = _OPERATOR_DEP,
+) -> RedirectResponse:
+    """Sistem-geneli bakım modunu başlatır (K2 — Operator + Developer)."""
+    db = _get_db(request)
+    form = await request.form()
+    duration = str(form.get("duration", "24h")).strip()
+    reason = str(form.get("reason", "")).strip()
+
+    if len(reason) < 3:
+        raise HTTPException(
+            status_code=400, detail="Bakım sebebi en az 3 karakter olmalı"
+        )
+
+    until = _resolve_maintenance_until(duration)
+
+    await start_global_maintenance(
+        db=db,
+        until=until,
+        reason=reason,
+        user_id=session.user_id,
+    )
+    return RedirectResponse(url="/dashboard/settings", status_code=303)
+
+
+@router.post("/maintenance/global/stop")
+async def maintenance_global_stop(
+    request: Request,
+    session: Session = _OPERATOR_DEP,
+) -> RedirectResponse:
+    """Sistem-geneli bakım modunu kapatır."""
+    db = _get_db(request)
+    await stop_global_maintenance(
+        db=db,
+        user_id=session.user_id,
+        source="manual",
+    )
+    return RedirectResponse(url="/dashboard/settings", status_code=303)
 
 
 # --- Tag Reading API (binding formu için) ---
@@ -2551,6 +2699,9 @@ async def settings_page(request: Request) -> HTMLResponse:
         for slug, schema in sorted(pack.items())
     ]
 
+    # P-04: Global bakım modu aktif mi? Settings sayfası ana panel + banner.
+    global_maint = _global_maintenance_state(retention)
+
     ctx = _base_context(
         page_title="Settings",
         active_nav="/dashboard/settings",
@@ -2573,8 +2724,31 @@ async def settings_page(request: Request) -> HTMLResponse:
         avm_pack_seeded=avm_pack_seeded,
         avm_pack_missing=avm_pack_missing,
         avm_pack_entries=avm_pack_entries,
+        global_maintenance=global_maint,
     )
     return templates.TemplateResponse(request, "pages/settings.html", ctx)
+
+
+def _global_maintenance_state(
+    retention: Any,
+) -> dict[str, Any]:
+    """Global maintenance UI state'ini hazırlar (P-04).
+
+    ``active`` flag template'te banner ve buton akışını yönetir; süresi
+    dolmuş kayıt expire loop tarafından temizlenmeden önce tarayıcı render
+    ettiyse banner görünmez (until <= now → active=False).
+    """
+    until = retention.global_maintenance_until
+    started_at = retention.global_maintenance_started_at
+    now = datetime.now(UTC)
+    active = started_at is not None and (until is None or until > now)
+    return {
+        "active": active,
+        "until": until,
+        "started_at": started_at,
+        "reason": retention.global_maintenance_reason,
+        "user_id": retention.global_maintenance_started_by_user_id,
+    }
 
 
 def _disk_usage_to_dict(usage: DiskUsage) -> dict[str, Any]:

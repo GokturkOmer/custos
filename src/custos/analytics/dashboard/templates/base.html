@@ -35,6 +35,35 @@
           <span class="w-2 h-2 rounded-full bg-status-ok"></span>
           <span>System: OK</span>
         </div>
+
+        {# P-03 Push aktif alıcı rozeti — Developer-only #}
+        {% if _is_dev %}
+        <a href="/dashboard/settings#push-recipients"
+           class="block mt-1 text-small text-text-disabled hover:text-text-primary
+                  transition-colors"
+           x-data="{count: null, total: null, globalEnabled: true,
+                    async load() {
+                      try {
+                        const r = await fetch('/api/push/active-count');
+                        if (!r.ok) return;
+                        const d = await r.json();
+                        this.count = d.active;
+                        this.total = d.total;
+                        this.globalEnabled = d.global_enabled;
+                      } catch (_e) {}
+                    }}"
+           x-init="load(); setInterval(() => load(), 60000)">
+          <span x-show="count !== null">
+            <span x-text="globalEnabled ? '🔔' : '🔕'"></span>
+            <span x-text="count"></span> aktif
+            <span class="text-text-disabled" x-show="total !== count">
+              / <span x-text="total"></span>
+            </span>
+            bildirim alıcısı
+          </span>
+        </a>
+        {% endif %}
+
         {% if _session %}
         <div class="text-small text-text-disabled mt-1 flex items-center justify-between">
           <span title="{{ _session.username }} ({{ _session.role }})">{{ _session.username }}</span>
@@ -73,6 +102,34 @@
           </button>
         </div>
       </header>
+
+      {# P-04: Global bakım modu banner'ı — tüm sayfalarda görünür. #}
+      {% set _gm = request.state.global_maintenance if request.state.global_maintenance is defined else None %}
+      {% if _gm and _gm.active %}
+      <div class="flex-shrink-0 bg-status-warn/10 border-b border-status-warn/40
+                  px-5 py-2 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2 text-body text-status-warn">
+          <span>🔧</span>
+          <span class="font-semibold">Sistem bakım modu aktif</span>
+          {% if _gm.until %}
+            <span class="text-small">— bitiş: {{ _gm.until.strftime('%d/%m %H:%M') }}</span>
+          {% else %}
+            <span class="text-small">— manuel kapatmaya kadar</span>
+          {% endif %}
+          {% if _gm.reason %}
+            <span class="text-small text-text-secondary">· {{ _gm.reason }}</span>
+          {% endif %}
+        </div>
+        <form method="post" action="/dashboard/maintenance/global/stop" class="inline">
+          <button type="submit"
+                  class="px-3 py-1 text-small font-medium text-status-warn
+                         border border-status-warn/40 rounded-md
+                         hover:bg-status-warn/20 transition-colors">
+            Bakım modunu kapat
+          </button>
+        </form>
+      </div>
+      {% endif %}
 
       {# Sayfa icerigi #}
       <main class="flex-1 overflow-y-auto p-4">

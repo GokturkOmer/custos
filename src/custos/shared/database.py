@@ -127,7 +127,21 @@ class KpiDefinition:
 
 @dataclass
 class AssetInstance:
-    """Asset instance kaydı — bir template'in somut kurulumu."""
+    """Asset instance kaydı — bir template'in somut kurulumu.
+
+    P-04 ile per-instance bakım modu kolonları eklendi:
+
+    - ``maintenance_mode_until`` NULL ise instance bakımda değil. Geçmiş bir
+      değer ``expire_check_loop`` tarafından otomatik temizlenir
+      (manuel kapanmadan beklemenin sınırı 60 saniye). ``None`` özel hâli
+      "manuel kapatma" — süresiz bakım, kullanıcı kapatana kadar.
+    - ``maintenance_reason`` operatörün girdiği zorunlu açıklama (UI form'da
+      min 3 karakter); audit log detail'inde de kullanılır.
+    - ``maintenance_started_by_user_id`` ON DELETE SET NULL (kullanıcı
+      silindiğinde bakım kaydı kalsın, kim olduğu kaybolsun).
+    - ``maintenance_started_at`` "ne zaman bakıma alındı" — UI'da kalan süre
+      hesabı için until ile birlikte kullanılır.
+    """
 
     template_id: int
     name: str
@@ -137,6 +151,10 @@ class AssetInstance:
     id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    maintenance_mode_until: datetime | None = None
+    maintenance_reason: str = ""
+    maintenance_started_by_user_id: int | None = None
+    maintenance_started_at: datetime | None = None
 
 
 @dataclass
@@ -169,7 +187,14 @@ class Threshold:
 
 @dataclass
 class AlarmEvent:
-    """Alarm event kaydı — ISA-18.2 state machine durumu."""
+    """Alarm event kaydı — ISA-18.2 state machine durumu.
+
+    ``is_test`` (P-04): bakım modunda (per-instance veya global) üretilen
+    alarm bu flag ile yazılır. Bu alarm'lar push gönderilmez, alarms
+    sayfasında görsel olarak ayrılır ve P-12'de anomaly detector eğitim
+    setinden filtrelenir. ``threshold_engine`` bakım kontrolünden sonra
+    flag'i set eder.
+    """
 
     threshold_id: int
     tag_id: str
@@ -180,6 +205,7 @@ class AlarmEvent:
     trigger_value: float = 0.0
     clear_value: float | None = None
     notes: str = ""
+    is_test: bool = False
     id: int | None = None
     created_at: datetime | None = None
 
@@ -370,6 +396,11 @@ class RetentionConfig:
     ``push_global_enabled=False`` master switch — P-03 ile eklendi. Tatil /
     eğitim sırasında tüm push'lar tek tıkla sustulur (her bir aboneliğin
     ``enabled`` flag'inden bağımsız, sender erken-dönüşü ile kestirme).
+
+    ``global_maintenance_*`` (P-04): sistem-geneli bakım modu. Aktif iken
+    tüm threshold breach'leri ``alarm_events.is_test=true`` ile yazılır,
+    push gönderilmez. Singleton tabloda tutulur — runtime'da push master
+    switch ile aynı pattern.
     """
 
     raw_retention_days: int
@@ -377,6 +408,10 @@ class RetentionConfig:
     updated_at: datetime
     updated_by: str
     push_global_enabled: bool = True
+    global_maintenance_until: datetime | None = None
+    global_maintenance_reason: str = ""
+    global_maintenance_started_by_user_id: int | None = None
+    global_maintenance_started_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -710,6 +745,31 @@ class DatabaseInterface(abc.ABC):
     ) -> list[AssetInstance]:
         """Asset instance listesini döndürür. Opsiyonel filtreler."""
 
+    @abc.abstractmethod
+    async def list_active_maintenance_instances(
+        self,
+        now: datetime,
+    ) -> list[AssetInstance]:
+        """Aktif bakım modunda olan instance'ları döndürür (P-04).
+
+        Aktif: ``maintenance_started_at IS NOT NULL`` AND
+        (``maintenance_mode_until IS NULL`` (manuel/sınırsız) OR
+        ``maintenance_mode_until > now``).
+        """
+
+    @abc.abstractmethod
+    async def list_expired_maintenance_instances(
+        self,
+        now: datetime,
+    ) -> list[AssetInstance]:
+        """Süresi dolmuş bakım modu kayıtlarını döndürür (P-04).
+
+        Süresi dolmuş: ``maintenance_mode_until IS NOT NULL``
+        AND ``maintenance_mode_until <= now``.
+
+        ``expire_check_loop`` bu listeyi her 60 sn tarayıp otomatik kapatır.
+        """
+
     # --- Tag Binding CRUD ---
 
     @abc.abstractmethod
@@ -723,6 +783,15 @@ class DatabaseInterface(abc.ABC):
     @abc.abstractmethod
     async def list_tag_bindings(self, instance_id: int) -> list[TagBinding]:
         """Bir instance'ın tüm tag binding'lerini döndürür."""
+
+    @abc.abstractmethod
+    async def list_tag_bindings_all(self) -> list[TagBinding]:
+        """Tüm binding'leri tek query'de döndürür (tag→instance haritası).
+
+        ``threshold_engine`` her cycle başında bakım kontrolü için tag→instance
+        haritası kurar; per-instance ``list_tag_bindings`` çağrısı O(N×M)
+        olurdu, tek query daha verimli (P-04).
+        """
 
     @abc.abstractmethod
     async def replace_tag_bindings(
@@ -786,8 +855,14 @@ class DatabaseInterface(abc.ABC):
         state: str | None = None,
         tag_id: str | None = None,
         limit: int = 100,
+        is_test: bool | None = None,
     ) -> list[AlarmEvent]:
-        """Alarm event listesini döndürür. Opsiyonel filtreler."""
+        """Alarm event listesini döndürür. Opsiyonel filtreler.
+
+        ``is_test=False`` (P-04) bakım modunda üretilen alarm'ları gizler —
+        alarms sayfası varsayılanı. ``is_test=True`` sadece bakım test
+        alarm'larını gösterir; ``None`` (varsayılan) ikisini de döner.
+        """
 
     @abc.abstractmethod
     async def get_active_alarm_for_threshold(
@@ -1148,7 +1223,28 @@ class DatabaseInterface(abc.ABC):
         - ``raw_retention_days`` değişmişse ve auto-clean açıksa policy
           yeni aralıkla tekrar eklenir.
 
+        Global maintenance kolonları burada güncellenmez —
+        ``update_global_maintenance`` ile yönetilir (concern ayrımı).
+
         DB satırı + policy güncellemesi tek transaction içinde yapılır.
+        """
+
+    @abc.abstractmethod
+    async def update_global_maintenance(
+        self,
+        until: datetime | None,
+        reason: str,
+        user_id: int | None,
+        started_at: datetime | None,
+    ) -> RetentionConfig:
+        """Global bakım modu kolonlarını singleton retention_config satırına yazar.
+
+        Başlatma: ``started_at = now()``, ``until = now()+delta`` (veya
+        manuel için None), ``reason`` zorunlu, ``user_id`` operatör/dev id.
+        Durdurma: dört alan da ``None``/``""`` ile çağrılır → bakım kapanır.
+
+        Push/retention alanları korunur (sadece global_maintenance_*
+        kolonları yazılır).
         """
 
     # --- Auth: users + sessions (V11-101) ---
@@ -1334,13 +1430,19 @@ def _row_to_tag_record(row: asyncpg.Record) -> TagRecord:
     )
 
 
-# İzin verilen güncelleme alanları — Asset Instance (SQL injection önlemi)
+# İzin verilen güncelleme alanları — Asset Instance (SQL injection önlemi).
+# P-04 ile maintenance_* alanları eklendi; bakım modu start/stop bu metot
+# üzerinden update edilir (ayrı UPDATE SQL yazmamak için).
 _ALLOWED_INSTANCE_UPDATE_FIELDS: frozenset[str] = frozenset(
     {
         "name",
         "description",
         "location",
         "status",
+        "maintenance_mode_until",
+        "maintenance_reason",
+        "maintenance_started_by_user_id",
+        "maintenance_started_at",
     }
 )
 
@@ -1393,6 +1495,10 @@ def _row_to_asset_instance(row: asyncpg.Record) -> AssetInstance:
         status=row["status"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        maintenance_mode_until=row["maintenance_mode_until"],
+        maintenance_reason=row["maintenance_reason"],
+        maintenance_started_by_user_id=row["maintenance_started_by_user_id"],
+        maintenance_started_at=row["maintenance_started_at"],
     )
 
 
@@ -1462,6 +1568,7 @@ def _row_to_alarm_event(row: asyncpg.Record) -> AlarmEvent:
         trigger_value=float(row["trigger_value"]),
         clear_value=float(row["clear_value"]) if row["clear_value"] is not None else None,
         notes=row["notes"],
+        is_test=bool(row["is_test"]),
         created_at=row["created_at"],
     )
 
@@ -2462,6 +2569,39 @@ class TimescaleDBDatabase(DatabaseInterface):
             rows = await conn.fetch(sql, *params)
         return [_row_to_asset_instance(row) for row in rows]
 
+    async def list_active_maintenance_instances(
+        self,
+        now: datetime,
+    ) -> list[AssetInstance]:
+        """Aktif bakım modunda olan instance'ları döndürür (P-04)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM asset_instances "
+                "WHERE maintenance_started_at IS NOT NULL "
+                "  AND (maintenance_mode_until IS NULL "
+                "       OR maintenance_mode_until > $1) "
+                "ORDER BY id",
+                now,
+            )
+        return [_row_to_asset_instance(row) for row in rows]
+
+    async def list_expired_maintenance_instances(
+        self,
+        now: datetime,
+    ) -> list[AssetInstance]:
+        """Süresi dolmuş bakım modu kayıtlarını döndürür (P-04)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM asset_instances "
+                "WHERE maintenance_mode_until IS NOT NULL "
+                "  AND maintenance_mode_until <= $1 "
+                "ORDER BY id",
+                now,
+            )
+        return [_row_to_asset_instance(row) for row in rows]
+
     # --- Tag Binding CRUD implementasyonları ---
 
     async def insert_tag_binding(self, binding: TagBinding) -> TagBinding:
@@ -2496,6 +2636,15 @@ class TimescaleDBDatabase(DatabaseInterface):
             rows = await conn.fetch(
                 "SELECT * FROM tag_bindings WHERE instance_id = $1 ORDER BY id",
                 instance_id,
+            )
+        return [_row_to_tag_binding(row) for row in rows]
+
+    async def list_tag_bindings_all(self) -> list[TagBinding]:
+        """Tüm binding'leri tek query'de döndürür (P-04 maintenance cache)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM tag_bindings ORDER BY id",
             )
         return [_row_to_tag_binding(row) for row in rows]
 
@@ -2646,8 +2795,9 @@ class TimescaleDBDatabase(DatabaseInterface):
             row = await conn.fetchrow(
                 "INSERT INTO alarm_events "
                 "(threshold_id, tag_id, state, triggered_at, "
-                "acknowledged_at, cleared_at, trigger_value, clear_value, notes) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) "
+                "acknowledged_at, cleared_at, trigger_value, clear_value, "
+                "notes, is_test) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
                 "RETURNING *",
                 event.threshold_id,
                 event.tag_id,
@@ -2658,6 +2808,7 @@ class TimescaleDBDatabase(DatabaseInterface):
                 event.trigger_value,
                 event.clear_value,
                 event.notes,
+                event.is_test,
             )
         assert row is not None
         return _row_to_alarm_event(row)
@@ -2712,6 +2863,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         state: str | None = None,
         tag_id: str | None = None,
         limit: int = 100,
+        is_test: bool | None = None,
     ) -> list[AlarmEvent]:
         """Alarm event listesini döndürür."""
         pool = self._get_pool()
@@ -2727,6 +2879,11 @@ class TimescaleDBDatabase(DatabaseInterface):
         if tag_id is not None:
             conditions.append(f"tag_id = ${idx}")
             params.append(tag_id)
+            idx += 1
+
+        if is_test is not None:
+            conditions.append(f"is_test = ${idx}")
+            params.append(is_test)
             idx += 1
 
         where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -3727,7 +3884,10 @@ class TimescaleDBDatabase(DatabaseInterface):
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT raw_retention_days, auto_clean_enabled, "
-                "       push_global_enabled, updated_at, updated_by "
+                "       push_global_enabled, updated_at, updated_by, "
+                "       global_maintenance_until, global_maintenance_reason, "
+                "       global_maintenance_started_by_user_id, "
+                "       global_maintenance_started_at "
                 "FROM retention_config WHERE id = 1",
             )
         # Migration 026 INSERT garantiler ki satır her zaman var; defansif
@@ -3742,6 +3902,12 @@ class TimescaleDBDatabase(DatabaseInterface):
             push_global_enabled=bool(row["push_global_enabled"]),
             updated_at=row["updated_at"],
             updated_by=row["updated_by"],
+            global_maintenance_until=row["global_maintenance_until"],
+            global_maintenance_reason=row["global_maintenance_reason"],
+            global_maintenance_started_by_user_id=row[
+                "global_maintenance_started_by_user_id"
+            ],
+            global_maintenance_started_at=row["global_maintenance_started_at"],
         )
 
     async def update_retention_config(
@@ -3776,7 +3942,9 @@ class TimescaleDBDatabase(DatabaseInterface):
 
         pool = self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
-            # Satırı güncelle — parametreler yoksa mevcut değerler korunur
+            # Satırı güncelle — parametreler yoksa mevcut değerler korunur.
+            # Global maintenance kolonları burada dokunulmaz; ayrı metot
+            # (``update_global_maintenance``) ile yönetilir.
             row = await conn.fetchrow(
                 "UPDATE retention_config SET "
                 "    raw_retention_days = COALESCE($1, raw_retention_days), "
@@ -3786,7 +3954,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "    updated_at = NOW() "
                 "WHERE id = 1 "
                 "RETURNING raw_retention_days, auto_clean_enabled, "
-                "          push_global_enabled, updated_at, updated_by",
+                "          push_global_enabled, updated_at, updated_by, "
+                "          global_maintenance_until, global_maintenance_reason, "
+                "          global_maintenance_started_by_user_id, "
+                "          global_maintenance_started_at",
                 raw_retention_days,
                 auto_clean_enabled,
                 updated_by,
@@ -3824,6 +3995,58 @@ class TimescaleDBDatabase(DatabaseInterface):
             push_global_enabled=new_push_global,
             updated_at=row["updated_at"],
             updated_by=row["updated_by"],
+            global_maintenance_until=row["global_maintenance_until"],
+            global_maintenance_reason=row["global_maintenance_reason"],
+            global_maintenance_started_by_user_id=row[
+                "global_maintenance_started_by_user_id"
+            ],
+            global_maintenance_started_at=row["global_maintenance_started_at"],
+        )
+
+    async def update_global_maintenance(
+        self,
+        until: datetime | None,
+        reason: str,
+        user_id: int | None,
+        started_at: datetime | None,
+    ) -> RetentionConfig:
+        """Global bakım modu kolonlarını singleton satıra yazar (P-04).
+
+        Push/retention alanlarına dokunmaz. Tek UPDATE — transaction'a
+        gerek yok (TimescaleDB policy senkronu yok).
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE retention_config SET "
+                "    global_maintenance_until = $1, "
+                "    global_maintenance_reason = $2, "
+                "    global_maintenance_started_by_user_id = $3, "
+                "    global_maintenance_started_at = $4 "
+                "WHERE id = 1 "
+                "RETURNING raw_retention_days, auto_clean_enabled, "
+                "          push_global_enabled, updated_at, updated_by, "
+                "          global_maintenance_until, global_maintenance_reason, "
+                "          global_maintenance_started_by_user_id, "
+                "          global_maintenance_started_at",
+                until,
+                reason,
+                user_id,
+                started_at,
+            )
+        assert row is not None, "retention_config satırı güncellenemedi"
+        return RetentionConfig(
+            raw_retention_days=int(row["raw_retention_days"]),
+            auto_clean_enabled=bool(row["auto_clean_enabled"]),
+            push_global_enabled=bool(row["push_global_enabled"]),
+            updated_at=row["updated_at"],
+            updated_by=row["updated_by"],
+            global_maintenance_until=row["global_maintenance_until"],
+            global_maintenance_reason=row["global_maintenance_reason"],
+            global_maintenance_started_by_user_id=row[
+                "global_maintenance_started_by_user_id"
+            ],
+            global_maintenance_started_at=row["global_maintenance_started_at"],
         )
 
     # --- Auth: users + sessions (V11-101) ---

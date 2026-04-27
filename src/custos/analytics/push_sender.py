@@ -151,6 +151,7 @@ async def send_push_notifications(
     title: str,
     body: str,
     severity: str,
+    is_test: bool = False,
 ) -> int:
     """Aktif abonelere push bildirim gönderir.
 
@@ -158,9 +159,24 @@ async def send_push_notifications(
     dönüş, hiçbir cihaza gitmez (her abonelik ``enabled`` flag'inden
     bağımsız). Tatil/eğitim sırasında tek anahtarla susturma için (P-03).
 
+    ``is_test=True`` (P-04): bakım modunda üretilen alarm'lar için çağıran
+    bu flag'i geçirir; sender erken-dönüş yapar (alarm DB'de is_test=true
+    olarak kayıtlı, sadece push iletisi atlanır). Audit log
+    threshold_engine tarafında.
+
     Sessiz saat ve severity filtresi her abonelik için ``_should_notify``
     içinde uygulanır. Gönderilen bildirim sayısını döndürür.
     """
+    # P-04: bakım modu alarm'ı — push gitmez. Master switch'ten önce
+    # kontrol etmek mantıklı (DB get_retention_config çağrısından da
+    # tasarruf — pratikte ihmal edilebilir ama net kalsın).
+    if is_test:
+        await logger.ainfo(
+            "Bakım modu alarm'ı (is_test=True) — push atlandı",
+            severity=severity,
+        )
+        return 0
+
     if not is_push_enabled():
         await logger.adebug("Push bildirim devre dışı — VAPID anahtarları yapılandırılmamış")
         return 0
