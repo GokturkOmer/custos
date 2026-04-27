@@ -71,8 +71,8 @@ def test_setup_sh_has_tls_step() -> None:
     """deploy/setup.sh TLS + Caddy adımını içermeli (P-03)."""
     setup = REPO_ROOT / "deploy" / "setup.sh"
     content = setup.read_text(encoding="utf-8")
-    # Yeni adım numarası
-    assert "[12/13] TLS sertifikasi" in content
+    # Yeni adım numarası — P-06 ile setup.sh adım sayısı 17'ye çıktı
+    assert "[12/17] TLS sertifikasi" in content
     # Caddy paketi kurulumu
     assert "apt-get install -y -qq caddy" in content
     # Caddyfile substitution

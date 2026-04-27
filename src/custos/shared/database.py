@@ -440,6 +440,10 @@ class RetentionConfig:
     global_maintenance_reason: str = ""
     global_maintenance_started_by_user_id: int | None = None
     global_maintenance_started_at: datetime | None = None
+    # V11-111 / P-06: Resource alarm esikleri (CPU + RAM, range 50-99).
+    # Default %90 — UI slider 70-95 aralik onerir, CHECK constraint 50-99.
+    resource_cpu_warn_pct: int = 90
+    resource_ram_warn_pct: int = 90
 
 
 @dataclass(frozen=True)
@@ -1243,6 +1247,8 @@ class DatabaseInterface(abc.ABC):
         auto_clean_enabled: bool | None = None,
         updated_by: str = "user",
         push_global_enabled: bool | None = None,
+        resource_cpu_warn_pct: int | None = None,
+        resource_ram_warn_pct: int | None = None,
     ) -> RetentionConfig:
         """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
 
@@ -1254,6 +1260,8 @@ class DatabaseInterface(abc.ABC):
           runtime'da push_sender erken-dönüşle okur.
         - ``raw_retention_days`` değişmişse ve auto-clean açıksa policy
           yeni aralıkla tekrar eklenir.
+        - ``resource_cpu_warn_pct`` / ``resource_ram_warn_pct`` (V11-111 / P-06):
+          ResourceMonitor tick'te okur. CHECK constraint 50-99 (migration 033).
 
         Global maintenance kolonları burada güncellenmez —
         ``update_global_maintenance`` ile yönetilir (concern ayrımı).
@@ -3940,7 +3948,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "       push_global_enabled, updated_at, updated_by, "
                 "       global_maintenance_until, global_maintenance_reason, "
                 "       global_maintenance_started_by_user_id, "
-                "       global_maintenance_started_at "
+                "       global_maintenance_started_at, "
+                "       resource_cpu_warn_pct, resource_ram_warn_pct "
                 "FROM retention_config WHERE id = 1",
             )
         # Migration 026 INSERT garantiler ki satır her zaman var; defansif
@@ -3961,6 +3970,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "global_maintenance_started_by_user_id"
             ],
             global_maintenance_started_at=row["global_maintenance_started_at"],
+            resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
+            resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
         )
 
     async def update_retention_config(
@@ -3969,6 +3980,8 @@ class TimescaleDBDatabase(DatabaseInterface):
         auto_clean_enabled: bool | None = None,
         updated_by: str = "user",
         push_global_enabled: bool | None = None,
+        resource_cpu_warn_pct: int | None = None,
+        resource_ram_warn_pct: int | None = None,
     ) -> RetentionConfig:
         """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
 
@@ -3985,6 +3998,10 @@ class TimescaleDBDatabase(DatabaseInterface):
         ``push_global_enabled`` (P-03 master switch) sadece satıra yazılır;
         runtime'da push_sender erken-dönüşle okur (TimescaleDB policy ile
         ilgisiz).
+
+        ``resource_cpu_warn_pct`` / ``resource_ram_warn_pct`` (V11-111 / P-06):
+        ResourceMonitor tarafından tick'te okunur; CHECK constraint 50-99
+        aralık doğrulamasını DB tarafında yapar.
 
         ``add_retention_policy`` transaction içinde çalışmaya uygun — background
         worker job kaydı oluşturur; TimescaleDB docs'ına göre güvenli.
@@ -4003,6 +4020,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "    raw_retention_days = COALESCE($1, raw_retention_days), "
                 "    auto_clean_enabled = COALESCE($2, auto_clean_enabled), "
                 "    push_global_enabled = COALESCE($4, push_global_enabled), "
+                "    resource_cpu_warn_pct = COALESCE($5, resource_cpu_warn_pct), "
+                "    resource_ram_warn_pct = COALESCE($6, resource_ram_warn_pct), "
                 "    updated_by = $3, "
                 "    updated_at = NOW() "
                 "WHERE id = 1 "
@@ -4010,11 +4029,14 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "          push_global_enabled, updated_at, updated_by, "
                 "          global_maintenance_until, global_maintenance_reason, "
                 "          global_maintenance_started_by_user_id, "
-                "          global_maintenance_started_at",
+                "          global_maintenance_started_at, "
+                "          resource_cpu_warn_pct, resource_ram_warn_pct",
                 raw_retention_days,
                 auto_clean_enabled,
                 updated_by,
                 push_global_enabled,
+                resource_cpu_warn_pct,
+                resource_ram_warn_pct,
             )
             assert row is not None, "retention_config satırı güncellenemedi"
             new_days = int(row["raw_retention_days"])
@@ -4054,6 +4076,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "global_maintenance_started_by_user_id"
             ],
             global_maintenance_started_at=row["global_maintenance_started_at"],
+            resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
+            resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
         )
 
     async def update_global_maintenance(
@@ -4081,7 +4105,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "          push_global_enabled, updated_at, updated_by, "
                 "          global_maintenance_until, global_maintenance_reason, "
                 "          global_maintenance_started_by_user_id, "
-                "          global_maintenance_started_at",
+                "          global_maintenance_started_at, "
+                "          resource_cpu_warn_pct, resource_ram_warn_pct",
                 until,
                 reason,
                 user_id,
@@ -4100,6 +4125,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "global_maintenance_started_by_user_id"
             ],
             global_maintenance_started_at=row["global_maintenance_started_at"],
+            resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
+            resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
         )
 
     # --- Auth: users + sessions (V11-101) ---

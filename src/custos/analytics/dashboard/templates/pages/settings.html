@@ -35,6 +35,122 @@
       </a>
     </div>
   </div>
+
+  {# Yedekleme — yalnızca Geliştirici (V11-109 / P-06) #}
+  <div id="backup" class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">Yedekleme</h2>
+    </div>
+    <div class="p-4 space-y-4">
+      {% if request.query_params.get('backup_ok') %}
+      <div class="px-3 py-2 bg-status-ok/10 border border-status-ok/40 rounded text-small text-status-ok">
+        Yedekleme tamamlandı.
+      </div>
+      {% elif request.query_params.get('backup_error') %}
+      <div class="px-3 py-2 bg-status-crit/10 border border-status-crit/40 rounded text-small text-status-crit">
+        Yedekleme başarısız — audit log'a bakın.
+      </div>
+      {% endif %}
+
+      <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+        <div>
+          <dt class="text-small text-text-secondary">Son pg_dump (haftalık)</dt>
+          <dd class="text-body text-text-primary font-medium">
+            {% if backup_status.last_pg_dump %}
+              {{ backup_status.last_pg_dump.mtime }} —
+              {{ backup_status.last_pg_dump.size_mb }} MB
+              <span class="text-small text-text-disabled">
+                ({{ backup_status.pg_dump_count }} dosya, 30 gün retention)
+              </span>
+            {% else %}
+              <span class="text-status-warn">Henüz yedek yok</span>
+            {% endif %}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-small text-text-secondary">Son config snapshot (günlük)</dt>
+          <dd class="text-body text-text-primary font-medium">
+            {% if backup_status.last_config_json %}
+              {{ backup_status.last_config_json.mtime }} —
+              {{ backup_status.last_config_json.size_mb }} MB
+              <span class="text-small text-text-disabled">
+                ({{ backup_status.config_json_count }} dosya, 365 gün retention)
+              </span>
+            {% else %}
+              <span class="text-status-warn">Henüz snapshot yok</span>
+            {% endif %}
+          </dd>
+        </div>
+      </dl>
+
+      <div class="flex items-center justify-between pt-2 border-t border-border-weak">
+        <p class="text-small text-text-secondary">
+          Cron: pg_dump Pazar 03:00, config JSON her gece 04:00.
+          Restore wizard pilot dry-run sırasında detaylanır (P-09).
+        </p>
+        <form action="/dashboard/settings/backup/now" method="post">
+          <button type="submit"
+                  class="px-3 py-1.5 bg-accent-primary text-white text-small font-medium rounded
+                         hover:bg-accent-primary/90 transition-colors">
+            Şimdi yedek al
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {# Resource Alarm — yalnızca Geliştirici (V11-111 / P-06) #}
+  <div id="resource" class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">
+        Resource Alarm (CPU + RAM)
+      </h2>
+    </div>
+    <div class="p-4 space-y-3">
+      {% if request.query_params.get('resource_ok') %}
+      <div class="px-3 py-2 bg-status-ok/10 border border-status-ok/40 rounded text-small text-status-ok">
+        Eşikler güncellendi — bir sonraki ölçüm tick'inde etkili olur.
+      </div>
+      {% endif %}
+      <p class="text-small text-text-secondary">
+        Son 5 dakika ortalaması eşiği aşarsa push uyarısı gönderilir
+        (severity warn, 6 saat cooldown). Eşik aralığı 70-95 önerilir;
+        DB CHECK 50-99.
+      </p>
+      <form action="/dashboard/settings/resource-thresholds" method="post"
+            class="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+        <div>
+          <label for="cpu_warn_pct"
+                 class="block text-small text-text-secondary mb-1">
+            CPU eşiği (%)
+          </label>
+          <input type="number" id="cpu_warn_pct" name="cpu_warn_pct"
+                 min="50" max="99" required
+                 value="{{ resource_cpu_warn_pct }}"
+                 class="w-full px-3 py-1.5 bg-bg-base border border-border-weak rounded
+                        text-body text-text-primary focus:outline-none
+                        focus:border-accent-primary">
+        </div>
+        <div>
+          <label for="ram_warn_pct"
+                 class="block text-small text-text-secondary mb-1">
+            RAM eşiği (%)
+          </label>
+          <input type="number" id="ram_warn_pct" name="ram_warn_pct"
+                 min="50" max="99" required
+                 value="{{ resource_ram_warn_pct }}"
+                 class="w-full px-3 py-1.5 bg-bg-base border border-border-weak rounded
+                        text-body text-text-primary focus:outline-none
+                        focus:border-accent-primary">
+        </div>
+        <button type="submit"
+                class="px-3 py-1.5 bg-accent-primary text-white text-small font-medium rounded
+                       hover:bg-accent-primary/90 transition-colors">
+          Eşikleri kaydet
+        </button>
+      </form>
+    </div>
+  </div>
   {% endif %}
 
   {# A) Sistem Bilgisi #}

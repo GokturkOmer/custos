@@ -36,6 +36,10 @@ dependencies = [
     # systemd Type=notify + WatchdogSec entegrasyonu (V11-105/K13).
     # Tek dosyalık küçük paket; sistemd yoksa (lokal dev) modül no-op döner.
     "sdnotify>=0.3.2,<0.4",
+    # CPU + RAM telemetri (V11-111 / P-06). Pure-Python, platform agnostic;
+    # endurance_metrics.py zaten transitive olarak kullaniyordu, P-06 ile
+    # explicit dependency'e cevrildi.
+    "psutil>=5.9,<7.0",
 ]
 
 [project.optional-dependencies]
@@ -114,6 +118,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "sdnotify.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "psutil.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

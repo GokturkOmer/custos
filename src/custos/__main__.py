@@ -32,6 +32,7 @@ from custos.analytics.kpi_engine import KpiEngine
 from custos.analytics.liveness_engine import LivenessEngine
 from custos.analytics.maintenance_mode import expire_check_loop as maintenance_expire_loop
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
+from custos.analytics.resource_telemetry import ResourceMonitor
 from custos.analytics.templates import (
     TemplateLoadError,
     TemplateSchema,
@@ -137,6 +138,9 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     archive_scheduler_task: asyncio.Task[None] | None = None
     disk_monitor: DiskMonitor | None = None
     disk_monitor_task: asyncio.Task[None] | None = None
+    # P-06 (V11-111): CPU + RAM telemetri + push warn alarm'i.
+    resource_monitor: ResourceMonitor | None = None
+    resource_monitor_task: asyncio.Task[None] | None = None
     # Watchdog (V11-105) — sd_notify + cross-service heartbeat task'ları.
     watchdog = SystemdWatchdog(interval_seconds=HEARTBEAT_WRITE_INTERVAL)
     sd_task: asyncio.Task[None] | None = None
@@ -207,6 +211,12 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         disk_monitor_task = asyncio.create_task(disk_monitor.start())
         application.state.disk_monitor = disk_monitor
 
+        # Resource telemetri — 60 sn'de CPU/RAM sample, 5 dk pencere mean,
+        # esik retention_config'ten okunur (default %90, range 50-99).
+        resource_monitor = ResourceMonitor(db=db)
+        resource_monitor_task = asyncio.create_task(resource_monitor.start())
+        application.state.resource_monitor = resource_monitor
+
         # Watchdog katman 1+2 — sd_notify + DB heartbeat + cross-check.
         watchdog.notify_ready()
         sd_task = asyncio.create_task(watchdog.heartbeat_loop())
@@ -259,6 +269,15 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         disk_monitor_task.cancel()
         try:
             await disk_monitor_task
+        except asyncio.CancelledError:
+            pass
+    # Resource monitor'ı durdur (V11-111 / P-06)
+    if resource_monitor is not None:
+        await resource_monitor.stop()
+    if resource_monitor_task is not None and not resource_monitor_task.done():
+        resource_monitor_task.cancel()
+        try:
+            await resource_monitor_task
         except asyncio.CancelledError:
             pass
     # Archive scheduler'ı durdur

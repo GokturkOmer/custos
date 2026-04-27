@@ -26,9 +26,65 @@ aggregate (~1 GB) + Parquet aylık arşiv (~10 GB/yıl) + OS ve buffer.
 ## 2. OS Kurulumu
 
 1. Ubuntu Server 24.04 LTS minimal kurulum (USB'den).
-2. Kullanıcı adı ve SSH erişimi ayarla.
-3. Sistem güncel olsun: `sudo apt update && sudo apt upgrade -y`.
-4. Sabit IP veya DHCP reservation kur (PLC erişimi için).
+2. **LUKS disk şifrelemesi** — kurulum sırasında "Encrypt the new
+   Ubuntu installation" seçeneğini etkinleştir (bkz. §2.1 LUKS Runbook).
+3. Kullanıcı adı ve SSH erişimi ayarla (sadece **anahtarla giriş**;
+   `setup.sh` parola ve root login'i kapatır — V11-112).
+4. Sistem güncel olsun: `sudo apt update && sudo apt upgrade -y`.
+5. Sabit IP veya DHCP reservation kur (PLC erişimi için).
+6. `timedatectl status` çıktısında `NTP service: active`,
+   `System clock synchronized: yes` görünmeli (V11-113). `setup.sh`
+   bu kontrolü otomatik yapar; manuel doğrulamak için yeterli.
+
+### 2.1 LUKS Runbook (V11-112)
+
+LUKS, mini PC fiziksel olarak çalındığında diskin offline okunmasını
+engeller. Pilot kurulum şartı; **OS kurulum aşamasında** etkinleştirilir
+— sonradan eklemek ancak diski yeniden formatlayarak mümkün.
+
+#### Kurulum sırasında
+
+1. Ubuntu installer "Storage configuration" ekranında
+   **"Encrypt the new Ubuntu installation for security"** kutusunu işaretle.
+2. **Recovery / passphrase** belirle:
+   - **Boot şifresi (passphrase)**: Mini PC her açıldığında istenir.
+     - **Müşteri tutar**: Kasa kapalıysa (saha yetkilisi açar) → operasyon
+       basit, ama PC restart sırasında müşteri yardımı gerekir.
+     - **Geliştirici tutar (önerilen pilot)**: VPN üzerinden uzaktan
+       müdahale + saha SSH ile çözüm. Müşteriye fiziksel kasa anahtarı
+       teslim edilir; LUKS şifresi geliştiricide kalır.
+3. **Recovery key** üret (LUKS otomatik teklif eder veya
+   `cryptsetup luksAddKey` ile sonradan eklenir):
+   - Yazıcı çıktısı + USB metin dosyası — **dışarıda kasada** sakla.
+   - Recovery key kaybolursa disk açılamaz. Yedek bir kopya geliştirici
+     ofisinde saklanır.
+
+#### Doğrulama (kurulum sonrası)
+
+```bash
+# Açılan disk LUKS-mapped mı kontrol et
+sudo lsblk -o NAME,FSTYPE,MOUNTPOINTS
+
+# Beklenen: nvme0n1p3 (veya benzeri) altında "crypto_LUKS" + onun altında
+# ext4 mount /. Eğer nvme0n1p3 doğrudan ext4 ise LUKS yok — yeniden kur.
+
+sudo cryptsetup status <crypt_dev>
+# "type: LUKS2", "cipher: aes-xts-plain64" görünmeli.
+```
+
+#### Recovery key ekleme (sonradan)
+
+```bash
+# Mevcut passphrase ile yeni anahtar slot ekle
+sudo cryptsetup luksAddKey /dev/nvme0n1p3
+# Mevcut şifre sorulur, ardından yeni recovery passphrase iki kez
+sudo cryptsetup luksDump /dev/nvme0n1p3 | grep "Key Slot"
+# Slot 0: ENABLED (boot şifresi), Slot 1: ENABLED (recovery)
+```
+
+**Uyarı:** LUKS aktivasyonu **sadece OS kurulumunda** yapılır. Mevcut
+sistem üzerinde root partition'ı şifrelemek için disk tam yedeği +
+yeniden kurulum gerekir. Pilot kurulumdan sonra bu adım atlanmamalıdır.
 
 ---
 

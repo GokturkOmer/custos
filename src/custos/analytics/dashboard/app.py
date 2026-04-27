@@ -2802,6 +2802,10 @@ async def settings_page(request: Request) -> HTMLResponse:
     # P-04: Global bakım modu aktif mi? Settings sayfası ana panel + banner.
     global_maint = _global_maintenance_state(retention)
 
+    # P-06 (V11-109): Backup durumu — son pg_dump + config_json bilgisi.
+    # Developer-only "Yedekleme" bölümünde gösterilir.
+    backup_status = _get_backup_status()
+
     ctx = _base_context(
         page_title="Settings",
         active_nav="/dashboard/settings",
@@ -2825,6 +2829,9 @@ async def settings_page(request: Request) -> HTMLResponse:
         avm_pack_missing=avm_pack_missing,
         avm_pack_entries=avm_pack_entries,
         global_maintenance=global_maint,
+        backup_status=backup_status,
+        resource_cpu_warn_pct=retention.resource_cpu_warn_pct,
+        resource_ram_warn_pct=retention.resource_ram_warn_pct,
     )
     return templates.TemplateResponse(request, "pages/settings.html", ctx)
 
@@ -2875,6 +2882,152 @@ def _disk_usage_to_dict(usage: DiskUsage) -> dict[str, Any]:
     }
 
 
+# --- P-06 (V11-109): Backup durumu + manuel tetik ---
+
+# Backup dizinleri — setup.sh /var/custos/backup altinda kurar. Dev makinesinde
+# dizin yoksa _get_backup_status sessizce bos doner, UI "Henuz yedek yok" yazar.
+_BACKUP_PG_DIR = Path("/var/custos/backup/pg")
+_BACKUP_CONFIG_DIR = Path("/var/custos/backup/config")
+
+# Manuel "Simdi yedek al" butonu icin script yollari. Production'da
+# /opt/custos/scripts/, dev'de repo kokunden cozulur (parents[4] = repo root).
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+_BACKUP_PG_SCRIPT = _PROJECT_ROOT / "scripts" / "backup_pg_dump.sh"
+_BACKUP_CONFIG_SCRIPT = _PROJECT_ROOT / "scripts" / "backup_config_json.py"
+
+
+def _format_backup_file(path: Path) -> dict[str, Any]:
+    """Dosya icin tarih + boyut bilgisini settings template'i icin hazirlar."""
+    st = path.stat()
+    size_mb = st.st_size / (1024 * 1024)
+    mtime_utc = datetime.fromtimestamp(st.st_mtime, tz=UTC)
+    mtime_local = mtime_utc.astimezone(ZoneInfo("Europe/Istanbul"))
+    return {
+        "name": path.name,
+        "mtime": mtime_local.strftime("%Y-%m-%d %H:%M"),
+        "size_mb": round(size_mb, 2),
+    }
+
+
+def _get_backup_status() -> dict[str, Any]:
+    """Son pg_dump + config_json yedeklerinin ozet bilgisini doner.
+
+    Production'da /var/custos/backup/{pg,config} mevcut. Dev makinesinde dizin
+    yoksa bos doner — UI "Henuz yedek yok" yazar.
+    """
+    pg_files: list[Path] = []
+    config_files: list[Path] = []
+    if _BACKUP_PG_DIR.exists():
+        pg_files = sorted(
+            _BACKUP_PG_DIR.glob("custos-*.sql.gz"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    if _BACKUP_CONFIG_DIR.exists():
+        config_files = sorted(
+            _BACKUP_CONFIG_DIR.glob("config-*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    return {
+        "last_pg_dump": _format_backup_file(pg_files[0]) if pg_files else None,
+        "pg_dump_count": len(pg_files),
+        "last_config_json": (
+            _format_backup_file(config_files[0]) if config_files else None
+        ),
+        "config_json_count": len(config_files),
+    }
+
+
+@router.post(
+    "/settings/backup/now",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def trigger_manual_backup(request: Request) -> RedirectResponse:
+    """Manuel "Simdi yedek al" — pg_dump + config_json paralel tetikler.
+
+    HTTP response yedek tamamlanana kadar bekler (pilot olceginde pg_dump
+    < 30 sn, config_json < 5 sn). Buyuk DB'lerde fire-and-forget'a gecirilir.
+    Audit log her iki sonucu kaydeder.
+    """
+    db = _get_db(request)
+    session: Session | None = getattr(request.state, "session", None)
+    user_label = session.username if session is not None else "system"
+
+    errors: list[str] = []
+
+    # pg_dump — bash script
+    if _BACKUP_PG_SCRIPT.exists():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bash",
+                str(_BACKUP_PG_SCRIPT),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr_pg = await proc.communicate()
+            if proc.returncode != 0:
+                errors.append(
+                    f"pg_dump: rc={proc.returncode} {stderr_pg.decode()[:200]}",
+                )
+        except Exception as exc:
+            errors.append(f"pg_dump exception: {type(exc).__name__}: {exc}")
+    else:
+        errors.append(f"pg_dump script bulunamadi: {_BACKUP_PG_SCRIPT}")
+
+    # config_json — python script (.venv yoksa sys.executable fallback)
+    venv_python = _PROJECT_ROOT / ".venv" / "bin" / "python"
+    py_executable = str(venv_python) if venv_python.exists() else "python"
+    if _BACKUP_CONFIG_SCRIPT.exists():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                py_executable,
+                str(_BACKUP_CONFIG_SCRIPT),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr_cfg = await proc.communicate()
+            if proc.returncode != 0:
+                errors.append(
+                    f"config_json: rc={proc.returncode} {stderr_cfg.decode()[:200]}",
+                )
+        except Exception as exc:
+            errors.append(f"config_json exception: {type(exc).__name__}: {exc}")
+    else:
+        errors.append(f"config_json script bulunamadi: {_BACKUP_CONFIG_SCRIPT}")
+
+    # Audit log + redirect (?ok=1 / ?error=...)
+    if errors:
+        await db.insert_audit_log(
+            AuditLogEntry(
+                category="backup",
+                action="manual_backup_failed",
+                entity_type="user",
+                entity_id=user_label,
+                detail="; ".join(errors)[:500],
+            ),
+        )
+        return RedirectResponse(
+            url="/dashboard/settings?backup_error=1#backup",
+            status_code=303,
+        )
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="backup",
+            action="manual_backup_ok",
+            entity_type="user",
+            entity_id=user_label,
+            detail="pg_dump + config_json tetiklendi",
+        ),
+    )
+    return RedirectResponse(
+        url="/dashboard/settings?backup_ok=1#backup",
+        status_code=303,
+    )
+
+
 @router.post("/settings/retention", response_class=HTMLResponse, dependencies=[_DEVELOPER_DEP])
 async def update_retention_settings(
     request: Request,
@@ -2918,6 +3071,50 @@ async def update_retention_settings(
         ),
     )
     return RedirectResponse(url="/dashboard/settings", status_code=303)
+
+
+@router.post(
+    "/settings/resource-thresholds",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def update_resource_thresholds(
+    request: Request,
+    cpu_warn_pct: int = Form(...),
+    ram_warn_pct: int = Form(...),
+) -> RedirectResponse:
+    """CPU + RAM uyari esiklerini gunceller (V11-111 / P-06).
+
+    Range 50-99 — DB CHECK constraint server-side dogrular; UI 70-95 onerir.
+    Yeni esikler bir sonraki ResourceMonitor tick'inde (60 sn) etkili olur.
+    """
+    db = _get_db(request)
+    if not (50 <= cpu_warn_pct <= 99) or not (50 <= ram_warn_pct <= 99):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Esik 50-99 araliginda olmali (CPU={cpu_warn_pct}, "
+                f"RAM={ram_warn_pct})"
+            ),
+        )
+    await db.update_retention_config(
+        resource_cpu_warn_pct=cpu_warn_pct,
+        resource_ram_warn_pct=ram_warn_pct,
+        updated_by="user",
+    )
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="settings",
+            action="resource_thresholds_updated",
+            entity_type="retention_config",
+            entity_id="1",
+            detail=f"CPU={cpu_warn_pct}% RAM={ram_warn_pct}%",
+        ),
+    )
+    return RedirectResponse(
+        url="/dashboard/settings?resource_ok=1#resource",
+        status_code=303,
+    )
 
 
 @router.get("/api/system-health", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])

@@ -1,6 +1,6 @@
 """Custos sağlık kontrolü.
 
-7 kontrol çalıştırır ve exit 0 (hepsi OK) / 1 (en az bir fail) döner.
+8 kontrol çalıştırır ve exit 0 (hepsi OK) / 1 (en az bir fail) döner.
 
 Kullanım:
     python scripts/healthcheck.py              # Human-readable
@@ -14,6 +14,7 @@ Kontroller:
     5. vapid_keys_present     — CUSTOS_VAPID_{PRIVATE,PUBLIC}_KEY dolu mu
     6. disk_free              — /var/custos için ≥%15 boş alan
     7. heartbeat_freshness    — service_heartbeats max yaş ≤60s (V11-105/K13)
+    8. ntp_synced             — timedatectl NTPSynchronized=yes (V11-113/P-06)
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import argparse
 import asyncio
 import json
 import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -38,6 +40,7 @@ DISK_MOUNT_POINT = "/var/custos"
 DISK_MIN_FREE_PCT = 15.0
 CONNECT_TIMEOUT_SEC = 5.0
 HEARTBEAT_MAX_AGE_SEC = 60.0  # V11-105 — yeşil eşik (warn 60-180, crit >180)
+NTP_TIMEDATECTL_TIMEOUT_SEC = 3.0  # V11-113 — local komut, kısa timeout yeterli
 
 
 class CheckResult(TypedDict):
@@ -290,8 +293,69 @@ async def check_heartbeat_freshness() -> CheckResult:
         }
 
 
+def check_ntp_synced() -> CheckResult:
+    """NTP senkron mu — ``timedatectl show --property=NTPSynchronized`` (V11-113).
+
+    ``timedatectl`` Ubuntu/systemd default. Çıktı:
+        NTPSynchronized=yes  → ok
+        NTPSynchronized=no   → fail (saat sapması alarm timestamp'ini bozar)
+
+    Sistem ``timedatectl`` desteklemiyorsa (container/WSL2) fail döner —
+    pilot mini PC bare-metal Ubuntu, sorun olmaması gerekiyor.
+    """
+    try:
+        result = subprocess.run(
+            ["timedatectl", "show", "--property=NTPSynchronized", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=NTP_TIMEDATECTL_TIMEOUT_SEC,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {
+            "name": "ntp_synced",
+            "status": "fail",
+            "detail": "timedatectl bulunamadı — systemd-timesyncd kurulu mu?",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "name": "ntp_synced",
+            "status": "fail",
+            "detail": (
+                f"timedatectl {NTP_TIMEDATECTL_TIMEOUT_SEC:.0f}s içinde yanıt vermedi"
+            ),
+        }
+    except Exception as exc:
+        return {
+            "name": "ntp_synced",
+            "status": "fail",
+            "detail": f"{type(exc).__name__}: {exc}",
+        }
+    if result.returncode != 0:
+        return {
+            "name": "ntp_synced",
+            "status": "fail",
+            "detail": f"timedatectl rc={result.returncode}: {result.stderr.strip()[:120]}",
+        }
+    value = result.stdout.strip().lower()
+    if value == "yes":
+        return {
+            "name": "ntp_synced",
+            "status": "ok",
+            "detail": "timedatectl NTPSynchronized=yes",
+        }
+    return {
+        "name": "ntp_synced",
+        "status": "fail",
+        "detail": (
+            f"NTP senkron değil (NTPSynchronized={value or 'bos'}) — "
+            f"`timedatectl set-ntp true` deneyin veya birkaç dakika bekleyin"
+        ),
+    }
+
+
 async def run_all_checks() -> list[CheckResult]:
-    """7 kontrolü sırayla çalıştırır. DB bağlantısı yoksa migration/extension de fail olur."""
+    """8 kontrolü sırayla çalıştırır. DB bağlantısı yoksa migration/extension de fail olur."""
     return [
         await check_db_connect(),
         await check_timescaledb_extension(),
@@ -300,6 +364,7 @@ async def run_all_checks() -> list[CheckResult]:
         check_vapid_keys_present(),
         check_disk_free(),
         await check_heartbeat_freshness(),
+        check_ntp_synced(),
     ]
 
 

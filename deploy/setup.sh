@@ -47,7 +47,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # --- 2. Pre-flight sistem kontrolleri ---
-echo "[1/13] Sistem onkosullari kontrol ediliyor..."
+echo "[1/17] Sistem onkosullari kontrol ediliyor..."
 
 # Ubuntu versiyon — 22.04+ zorunlu, 24.04 onerilen
 if ! command -v lsb_release >/dev/null 2>&1; then
@@ -103,9 +103,9 @@ fi
 echo "  Disk bos: ${AVAIL_GB} GB — OK."
 
 # --- 3. APT repo'lari — deadsnakes PPA (Python 3.12) + PGDG (PG 16) + TimescaleDB ---
-# Tum repo eklemeleri TEK apt-get update ile sonlanir, paket kurulumu [3/13]'de
+# Tum repo eklemeleri TEK apt-get update ile sonlanir, paket kurulumu [3/17]'de
 # tek transaction. Bu dry-run'daki "4 kez rerun" sorununu giderir (kalem 13).
-echo "[2/13] APT repo'lari hazirlaniyor..."
+echo "[2/17] APT repo'lari hazirlaniyor..."
 
 # Temel repo araclari (sonraki repo eklemeleri icin gerekli)
 apt-get update -qq
@@ -151,7 +151,7 @@ apt-get update -qq
 # postgresql-16 explicit (kalem 8) — meta paket "postgresql" PGDG ile latest
 # (PG 18'e) yonleniyordu, cluster upgrade dialog'u tetikliyordu.
 # timescaledb-2-postgresql-16 TimescaleDB repo ile ayni transaction'a eklendi.
-echo "[3/13] Sistem paketleri kuruluyor (Python ${PYTHON_VERSION} + PG ${PG_VERSION} + TimescaleDB)..."
+echo "[3/17] Sistem paketleri kuruluyor (Python ${PYTHON_VERSION} + PG ${PG_VERSION} + TimescaleDB)..."
 apt-get install -y -qq \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
     postgresql-${PG_VERSION} postgresql-client-${PG_VERSION} \
@@ -167,7 +167,7 @@ echo "  Paketler kuruldu."
 #      dolu -> uyari + exit 2 (kullanici manuel karar versin, Q2).
 #   2. PG 16/main yok veya port 5432 degil -> dropcluster + createcluster.
 #   3. timescaledb-tune explicit --pg-config ile preload + restart.
-echo "[4/13] PostgreSQL ${PG_VERSION} cluster hazirlaniyor..."
+echo "[4/17] PostgreSQL ${PG_VERSION} cluster hazirlaniyor..."
 
 if command -v pg_lsclusters >/dev/null 2>&1; then
     # PG 14/main boslugu (kalem 10, Q2): user DB sayisi (postgres/template0/template1 haric)
@@ -227,7 +227,7 @@ systemctl restart postgresql@${PG_VERSION}-main
 echo "  TimescaleDB preload aktif, PG ${PG_VERSION} cluster hazir."
 
 # --- 6. Custos kullanicisi ---
-echo "[5/13] Custos kullanicisi hazirlaniyor..."
+echo "[5/17] Custos kullanicisi hazirlaniyor..."
 if ! id "$CUSTOS_USER" &>/dev/null; then
     useradd --system --create-home --shell /bin/bash "$CUSTOS_USER"
     echo "  Kullanici '$CUSTOS_USER' olusturuldu."
@@ -242,7 +242,7 @@ fi
 usermod -aG systemd-journal "$CUSTOS_USER"
 
 # --- 7. Kurulum dizinleri + veri/log klasorleri ---
-echo "[6/13] Kurulum ve veri dizinleri hazirlaniyor..."
+echo "[6/17] Kurulum ve veri dizinleri hazirlaniyor..."
 mkdir -p "$INSTALL_DIR"
 if [[ -d "$(dirname "$0")/../src" ]]; then
     # shopt dotglob: `*` glob'u .env.example gibi dotfile'lari da kapsasin (kalem 7).
@@ -278,7 +278,7 @@ echo "  $INSTALL_DIR, $ARCHIVE_DIR, $BACKUP_DIR, $LOG_DIR hazir."
 #   - setuptools<82 kisitlamasi +cpu wheel'de yok (kalem 12);
 #   - A3 denetim setuptools>=78.1.1 korunur (PYSEC-2025-49 path-traversal RCE);
 #   - sentence-transformers + faiss otomatik CPU backend.
-echo "[7/13] Python sanal ortami kuruluyor (torch CPU-only wheel)..."
+echo "[7/17] Python sanal ortami kuruluyor (torch CPU-only wheel)..."
 if [[ ! -d "$INSTALL_DIR/.venv" ]]; then
     sudo -u "$CUSTOS_USER" python${PYTHON_VERSION} -m venv "$INSTALL_DIR/.venv"
 fi
@@ -305,7 +305,7 @@ echo "  Bagimoliklar yuklendi (torch 2.11.0+cpu)."
 #   custos_admin → migration / DDL owner (alembic)
 #   custos_app   → runtime / sadece DML (uvicorn + critical loop)
 # Runtime credential sizinca DROP/ALTER yetkisi yok — blast radius kucuk.
-echo "[8/13] Veritabani hazirlaniyor (custos_admin + custos_app)..."
+echo "[8/17] Veritabani hazirlaniyor (custos_admin + custos_app)..."
 DB_EXISTS=0
 if sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw custos; then
     DB_EXISTS=1
@@ -426,7 +426,7 @@ SQL
 fi
 
 # --- 10. Seed — AVM Template Pack + bakim checklist'leri ---
-echo "[9/13] Seed script'leri calistiriliyor..."
+echo "[9/17] Seed script'leri calistiriliyor..."
 # F9 raporu karari: idempotent upsert, hata durumunda uyari ver ama exit etme
 # (sablonlar sonradan dashboard API'sinden de tetiklenebilir).
 if ! sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
@@ -439,7 +439,7 @@ if ! sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
 fi
 
 # --- 11. VAPID anahtari (otomatik uret + .env'e yaz) ---
-echo "[10/13] VAPID anahtarlari kontrol ediliyor..."
+echo "[10/17] VAPID anahtarlari kontrol ediliyor..."
 if ! grep -qE '^CUSTOS_VAPID_PRIVATE_KEY=.+' "$INSTALL_DIR/.env"; then
     echo "  VAPID anahtarlari uretiliyor..."
     sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
@@ -453,7 +453,7 @@ fi
 # adiminda). Burada ilk developer hesabi 'gokturk' olusturulur. Parola
 # rastgele uretilir, .env'e CUSTOS_DEV_INITIAL_PASSWORD anahtariyla yazilir.
 # Idempotent: ON CONFLICT DO NOTHING — yeniden calistirilinca duplike olmaz.
-echo "[11/13] Bootstrap developer user olusturuluyor..."
+echo "[11/17] Bootstrap developer user olusturuluyor..."
 if ! grep -qE '^CUSTOS_DEV_INITIAL_PASSWORD=.+' "$INSTALL_DIR/.env"; then
     # 20 karakter URL-safe rastgele parola (slash/+ /= karakterleri ayikla)
     DEV_PW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)
@@ -495,7 +495,7 @@ fi
 # proxy + self-signed sertifika ile şifreleme. Browser TOFU: ilk girişte
 # uyarı, sonraki girişlerde uyarısız (K9: program internete açık olmasın,
 # Let's Encrypt yok).
-echo "[12/13] TLS sertifikasi + Caddy reverse proxy kuruluyor..."
+echo "[12/17] TLS sertifikasi + Caddy reverse proxy kuruluyor..."
 
 # CUSTOS_HOST_IP — .env'den oku, yoksa hostname -I ile tahmin (uyarı ver).
 CUSTOS_HOST_IP=$(grep -E '^CUSTOS_HOST_IP=' "$INSTALL_DIR/.env" 2>/dev/null \
@@ -540,8 +540,97 @@ if [[ -n "$CUSTOS_HOST_IP" ]]; then
     echo "  Caddy aktif: https://${CUSTOS_HOST_IP}/ — uvicorn 127.0.0.1:8000'a proxy."
 fi
 
-# --- 14. Systemd service'ler (analytics + critical) ---
-echo "[13/13] Systemd service'ler kuruluyor..."
+# --- 13. PostgreSQL localhost-only sertlestirme (V11-112 / P-06) ---
+# listen_addresses=localhost ile harici TCP'den DB erisimi reddedilir.
+# pg_hba.conf'a custos_app + custos_admin icin 127.0.0.1/32 host satirlari
+# idempotent eklenir (grep -qF — duplicate satir gelmez).
+echo "[13/17] PG localhost-only sertlestirme..."
+
+sudo -u postgres psql -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+ALTER SYSTEM SET listen_addresses TO 'localhost';
+SQL
+
+PG_HBA="/etc/postgresql/${PG_VERSION}/main/pg_hba.conf"
+if [[ -f "$PG_HBA" ]]; then
+    for ROW in \
+        "host    custos    custos_app      127.0.0.1/32    md5" \
+        "host    custos    custos_admin    127.0.0.1/32    md5"
+    do
+        grep -qF "$ROW" "$PG_HBA" || echo "$ROW" >> "$PG_HBA"
+    done
+    systemctl restart "postgresql@${PG_VERSION}-main"
+    echo "  PG localhost-only aktif (pg_hba.conf'a 127.0.0.1/32 host satirlari eklendi)."
+else
+    echo "  UYARI: $PG_HBA bulunamadi — manuel kontrol et."
+fi
+
+# --- 14. SSH sertlestirme (V11-112 / P-06) ---
+# PasswordAuthentication=no + PermitRootLogin=no ile brute-force riski azalir.
+# Mini PC'ye SSH key ile baglanilir; pilot kurulum oncesi geliştirici anahtari
+# /home/$ADMIN_USER/.ssh/authorized_keys'e ekler (README_PILOT.md).
+echo "[14/17] SSH sertlestirme..."
+
+SSHD_CONFIG="/etc/ssh/sshd_config"
+if [[ -f "$SSHD_CONFIG" ]]; then
+    sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' "$SSHD_CONFIG"
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' "$SSHD_CONFIG"
+    if ! grep -qE '^PasswordAuthentication ' "$SSHD_CONFIG"; then
+        echo "PasswordAuthentication no" >> "$SSHD_CONFIG"
+    fi
+    if ! grep -qE '^PermitRootLogin ' "$SSHD_CONFIG"; then
+        echo "PermitRootLogin no" >> "$SSHD_CONFIG"
+    fi
+    systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
+    echo "  SSH password+root login devre disi."
+else
+    echo "  UYARI: $SSHD_CONFIG bulunamadi — SSH kuruldugundan emin ol."
+fi
+
+# --- 15. NTP dogrulama (V11-113 / P-06) ---
+# systemd-timesyncd Ubuntu default; timedatectl ile aktif edilir.
+# Healthcheck.py NTP kontrolu calisma zamaninda dogrular.
+echo "[15/17] NTP senkronizasyonu..."
+
+if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-ntp true >/dev/null 2>&1 || true
+    sleep 2
+    NTP_SYNCED=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || echo "no")
+    if [[ "$NTP_SYNCED" == "yes" ]]; then
+        echo "  NTP aktif ve senkron (timedatectl NTPSynchronized=yes)."
+    else
+        echo "  UYARI: NTP henuz senkron degil — birkac dakika sonra tekrar kontrol edin:"
+        echo "         timedatectl status"
+    fi
+else
+    echo "  UYARI: timedatectl bulunamadi — sistemde NTP istemcisi var mi kontrol edin."
+fi
+
+# --- 16. Backup dizinleri + cron entries (V11-109 / P-06) ---
+# Haftalik pg_dump (Pazar 03:00) + gunluk config JSON snapshot (her gece 04:00).
+# Restore wizard pilot kurulum oncesi staging'de test edilir.
+echo "[16/17] Backup dizinleri + cron entries..."
+
+BACKUP_PG_DIR="$BACKUP_DIR/pg"
+BACKUP_CONFIG_DIR="$BACKUP_DIR/config"
+mkdir -p "$BACKUP_PG_DIR" "$BACKUP_CONFIG_DIR"
+chown "$CUSTOS_USER:$CUSTOS_USER" "$BACKUP_PG_DIR" "$BACKUP_CONFIG_DIR"
+chmod 750 "$BACKUP_PG_DIR" "$BACKUP_CONFIG_DIR"
+
+# /etc/cron.d/custos-backup — pg_dump (Pazar 03:00) + config JSON (her gece 04:00).
+# Cron user 'custos'; script'ler .env'den DSN'leri okur.
+mkdir -p /var/log/custos
+cat > /etc/cron.d/custos-backup <<EOF
+# Custos yedekleme cron entries — V11-109 / P-06
+# Pazar 03:00 — haftalik tam pg_dump (.env CUSTOS_DB_ADMIN_DSN ile)
+0 3 * * 0 ${CUSTOS_USER} ${INSTALL_DIR}/scripts/backup_pg_dump.sh >> ${LOG_DIR}/backup.log 2>&1
+# Her gece 04:00 — gunluk config JSON snapshot (365 gun retention)
+0 4 * * * ${CUSTOS_USER} ${INSTALL_DIR}/.venv/bin/python ${INSTALL_DIR}/scripts/backup_config_json.py >> ${LOG_DIR}/backup.log 2>&1
+EOF
+chmod 644 /etc/cron.d/custos-backup
+echo "  Cron entries kuruldu: /etc/cron.d/custos-backup (haftalik pg_dump + gunluk config JSON)."
+
+# --- 17. Systemd service'ler (analytics + critical) ---
+echo "[17/17] Systemd service'ler kuruluyor..."
 cp "$INSTALL_DIR/deploy/custos.service" /etc/systemd/system/custos.service
 if [[ -f "$INSTALL_DIR/deploy/custos-critical.service" ]]; then
     cp "$INSTALL_DIR/deploy/custos-critical.service" /etc/systemd/system/custos-critical.service
@@ -553,7 +642,7 @@ if [[ -f "$INSTALL_DIR/deploy/custos-critical.service" ]]; then
 fi
 echo "  custos.service + custos-critical.service aktif edildi."
 
-# --- 14. mDNS (avahi) ---
+# --- 18. mDNS (avahi) ---
 AVAHI_SERVICE="/etc/avahi/services/custos.service"
 if [[ ! -f "$AVAHI_SERVICE" ]]; then
     cat > "$AVAHI_SERVICE" <<AVAHI_EOF
