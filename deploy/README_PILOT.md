@@ -265,15 +265,18 @@ ssh custos@<mini_pc_lan_ip>
 
 ---
 
-## 13. Yedekleme (Opsiyonel)
+## 13. Yedekleme + Restore (Opsiyonel)
+
+### Yedekleme
 
 `/var/custos/backup` dizini setup.sh tarafından hazırlandı. Haftalık
-`pg_dump` cron'u aktifleştirmek için:
+`pg_dump` cron'u aktifleştirmek için (custos_admin ile — owner yetkisi
+yedek bütünlüğü için gerekli):
 
 ```bash
 cat << 'EOF' | sudo tee /etc/cron.d/custos-backup
-# Pazar 03:00 TRT — haftalık Postgres dump
-0 3 * * 0 custos pg_dump -h localhost custos | gzip > /var/custos/backup/custos-$(date +\%Y\%m\%d).sql.gz
+# Pazar 03:00 TRT — haftalık Postgres dump (custos_admin ile)
+0 3 * * 0 custos /opt/custos/.venv/bin/python -c "from custos.shared.config import settings; import sys; sys.stdout.write(settings.database_admin_url)" | xargs -I {} pg_dump --no-owner --no-acl -d {} | gzip > /var/custos/backup/custos-$(date +\%Y\%m\%d).sql.gz
 EOF
 sudo chmod 644 /etc/cron.d/custos-backup
 ```
@@ -281,6 +284,43 @@ sudo chmod 644 /etc/cron.d/custos-backup
 Retention (60 gün+ sil, opsiyonel):
 ```bash
 find /var/custos/backup -name "*.sql.gz" -mtime +60 -delete
+```
+
+### Restore (V11-106 user ayrımı)
+
+DB user ayrımı sayesinde restore **custos_admin** ile yapılır (DDL +
+ownership yetkisi gerekli). custos_app ile restore başarısız olur:
+runtime user'ın CREATE TABLE / GRANT yetkisi yoktur (tasarımın bir
+parçası — credential sızsa restore-tabanlı kötü amaç da engellenir).
+
+```bash
+# 1. Servisleri durdur
+sudo systemctl stop custos-critical.service custos.service
+
+# 2. .env'den admin DSN'i oku
+ADMIN_DSN=$(grep -E '^CUSTOS_DB_ADMIN_DSN=' /opt/custos/.env | cut -d= -f2-)
+
+# 3. DB'yi sil ve yeniden yarat (admin owner)
+sudo -u postgres dropdb custos
+sudo -u postgres createdb --owner=custos_admin custos
+
+# 4. Restore (custos_admin ile)
+gunzip -c /var/custos/backup/custos-YYYYMMDD.sql.gz | psql "$ADMIN_DSN"
+
+# 5. custos_app yetkilerini yeniden ver (drop ettiğin için kayboldular)
+sudo -u postgres psql -d custos <<SQL
+GRANT CONNECT ON DATABASE custos TO custos_app;
+GRANT USAGE ON SCHEMA public TO custos_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO custos_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO custos_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE custos_admin IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO custos_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE custos_admin IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO custos_app;
+SQL
+
+# 6. Servisleri yeniden başlat
+sudo systemctl start custos.service custos-critical.service
 ```
 
 **Pilot notu:** Müşteri isterse bu dizini NAS'a rsync'leyebilir. Custos

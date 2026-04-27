@@ -1,6 +1,12 @@
 """Custos ana giriş noktası.
 
 Analytics loop sürecinin FastAPI uygulamasını başlatır.
+
+Watchdog (V11-105/K13):
+- systemd Type=notify altında her 30 sn ``WATCHDOG=1`` gönderir.
+- Her 30 sn DB'ye ``custos-analytics`` heartbeat'i yazar.
+- Her 120 sn cross-service kontrol — ``custos-critical`` 180s'den eski
+  ise ``alarm_emergency`` audit log + (gelecekte) push.
 """
 
 from __future__ import annotations
@@ -8,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -19,6 +26,7 @@ from custos.analytics.archiver import ParquetArchiver
 from custos.analytics.dashboard.app import _archive_lock, get_static_files_app, router
 from custos.analytics.dashboard.auth_routes import auth_router
 from custos.analytics.disk_telemetry import DiskMonitor
+from custos.analytics.heartbeat import check_heartbeats, write_heartbeat
 from custos.analytics.kpi_engine import KpiEngine
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
 from custos.analytics.templates import (
@@ -29,9 +37,79 @@ from custos.analytics.templates import (
 )
 from custos.analytics.threshold_engine import ThresholdEngine
 from custos.shared.config import settings
-from custos.shared.database import DatabaseInterface, create_database
+from custos.shared.database import AuditLogEntry, DatabaseInterface, create_database
+from custos.shared.watchdog import SystemdWatchdog
 
 logger = structlog.get_logger(logger_name="app")
+
+# Heartbeat aralıkları (V11-105). 30s yazma, 120s cross-check.
+HEARTBEAT_WRITE_INTERVAL: float = 30.0
+HEARTBEAT_CHECK_INTERVAL: float = 120.0
+EXPECTED_SERVICES: tuple[str, ...] = ("custos-analytics", "custos-critical")
+
+
+async def _heartbeat_writer(db: DatabaseInterface) -> None:
+    """Analytics servisinin DB heartbeat'ini periyodik yazar."""
+    while True:
+        await write_heartbeat(db, "custos-analytics")
+        try:
+            await asyncio.sleep(HEARTBEAT_WRITE_INTERVAL)
+        except asyncio.CancelledError:
+            break
+
+
+async def _heartbeat_cross_check(db: DatabaseInterface) -> None:
+    """Cross-service watchdog — diğer servislerin sağlığını izler.
+
+    `custos-critical` 180s'den eski ise audit_log'a `watchdog_stale_service`
+    kaydı düşer. Tekrarlayan alarm önlemek için son alarm zamanı izlenir.
+    """
+    last_alarm_at: dict[str, datetime] = {}
+    # Tekrar alarm aralığı — 5 dk (cross-check 120s, 5dk = 2-3 cycle)
+    alarm_cooldown_seconds = 300.0
+
+    while True:
+        try:
+            healths = await check_heartbeats(db, expected_services=list(EXPECTED_SERVICES))
+            now = datetime.now(UTC)
+            for h in healths:
+                if h.state != "down" or h.service_name == "custos-analytics":
+                    # Kendi heartbeat'imizi alarm üretmek için kullanmayız
+                    # (zaten ölü ise bu task hiç çalışmaz).
+                    continue
+                last = last_alarm_at.get(h.service_name)
+                if last is not None and (now - last).total_seconds() < alarm_cooldown_seconds:
+                    continue
+                age_str = (
+                    f"{h.age_seconds:.0f}s" if h.age_seconds is not None else "hiç"
+                )
+                await db.insert_audit_log(
+                    AuditLogEntry(
+                        category="alarm_emergency",
+                        action="watchdog_stale_service",
+                        entity_type="service",
+                        entity_id=h.service_name,
+                        detail=(
+                            f"Servis cevap vermiyor: {h.service_name} "
+                            f"(yaş={age_str}, eşik=180s)"
+                        ),
+                    ),
+                )
+                last_alarm_at[h.service_name] = now
+                await logger.awarning(
+                    "Cross-service watchdog alarmı",
+                    service_name=h.service_name,
+                    age_seconds=h.age_seconds,
+                )
+        except Exception:
+            await logger.aerror(
+                "Cross-service watchdog kontrolünde hata",
+                exc_info=True,
+            )
+        try:
+            await asyncio.sleep(HEARTBEAT_CHECK_INTERVAL)
+        except asyncio.CancelledError:
+            break
 
 # Anomali model dizini
 _MODELS_DIR = Path("data/models")
@@ -56,6 +134,11 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     archive_scheduler_task: asyncio.Task[None] | None = None
     disk_monitor: DiskMonitor | None = None
     disk_monitor_task: asyncio.Task[None] | None = None
+    # Watchdog (V11-105) — sd_notify + cross-service heartbeat task'ları.
+    watchdog = SystemdWatchdog(interval_seconds=HEARTBEAT_WRITE_INTERVAL)
+    sd_task: asyncio.Task[None] | None = None
+    hb_writer_task: asyncio.Task[None] | None = None
+    hb_check_task: asyncio.Task[None] | None = None
     try:
         await db.connect()
         application.state.db = db
@@ -115,10 +198,26 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         disk_monitor = DiskMonitor(db=db, mount_point=str(_ARCHIVE_DIR.parent))
         disk_monitor_task = asyncio.create_task(disk_monitor.start())
         application.state.disk_monitor = disk_monitor
+
+        # Watchdog katman 1+2 — sd_notify + DB heartbeat + cross-check.
+        watchdog.notify_ready()
+        sd_task = asyncio.create_task(watchdog.heartbeat_loop())
+        hb_writer_task = asyncio.create_task(_heartbeat_writer(db))
+        hb_check_task = asyncio.create_task(_heartbeat_cross_check(db))
+        application.state.watchdog = watchdog
     except Exception:
         await logger.aerror("DB bağlantısı kurulamadı", exc_info=True)
         application.state.db = None
     yield
+    # Watchdog STOPPING + task'ları temizle
+    watchdog.notify_stopping()
+    for task in (sd_task, hb_writer_task, hb_check_task):
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     # Disk monitor'ı durdur
     if disk_monitor is not None:
         await disk_monitor.stop()

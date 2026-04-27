@@ -2,6 +2,11 @@
 
 Settings'ten veritabanı URL'sini alır ve migration'ları
 sync modda çalıştırır.
+
+DB user ayrımı (V11-106/K14): ``settings.database_admin_url`` öncelikli
+okunur (custos_admin = DDL yetkili owner). ``custos_db_admin_dsn`` boş ise
+``database_url`` fallback olur — lokal dev ve eski tek-user kurulumlar
+mevcut akışla devam eder.
 """
 
 from logging.config import fileConfig
@@ -13,8 +18,8 @@ from custos.shared.config import settings
 
 config = context.config
 
-# Settings'ten veritabanı URL'sini inject et
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Migration owner — admin DSN (V11-106). Yoksa legacy database_url fallback.
+config.set_main_option("sqlalchemy.url", settings.database_admin_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

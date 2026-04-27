@@ -8,6 +8,7 @@ yapılmaz.
 from __future__ import annotations
 
 import abc
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
@@ -393,6 +394,21 @@ class Session:
     enabled: bool
     must_change_password: bool
     expires_at: datetime
+
+
+@dataclass
+class ServiceHeartbeat:
+    """Cross-service watchdog heartbeat kaydı (V11-105/K13).
+
+    Her servis (custos-critical, custos analytics) periyodik olarak
+    ``last_heartbeat_at`` yazar. Eski heartbeat (>180s) → ölü servis;
+    analytics loop bu durumu alarm olarak üretir.
+    """
+
+    service_name: str
+    last_heartbeat_at: datetime
+    status: str = "active"  # 'active' / 'stale' / 'down' (informational)
+    metadata: dict[str, Any] | None = None
 
 
 class DatabaseInterface(abc.ABC):
@@ -1177,6 +1193,21 @@ class DatabaseInterface(abc.ABC):
     @abc.abstractmethod
     async def cleanup_expired_sessions(self) -> int:
         """Süresi dolmuş session'ları siler. Dönüş: silinen kayıt sayısı."""
+
+    # --- Service Heartbeats (V11-105/K13) ---
+
+    @abc.abstractmethod
+    async def write_service_heartbeat(
+        self,
+        service_name: str,
+        status: str = "active",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Service heartbeat'i upsert eder (last_heartbeat_at = NOW())."""
+
+    @abc.abstractmethod
+    async def list_service_heartbeats(self) -> list[ServiceHeartbeat]:
+        """Tüm servis heartbeat'lerini döner — cross-service watchdog kontrolü için."""
 
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
@@ -3927,6 +3958,70 @@ class TimescaleDBDatabase(DatabaseInterface):
             return int(result.split()[-1])
         except (ValueError, IndexError):
             return 0
+
+    # --- Service Heartbeats (V11-105/K13) ---
+
+    async def write_service_heartbeat(
+        self,
+        service_name: str,
+        status: str = "active",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Service heartbeat upsert — last_heartbeat_at = NOW()."""
+        pool = self._get_pool()
+        # JSONB için metadata'yı string'e serialize et (None ise NULL).
+        meta_json = json.dumps(metadata) if metadata is not None else None
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO service_heartbeats (
+                    service_name, last_heartbeat_at, status, metadata
+                )
+                VALUES ($1, NOW(), $2, $3::jsonb)
+                ON CONFLICT (service_name) DO UPDATE SET
+                    last_heartbeat_at = NOW(),
+                    status = EXCLUDED.status,
+                    metadata = EXCLUDED.metadata;
+                """,
+                service_name,
+                status,
+                meta_json,
+            )
+
+    async def list_service_heartbeats(self) -> list[ServiceHeartbeat]:
+        """Tüm servis heartbeat kayıtlarını döner."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT service_name, last_heartbeat_at, status, metadata
+                FROM service_heartbeats
+                ORDER BY service_name;
+                """,
+            )
+        result: list[ServiceHeartbeat] = []
+        for row in rows:
+            raw_meta = row["metadata"]
+            # asyncpg JSONB → str (registered codec yoksa); dict de olabilir.
+            meta: dict[str, Any] | None
+            if raw_meta is None:
+                meta = None
+            elif isinstance(raw_meta, dict):
+                meta = raw_meta
+            else:
+                try:
+                    meta = json.loads(raw_meta)
+                except (TypeError, ValueError):
+                    meta = None
+            result.append(
+                ServiceHeartbeat(
+                    service_name=row["service_name"],
+                    last_heartbeat_at=row["last_heartbeat_at"],
+                    status=row["status"],
+                    metadata=meta,
+                )
+            )
+        return result
 
 
 def _row_to_overview_chart_tag(row: asyncpg.Record) -> OverviewChartTag:

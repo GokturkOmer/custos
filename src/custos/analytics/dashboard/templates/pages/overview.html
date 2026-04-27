@@ -63,6 +63,14 @@
     {% include 'partials/disk_usage_widget.html' %}
   </div>
 
+  {# Sistem Sagligi widget — Watchdog cross-service heartbeat (V11-105/K13) #}
+  <div class="bg-bg-surface rounded-sm border border-border-weak p-4"
+       hx-get="/dashboard/api/system-health"
+       hx-trigger="every 30s"
+       hx-swap="innerHTML">
+    {% include 'partials/system_health_widget.html' %}
+  </div>
+
   {# Yaklaşan Bakım widget — sadece pending task varsa görünür #}
   {% if upcoming_maint %}
   <div class="bg-bg-surface rounded-sm border border-border-weak p-4">

@@ -5,12 +5,16 @@ Wants=network-online.target
 Requires=postgresql.service
 
 [Service]
-Type=simple
+# V11-105/K13: Type=notify + WatchdogSec — sd_notify katmani.
+# READY=1 lifespan tarafindan; WATCHDOG=1 her 30 sn heartbeat task'i.
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
 User=custos
 WorkingDirectory=/opt/custos
 EnvironmentFile=/opt/custos/.env
 ExecStart=/opt/custos/.venv/bin/uvicorn custos.__main__:app --host 0.0.0.0 --port 8000
-Restart=on-failure
+Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal

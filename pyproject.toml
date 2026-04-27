@@ -33,6 +33,9 @@ dependencies = [
     "pyyaml>=6.0,<7.0",
     "lxml>=6.1.0",  # Transitive guard — CVE-2026-41066 XXE fix (6.0.4 HIGH)
     "bcrypt>=4.0,<5.0",  # Parola hash (auth — V11-101)
+    # systemd Type=notify + WatchdogSec entegrasyonu (V11-105/K13).
+    # Tek dosyalık küçük paket; sistemd yoksa (lokal dev) modül no-op döner.
+    "sdnotify>=0.3.2,<0.4",
 ]
 
 [project.optional-dependencies]
@@ -107,6 +110,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "bcrypt.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sdnotify.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

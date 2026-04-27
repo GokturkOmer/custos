@@ -73,6 +73,36 @@ def test_should_notify_filters_by_severity() -> None:
     assert _should_notify(sub2, "crit", time(12, 0)) is False
 
 
+def test_should_notify_emergency_bypasses_quiet_hours_and_filter() -> None:
+    """Emergency severity (V11-107/K10): sessiz saat + filtre tamamen bypass."""
+    # Tüm kanallar kapalı + sessiz saat aktif → emergency yine gönderilir
+    sub = _make_sub(
+        notify_warn=False,
+        notify_crit=False,
+        quiet_start=time(0, 0),
+        quiet_end=time(23, 59),
+    )
+    assert _should_notify(sub, "emergency", time(3, 0)) is True
+    assert _should_notify(sub, "emergency", time(12, 0)) is True
+
+
+def test_should_notify_info_uses_warn_fallback() -> None:
+    """Info severity: P-03'e kadar notify_warn kolonu fallback'i."""
+    # warn açık → info da gider
+    sub_warn_on = _make_sub(notify_warn=True, notify_crit=False)
+    assert _should_notify(sub_warn_on, "info", time(12, 0)) is True
+
+    # warn kapalı → info gitmez
+    sub_warn_off = _make_sub(notify_warn=False, notify_crit=True)
+    assert _should_notify(sub_warn_off, "info", time(12, 0)) is False
+
+
+def test_should_notify_unknown_severity_defaults_off() -> None:
+    """Bilinmeyen severity (defansif): gönderme."""
+    sub = _make_sub()
+    assert _should_notify(sub, "unknown", time(12, 0)) is False
+
+
 def test_should_notify_respects_quiet_hours() -> None:
     """Sessiz saatlerde bildirim gitmemeli."""
     sub = _make_sub(

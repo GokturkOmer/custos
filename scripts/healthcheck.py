@@ -1,6 +1,6 @@
 """Custos sağlık kontrolü.
 
-6 kontrol çalıştırır ve exit 0 (hepsi OK) / 1 (en az bir fail) döner.
+7 kontrol çalıştırır ve exit 0 (hepsi OK) / 1 (en az bir fail) döner.
 
 Kullanım:
     python scripts/healthcheck.py              # Human-readable
@@ -13,6 +13,7 @@ Kontroller:
     4. dashboard_http         — http://localhost:8000/dashboard/overview → 200
     5. vapid_keys_present     — CUSTOS_VAPID_{PRIVATE,PUBLIC}_KEY dolu mu
     6. disk_free              — /var/custos için ≥%15 boş alan
+    7. heartbeat_freshness    — service_heartbeats max yaş ≤60s (V11-105/K13)
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ DASHBOARD_URL = "http://localhost:8000/dashboard/overview"
 DISK_MOUNT_POINT = "/var/custos"
 DISK_MIN_FREE_PCT = 15.0
 CONNECT_TIMEOUT_SEC = 5.0
+HEARTBEAT_MAX_AGE_SEC = 60.0  # V11-105 — yeşil eşik (warn 60-180, crit >180)
 
 
 class CheckResult(TypedDict):
@@ -229,8 +231,67 @@ def check_disk_free(mount_point: str = DISK_MOUNT_POINT) -> CheckResult:
     }
 
 
+async def check_heartbeat_freshness() -> CheckResult:
+    """service_heartbeats tablosundaki en eski heartbeat ≤60s olmalı (V11-105)."""
+    try:
+        conn = await asyncio.wait_for(
+            asyncpg.connect(settings.database_url_async),
+            timeout=CONNECT_TIMEOUT_SEC,
+        )
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT service_name,
+                       EXTRACT(EPOCH FROM (NOW() - last_heartbeat_at)) AS age_seconds
+                FROM service_heartbeats
+                ORDER BY last_heartbeat_at;
+                """,
+            )
+        finally:
+            await conn.close()
+
+        if not rows:
+            return {
+                "name": "heartbeat_freshness",
+                "status": "fail",
+                "detail": "service_heartbeats tablosu boş — servisler hiç heartbeat yazmamış",
+            }
+
+        # En eski heartbeat'in yaşı kritik metrik.
+        oldest = max(float(r["age_seconds"]) for r in rows)
+        oldest_name = next(
+            r["service_name"]
+            for r in rows
+            if float(r["age_seconds"]) == oldest
+        )
+
+        if oldest <= HEARTBEAT_MAX_AGE_SEC:
+            return {
+                "name": "heartbeat_freshness",
+                "status": "ok",
+                "detail": (
+                    f"En eski heartbeat: {oldest_name} ({oldest:.0f}s) — "
+                    f"{len(rows)} servis aktif"
+                ),
+            }
+        return {
+            "name": "heartbeat_freshness",
+            "status": "fail",
+            "detail": (
+                f"{oldest_name} heartbeat {oldest:.0f}s eski "
+                f"(>{HEARTBEAT_MAX_AGE_SEC:.0f}s eşiği)"
+            ),
+        }
+    except Exception as exc:
+        return {
+            "name": "heartbeat_freshness",
+            "status": "fail",
+            "detail": f"{type(exc).__name__}: {exc}",
+        }
+
+
 async def run_all_checks() -> list[CheckResult]:
-    """6 kontrolü sırayla çalıştırır. DB bağlantısı yoksa migration/extension de fail olur."""
+    """7 kontrolü sırayla çalıştırır. DB bağlantısı yoksa migration/extension de fail olur."""
     return [
         await check_db_connect(),
         await check_timescaledb_extension(),
@@ -238,6 +299,7 @@ async def run_all_checks() -> list[CheckResult]:
         check_dashboard_http(),
         check_vapid_keys_present(),
         check_disk_free(),
+        await check_heartbeat_freshness(),
     ]
 
 

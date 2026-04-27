@@ -6,16 +6,32 @@
 
 {% block content %}
 <div class="space-y-4">
-  {# Başlık + Threshold Tanımları bağlantısı #}
+  {# Başlık + Severity filtresi + Threshold Tanımları bağlantısı #}
   <div class="flex items-center justify-between">
     <h1 class="text-heading text-text-primary font-semibold">Alarms</h1>
-    <a href="/dashboard/thresholds"
-       class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
-              bg-bg-elevated text-text-secondary border border-border-weak rounded-md
-              hover:text-text-primary hover:border-border-medium transition-colors">
-      {{ icon_inline('sliders', class='w-4 h-4') }}
-      Threshold Tanımları
-    </a>
+    <div class="flex items-center gap-2">
+      {# 4-tier severity filtresi (V11-107). Sayfa GET param ile filtrelenir. #}
+      <form method="get" action="/dashboard/alarms" class="inline-flex items-center gap-2">
+        <label for="severity-filter" class="text-small text-text-secondary">Severity:</label>
+        <select id="severity-filter" name="severity" onchange="this.form.submit()"
+                class="px-2 py-1 text-small bg-bg-base border border-border-weak rounded-md
+                       text-text-primary
+                       focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+          <option value="" {{ 'selected' if not severity_filter }}>Hepsi</option>
+          <option value="info" {{ 'selected' if severity_filter == 'info' }}>Info</option>
+          <option value="warn" {{ 'selected' if severity_filter == 'warn' }}>Warning</option>
+          <option value="crit" {{ 'selected' if severity_filter == 'crit' }}>Critical</option>
+          <option value="emergency" {{ 'selected' if severity_filter == 'emergency' }}>Emergency</option>
+        </select>
+      </form>
+      <a href="/dashboard/thresholds"
+         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                bg-bg-elevated text-text-secondary border border-border-weak rounded-md
+                hover:text-text-primary hover:border-border-medium transition-colors">
+        {{ icon_inline('sliders', class='w-4 h-4') }}
+        Threshold Tanımları
+      </a>
+    </div>
   </div>
 
   {# Aktif Alarmlar #}
@@ -79,7 +95,13 @@
               <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(a.clear_value) if a.clear_value is not none else '-' }}</td>
               <td class="px-3 py-2 text-cell">
                 {% set sev = threshold_severities.get(a.threshold_id, 'warn') %}
-                {{ status_badge('Critical' if sev == 'crit' else 'Warning', sev) }}
+                {% set sev_label = {
+                  'info': 'Info',
+                  'warn': 'Warning',
+                  'crit': 'Critical',
+                  'emergency': 'Emergency'
+                }.get(sev, sev) %}
+                {{ status_badge(sev_label, sev) }}
               </td>
             </tr>
             {% endfor %}

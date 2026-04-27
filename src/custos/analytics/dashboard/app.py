@@ -451,6 +451,12 @@ async def overview(request: Request) -> HTMLResponse:
     except FileNotFoundError:
         disk_info_init = None
 
+    # Sistem sagligi widget'i ilk render — HTMX polling sonra devraltir.
+    if db_instance is not None:
+        health_ctx = await _build_system_health_context(db_instance)
+    else:
+        health_ctx = {"healths": [], "overall_state": "unknown"}
+
     ctx = _base_context(
         page_title="Overview",
         active_nav="/dashboard/overview",
@@ -461,8 +467,25 @@ async def overview(request: Request) -> HTMLResponse:
         upcoming_maint=upcoming_maint,
         maint_asset_names=maint_asset_names,
         disk_info=disk_info_init,
+        **health_ctx,
     )
     return templates.TemplateResponse(request, "pages/overview.html", ctx)
+
+
+async def _build_system_health_context(db: DatabaseInterface) -> dict[str, Any]:
+    """Sistem sagligi widget'i icin context uretir (V11-105)."""
+    from custos.analytics.heartbeat import check_heartbeats, overall_state
+
+    expected = ["custos-analytics", "custos-critical"]
+    try:
+        healths = await check_heartbeats(db, expected_services=expected)
+        return {
+            "healths": healths,
+            "overall_state": overall_state(healths),
+        }
+    except Exception:
+        # DB hatasi widget'i bozmasin — overall_state=unknown render edilir.
+        return {"healths": [], "overall_state": "unknown"}
 
 
 # --- Overview Chart Slotlari (dinamik) ---
@@ -2237,8 +2260,21 @@ async def threshold_toggle(
 
 @router.get("/alarms", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def alarms_page(request: Request) -> HTMLResponse:
-    """Alarm sayfası — aktif alarmlar ve geçmiş."""
+    """Alarm sayfası — aktif alarmlar ve geçmiş.
+
+    ``severity`` query param: info / warn / crit / emergency (V11-107).
+    Filtre uygulanır threshold_id → severity map'i üzerinden; aktif ve
+    geçmiş listeleri de aynı filtreye tabi.
+    """
     db = _get_db(request)
+
+    # Severity filtresi (4-tier). Bilinmeyen değer → filtre yok (defansif).
+    severity_filter_raw = request.query_params.get("severity") or ""
+    severity_filter = (
+        severity_filter_raw
+        if severity_filter_raw in ("info", "warn", "crit", "emergency")
+        else ""
+    )
 
     # Aktif alarmlar (triggered + acknowledged)
     triggered = await db.list_alarm_events(state="triggered", limit=100)
@@ -2267,6 +2303,19 @@ async def alarms_page(request: Request) -> HTMLResponse:
         if mapping is not None:
             checklist_by_threshold[tid] = mapping.checklist_id
 
+    # Severity filtresi uygula (threshold_id eşlemesi üzerinden)
+    if severity_filter:
+        active_alarms = [
+            a
+            for a in active_alarms
+            if threshold_severities.get(a.threshold_id) == severity_filter
+        ]
+        cleared_alarms = [
+            a
+            for a in cleared_alarms
+            if threshold_severities.get(a.threshold_id) == severity_filter
+        ]
+
     # "Son 7 günde N kez" rozeti için aktif alarm'ların threshold'larının sayısı
     seven_days_ago = datetime.now(UTC) - timedelta(days=7)
     recent_alarm_count: dict[int, int] = {}
@@ -2285,6 +2334,7 @@ async def alarms_page(request: Request) -> HTMLResponse:
         threshold_severities=threshold_severities,
         checklist_by_threshold=checklist_by_threshold,
         recent_alarm_count=recent_alarm_count,
+        severity_filter=severity_filter,
     )
     return templates.TemplateResponse(request, "pages/alarms.html", ctx)
 
@@ -2590,6 +2640,24 @@ async def update_retention_settings(
         ),
     )
     return RedirectResponse(url="/dashboard/settings", status_code=303)
+
+
+@router.get("/api/system-health", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
+async def api_system_health(request: Request) -> HTMLResponse:
+    """Sistem sagligi widget'i (V11-105/K13) — 30 sn HTMX polling.
+
+    Beklenen servisler: ``custos-analytics``, ``custos-critical``.
+    Her birinin son heartbeat'ini DB'den okur, eşik (60/180s) ile
+    durum türetir; widget partial'i render eder.
+    """
+    db = _get_db(request)
+    health_ctx = await _build_system_health_context(db)
+    ctx = {"request": request, **health_ctx}
+    return templates.TemplateResponse(
+        request,
+        "partials/system_health_widget.html",
+        ctx,
+    )
 
 
 @router.get("/api/disk-usage", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])

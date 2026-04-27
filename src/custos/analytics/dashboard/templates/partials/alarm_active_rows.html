@@ -19,7 +19,13 @@
     <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(a.trigger_value) }}</td>
     <td class="px-3 py-2 text-cell">
       {% set sev = threshold_severities.get(a.threshold_id, 'warn') %}
-      {{ status_badge('Critical' if sev == 'crit' else 'Warning', sev) }}
+      {% set sev_label = {
+        'info': 'Info',
+        'warn': 'Warning',
+        'crit': 'Critical',
+        'emergency': 'Emergency'
+      }.get(sev, sev) %}
+      {{ status_badge(sev_label, sev) }}
     </td>
     <td class="px-3 py-2 text-cell">
       {% if a.state == 'triggered' %}

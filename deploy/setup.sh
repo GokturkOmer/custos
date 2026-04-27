@@ -301,53 +301,128 @@ sudo -u "$CUSTOS_USER" \
 echo "  Bagimoliklar yuklendi (torch 2.11.0+cpu)."
 
 # --- 9. Veritabani + .env ---
-echo "[8/12] Veritabani hazirlaniyor..."
+# DB user ayrimi (V11-106/K14): iki PG user kurulur.
+#   custos_admin → migration / DDL owner (alembic)
+#   custos_app   → runtime / sadece DML (uvicorn + critical loop)
+# Runtime credential sizinca DROP/ALTER yetkisi yok — blast radius kucuk.
+echo "[8/12] Veritabani hazirlaniyor (custos_admin + custos_app)..."
 DB_EXISTS=0
 if sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw custos; then
     DB_EXISTS=1
 fi
 
-# .env yoksa: kopyala + rastgele DB sifresi uret + postgres user sifresini ayarla.
-# Mevcutsa dokunma (idempotent — kullanici sifreyi manuel degistirmis olabilir).
+# .env yoksa: kopyala + rastgele iki DSN uret. Mevcutsa dokunma.
 ENV_CREATED=0
 if [[ ! -f "$INSTALL_DIR/.env" ]]; then
     cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
     # openssl ile 32 byte rastgele + URL-safe normalize (/, +, = kaldir).
-    DB_PASS=$(openssl rand -base64 32 | tr -d '\n' | tr -d '=' | tr '/+' '_-')
-    # sed delimiteri | — base64 URL-safe ciktida | yok, guvenli.
-    sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${DB_PASS}|" "$INSTALL_DIR/.env"
+    ADMIN_PW=$(openssl rand -base64 32 | tr -d '\n' | tr -d '=' | tr '/+' '_-')
+    APP_PW=$(openssl rand -base64 32 | tr -d '\n' | tr -d '=' | tr '/+' '_-')
+    # Geriye donuk: POSTGRES_PASSWORD'i da app sifresine ayarla (lokal scriptler
+    # ve eski calistirilmis modullerin POSTGRES_* ile baslamasi yine calissin).
+    sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${APP_PW}|" "$INSTALL_DIR/.env"
+    sed -i "s|^POSTGRES_USER=.*|POSTGRES_USER=custos_app|" "$INSTALL_DIR/.env"
+    # Iki yeni DSN'i .env sonuna ekle (env.example'da yorum olarak duruyor;
+    # buraya gercek degerleri append ediyoruz — yeni anahtarlar sed yerine
+    # echo ile yazilir).
+    {
+        echo ""
+        echo "# --- DB user ayrimi (V11-106) — setup.sh tarafindan uretildi ---"
+        echo "CUSTOS_DB_DSN=postgresql://custos_app:${APP_PW}@localhost:5432/custos"
+        echo "CUSTOS_DB_ADMIN_DSN=postgresql://custos_admin:${ADMIN_PW}@localhost:5432/custos"
+    } >> "$INSTALL_DIR/.env"
     chown "$CUSTOS_USER:$CUSTOS_USER" "$INSTALL_DIR/.env"
     chmod 600 "$INSTALL_DIR/.env"
     ENV_CREATED=1
-    echo "  .env olusturuldu, DB sifresi rastgele uretildi (chmod 600)."
+    echo "  .env olusturuldu, custos_admin + custos_app sifreleri uretildi (chmod 600)."
 else
-    # Mevcut .env'den sifreyi oku (postgres user sifresini esleme icin).
+    # Mevcut .env: yeni DSN var mi? Yoksa: legacy tek-user akisi (geriye uyum).
+    ADMIN_PW=$(grep -E '^CUSTOS_DB_ADMIN_DSN=' "$INSTALL_DIR/.env" | head -1 \
+        | sed -E 's|^CUSTOS_DB_ADMIN_DSN=postgresql://[^:]+:([^@]+)@.*|\1|')
+    APP_PW=$(grep -E '^CUSTOS_DB_DSN=' "$INSTALL_DIR/.env" | head -1 \
+        | sed -E 's|^CUSTOS_DB_DSN=postgresql://[^:]+:([^@]+)@.*|\1|')
+    if [[ -z "$ADMIN_PW" || -z "$APP_PW" ]]; then
+        # Eski tek-user kurulumu (POSTGRES_PASSWORD ile). Kullaniciya bildir;
+        # otomatik ureyemez — manuel migrasyon docs/v1_1_paket_02_*.md'de.
+        echo "  UYARI: Mevcut .env'de CUSTOS_DB_DSN/CUSTOS_DB_ADMIN_DSN bulunamadi."
+        echo "  Eski tek-user (custos) ile devam edilecek; v1.1 user ayrimi icin manuel migrasyon gerekli."
+        ADMIN_PW=""
+        APP_PW=""
+    else
+        echo "  .env zaten mevcut, mevcut admin+app sifreleri okundu."
+    fi
+fi
+
+# Postgres kullanici + DB olustur (idempotent).
+# Yeni DSN'ler varsa: custos_admin owner, custos_app sadece DML.
+# Yoksa: eski 'custos' user akisi (geriye uyum, lokal/dev).
+if [[ -n "$ADMIN_PW" && -n "$APP_PW" ]]; then
+    # custos_admin user — DB owner, DDL yetkili.
+    sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL >/dev/null
+DO \$\$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='custos_admin') THEN
+        CREATE USER custos_admin WITH PASSWORD '${ADMIN_PW}';
+    ELSE
+        ALTER USER custos_admin WITH PASSWORD '${ADMIN_PW}';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='custos_app') THEN
+        CREATE USER custos_app WITH PASSWORD '${APP_PW}';
+    ELSE
+        ALTER USER custos_app WITH PASSWORD '${APP_PW}';
+    END IF;
+END
+\$\$;
+SQL
+    if (( DB_EXISTS == 0 )); then
+        sudo -u postgres createdb --owner=custos_admin custos
+        echo "  Veritabani 'custos' olusturuldu (owner=custos_admin)."
+    else
+        # Mevcut DB'nin owner'i custos olabilir; admin'e devret.
+        sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE custos OWNER TO custos_admin;" >/dev/null
+    fi
+    # custos_app baglanabilir + sema kullanabilir.
+    sudo -u postgres psql -d custos -v ON_ERROR_STOP=1 <<SQL >/dev/null
+GRANT CONNECT ON DATABASE custos TO custos_app;
+GRANT USAGE ON SCHEMA public TO custos_app;
+SQL
+    echo "  custos_admin + custos_app rolleri ve baglanti yetkisi hazir."
+else
+    # Geriye donuk akis: eski 'custos' tek-user.
+    if (( DB_EXISTS == 0 )); then
+        sudo -u postgres createuser --no-superuser --no-createdb --no-createrole custos 2>/dev/null || true
+        sudo -u postgres createdb --owner=custos custos
+        echo "  Veritabani 'custos' olusturuldu (eski tek-user akisi)."
+    fi
     DB_PASS=$(grep -E '^POSTGRES_PASSWORD=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2-)
     if [[ -z "$DB_PASS" ]]; then
         echo "HATA: .env mevcut ama POSTGRES_PASSWORD bos." >&2
         exit 3
     fi
-    echo "  .env zaten mevcut, sifre ondan okundu."
+    sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER custos WITH PASSWORD '${DB_PASS}';" >/dev/null
 fi
 
-# Postgres kullanici + DB olustur (idempotent)
-if (( DB_EXISTS == 0 )); then
-    sudo -u postgres createuser --no-superuser --no-createdb --no-createrole custos 2>/dev/null || true
-    sudo -u postgres createdb --owner=custos custos
-    echo "  Veritabani 'custos' olusturuldu."
-fi
-# Sifre her durumda senkronize edilir (.env ile postgres arasi tutarlilik)
-sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER custos WITH PASSWORD '${DB_PASS}';" >/dev/null
-if (( ENV_CREATED == 1 )); then
-    echo "  PostgreSQL kullanici sifresi .env ile eslesti."
-fi
-
-# Alembic migration
-echo "  Migration calistiriliyor..."
+# Alembic migration — admin DSN ile (alembic/env.py oncelikli okur).
+echo "  Migration calistiriliyor (admin DSN)..."
 cd "$INSTALL_DIR"
 if ! sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/alembic" upgrade head; then
     echo "HATA: Alembic migration basarisiz." >&2
     exit 3
+fi
+
+# Migration sonrasi custos_app icin DML yetkileri — DDL/GRANT yok, sadece
+# uygulama tablolarinda CRUD. ALTER DEFAULT PRIVILEGES ile ileriki tablolar
+# da otomatik gelir.
+if [[ -n "$ADMIN_PW" && -n "$APP_PW" ]]; then
+    sudo -u postgres psql -d custos -v ON_ERROR_STOP=1 <<SQL >/dev/null
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO custos_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO custos_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE custos_admin IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO custos_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE custos_admin IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO custos_app;
+SQL
+    echo "  custos_app DML yetkileri set edildi (DDL yetkisi YOK)."
 fi
 
 # --- 10. Seed — AVM Template Pack + bakim checklist'leri ---

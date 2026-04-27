@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     log_level: str = "INFO"
 
+    # DB user ayrımı (V11-106/K14). Yeni kurulumlarda setup.sh iki ayrı user
+    # ve iki DSN üretir:
+    #   custos_db_dsn        → runtime (custos_app, sadece DML — DDL yetkisi yok)
+    #   custos_db_admin_dsn  → migration (custos_admin, owner — DDL/GRANT/REVOKE)
+    # Geriye dönük uyum: ikisi de boş ise klasik POSTGRES_* değişkenlerinden
+    # database_url üzerinden tek user deseni kullanılır (lokal dev, mevcut
+    # pilot-öncesi kurulumlar). alembic/env.py admin DSN'i öncelikli okur.
+    custos_db_dsn: str = ""
+    custos_db_admin_dsn: str = ""
+
     # VAPID push bildirim ayarları
     custos_vapid_private_key: str = ""
     custos_vapid_public_key: str = ""
@@ -78,7 +88,15 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """PostgreSQL bağlantı URL'sini döndürür (client_encoding=utf8 dahil)."""
+        """PostgreSQL bağlantı URL'sini döndürür (client_encoding=utf8 dahil).
+
+        Öncelik:
+        1. ``custos_db_dsn`` (yeni runtime DSN, V11-106 — query string olarak
+           ``client_encoding=utf8`` eklenir).
+        2. POSTGRES_* legacy değişkenleri (eski tek-user deseni, dev/lokal).
+        """
+        if self.custos_db_dsn:
+            return _ensure_client_encoding(self.custos_db_dsn)
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}"
@@ -88,11 +106,41 @@ class Settings(BaseSettings):
     @property
     def database_url_async(self) -> str:
         """asyncpg için bağlantı URL'sini döndürür (postgresql:// şeması)."""
+        if self.custos_db_dsn:
+            return _strip_query(self.custos_db_dsn)
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}"
             f"/{self.postgres_db}"
         )
+
+    @property
+    def database_admin_url(self) -> str:
+        """Migration DSN — alembic/env.py tarafından kullanılır (V11-106).
+
+        ``custos_db_admin_dsn`` tanımlıysa onu döner (DDL/GRANT yetkili
+        custos_admin user'ı). Yoksa ``database_url`` fallback (lokal dev,
+        eski tek-user kurulumları) — bu durumda alembic mevcut DSN ile
+        çalışır.
+        """
+        if self.custos_db_admin_dsn:
+            return _ensure_client_encoding(self.custos_db_admin_dsn)
+        return self.database_url
+
+
+def _ensure_client_encoding(dsn: str) -> str:
+    """DSN'in query string'ine ``client_encoding=utf8`` ekler (yoksa)."""
+    if "client_encoding=" in dsn:
+        return dsn
+    sep = "&" if "?" in dsn else "?"
+    return f"{dsn}{sep}client_encoding=utf8"
+
+
+def _strip_query(dsn: str) -> str:
+    """Query string'i kaldırır — asyncpg query string desteklemez."""
+    if "?" in dsn:
+        return dsn.split("?", 1)[0]
+    return dsn
 
 
 settings = Settings()

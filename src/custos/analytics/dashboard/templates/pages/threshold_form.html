@@ -103,6 +103,10 @@
     </div>
 
     {# Severity + Debounce + Hysteresis #}
+    {# Severity 4-tier (V11-107/K10): info < warn < crit < emergency.
+       Emergency seçilince auto-clear bypass + sessiz saat bypass + debounce
+       1 sn override. Yanlış emergency operasyonu zora sokar — JS onay kutusu
+       (severity_emergency_confirm) form submit öncesi kontrol edilir. #}
     <div class="grid grid-cols-3 gap-4">
       <div>
         <label for="severity" class="block text-small font-medium text-text-secondary mb-1">Severity</label>
@@ -111,9 +115,14 @@
                        text-text-primary
                        focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
           {% set sev = threshold.severity if edit_mode else 'warn' %}
+          <option value="info" {{ 'selected' if sev == 'info' }}>Info (bilgi)</option>
           <option value="warn" {{ 'selected' if sev == 'warn' }}>Warning</option>
           <option value="crit" {{ 'selected' if sev == 'crit' }}>Critical</option>
+          <option value="emergency" {{ 'selected' if sev == 'emergency' }}>Emergency (acil)</option>
         </select>
+        <p class="mt-1 text-small text-text-disabled">
+          Emergency: hysteresis bypass, sessiz saat bypass, manuel onay zorunlu.
+        </p>
       </div>
       <div>
         <label for="debounce_seconds" class="block text-small font-medium text-text-secondary mb-1">Debounce (sn)</label>
@@ -151,4 +160,25 @@
     </div>
   </form>
 </div>
+<script>
+  // Emergency severity self-test — yanlış emergency operasyonu zora sokar.
+  // Form submit öncesi ek onay; iptal edilirse submit durur.
+  (function () {
+    const form = document.querySelector('form[action*="thresholds"]');
+    if (!form) return;
+    form.addEventListener('submit', function (event) {
+      const sev = form.querySelector('select[name="severity"]');
+      if (!sev || sev.value !== 'emergency') return;
+      const ok = window.confirm(
+        'Emergency severity seçildi.\n\n' +
+        'Bu severity:\n' +
+        '  - Sessiz saatleri bypass eder\n' +
+        '  - Hysteresis ile auto-clear OLMAZ (manuel onay zorunlu)\n' +
+        '  - Debounce 1 sn override\n\n' +
+        'Devam etmek istiyor musunuz?'
+      );
+      if (!ok) event.preventDefault();
+    });
+  })();
+</script>
 {% endblock %}

@@ -146,7 +146,15 @@ class ThresholdEngine:
         first_breach = self._debounce_tracker[tid]
         elapsed = (now - first_breach).total_seconds()
 
-        if elapsed < threshold.debounce_seconds:
+        # Emergency severity debounce override — V11-107/K10. Kritik alarmda
+        # yapılandırılmış debounce ne olursa olsun, en fazla 1 sn beklenir.
+        debounce_required = (
+            min(1, threshold.debounce_seconds)
+            if threshold.severity == "emergency"
+            else threshold.debounce_seconds
+        )
+
+        if elapsed < debounce_required:
             # Debounce süresi dolmamış
             return
 
@@ -160,17 +168,24 @@ class ThresholdEngine:
         )
         created = await self._db.insert_alarm_event(event)
 
-        # Audit log
+        # Audit log — emergency severity'de "emergency_alarm_triggered"
+        # kategorisinde ayrılır (filtrelemede ayrı kanal).
+        audit_category = (
+            "alarm_emergency" if threshold.severity == "emergency" else "alarm"
+        )
         await self._db.insert_audit_log(
             AuditLogEntry(
-                category="alarm",
-                action="triggered",
+                category=audit_category,
+                action="emergency_alarm_triggered"
+                if threshold.severity == "emergency"
+                else "triggered",
                 entity_type="threshold",
                 entity_id=str(tid),
                 detail=(
                     f"Alarm tetiklendi: {threshold.name} "
                     f"(tag={threshold.tag_id}, değer={value:.2f}, "
-                    f"eşik={threshold.set_point:.2f}, yön={threshold.direction})"
+                    f"eşik={threshold.set_point:.2f}, yön={threshold.direction}, "
+                    f"severity={threshold.severity})"
                 ),
             ),
         )
@@ -216,6 +231,12 @@ class ThresholdEngine:
         """Eşik aşılmamış ama aktif alarm var — hysteresis kontrolü yap."""
         assert threshold.id is not None
         assert alarm.id is not None
+
+        # Emergency severity auto-clear bypass — V11-107/K10. Yanlışlıkla
+        # tetiklenen emergency'nin sessizce temizlenmesi hayati riski
+        # gizleyebilir; operatörün manuel onaylaması zorunlu (alarms sayfası).
+        if threshold.severity == "emergency":
+            return
 
         can_clear = _can_clear_with_hysteresis(threshold, value)
 

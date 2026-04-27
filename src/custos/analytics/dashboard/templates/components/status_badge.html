@@ -1,11 +1,14 @@
 {# Durum rozeti macro'su — küçük pill-shaped etiket #}
+{# 4-tier severity (V11-107/K10): info/warn/crit/emergency. Emergency
+   animate-pulse ile dikkat çekecek (manuel ack'e kadar pulse). #}
 {% macro status_badge(text, variant='neutral') %}
 {% set styles = {
-  'ok':      'bg-status-ok/20 text-status-ok',
-  'warn':    'bg-status-warn/20 text-status-warn',
-  'crit':    'bg-status-crit/20 text-status-crit',
-  'info':    'bg-status-info/20 text-status-info',
-  'neutral': 'bg-bg-elevated text-text-secondary'
+  'ok':        'bg-status-ok/20 text-status-ok',
+  'warn':      'bg-status-warn/20 text-status-warn',
+  'crit':      'bg-status-crit/20 text-status-crit',
+  'emergency': 'bg-status-crit/30 text-status-crit animate-pulse font-semibold',
+  'info':      'bg-status-info/20 text-status-info',
+  'neutral':   'bg-bg-elevated text-text-secondary'
 } %}
 <span class="inline-flex items-center px-2 py-0.5 rounded-md text-small font-medium {{ styles.get(variant, styles.neutral) }}">
   {{ text }}

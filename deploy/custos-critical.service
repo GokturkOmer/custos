@@ -5,12 +5,16 @@ Wants=network-online.target
 Requires=postgresql.service custos.service
 
 [Service]
-Type=simple
+# V11-105/K13: Type=notify + WatchdogSec — sd_notify katmani.
+# READY=1 main() tarafindan; WATCHDOG=1 her 30 sn heartbeat task'i.
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
 User=custos
 WorkingDirectory=/opt/custos
 EnvironmentFile=/opt/custos/.env
 ExecStart=/opt/custos/.venv/bin/python -m custos.critical
-Restart=on-failure
+Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal

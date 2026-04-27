@@ -1,0 +1,59 @@
+{% from 'components/icon.html' import icon_inline %}
+
+{# Watchdog "Sistem Sagligi" widget'i (V11-105/K13).
+   30 sn HTMX polling ile yenilenir. Servis listesi:
+     - healthy → yesil rozet
+     - stale   → sari rozet
+     - down    → kirmizi rozet (animate-pulse)
+   overall_state: down > stale > healthy. #}
+{% if overall_state == 'down' %}
+  {% set bar_cls = 'bg-status-crit' %}
+  {% set text_cls = 'text-status-crit' %}
+  {% set label = 'Servisler: KRITIK' %}
+  {% set extra = 'animate-pulse' %}
+{% elif overall_state == 'stale' %}
+  {% set bar_cls = 'bg-status-warn' %}
+  {% set text_cls = 'text-status-warn' %}
+  {% set label = 'Servisler: Yavas' %}
+  {% set extra = '' %}
+{% elif overall_state == 'healthy' %}
+  {% set bar_cls = 'bg-status-ok' %}
+  {% set text_cls = 'text-status-ok' %}
+  {% set label = 'Servisler: Saglikli' %}
+  {% set extra = '' %}
+{% else %}
+  {% set bar_cls = 'bg-bg-elevated' %}
+  {% set text_cls = 'text-text-disabled' %}
+  {% set label = 'Servisler: Olculemedi' %}
+  {% set extra = '' %}
+{% endif %}
+
+<div class="flex items-center justify-between {{ extra }}">
+  <span class="text-small text-text-secondary">
+    {{ icon_inline('activity', class='w-4 h-4 inline-block mr-1') }}
+    Sistem Sagligi
+  </span>
+  <span class="text-small font-mono {{ text_cls }}">{{ label }}</span>
+</div>
+{% if healths %}
+<div class="mt-2 space-y-1">
+  {% for h in healths %}
+  <div class="flex items-center justify-between text-small">
+    <span class="text-text-secondary">{{ h.service_name }}</span>
+    {% if h.state == 'healthy' %}
+      <span class="text-status-ok">aktif (
+        {%- if h.age_seconds is not none %}{{ '%.0f' | format(h.age_seconds) }}s{% else %}—{% endif -%}
+      )</span>
+    {% elif h.state == 'stale' %}
+      <span class="text-status-warn">yavas (
+        {%- if h.age_seconds is not none %}{{ '%.0f' | format(h.age_seconds) }}s{% else %}—{% endif -%}
+      )</span>
+    {% else %}
+      <span class="text-status-crit font-semibold">olu (
+        {%- if h.age_seconds is not none %}{{ '%.0f' | format(h.age_seconds) }}s{% else %}hic heartbeat yok{% endif -%}
+      )</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}

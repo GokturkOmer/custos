@@ -57,7 +57,14 @@
               </td>
               <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ t.set_point }}</td>
               <td class="px-3 py-2 text-cell">
-                {{ status_badge('Critical' if t.severity == 'crit' else 'Warning', t.severity) }}
+                {# 4-tier severity (V11-107): info / warn / crit / emergency #}
+                {% set sev_label = {
+                  'info': 'Info',
+                  'warn': 'Warning',
+                  'crit': 'Critical',
+                  'emergency': 'Emergency'
+                }.get(t.severity, t.severity) %}
+                {{ status_badge(sev_label, t.severity) }}
               </td>
               <td class="px-3 py-2 text-cell text-text-primary">{{ t.debounce_seconds }}s</td>
               <td class="px-3 py-2 text-cell text-text-primary">{{ t.hysteresis }}</td>

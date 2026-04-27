@@ -4,6 +4,11 @@ Kullanım: python -m custos.critical
 
 Collector'ı başlatır: veritabanından aktif tag'leri yükler
 ve Modbus okuma döngüsünü çalıştırır.
+
+Watchdog (V11-105/K13):
+- systemd Type=notify altında her 30 sn ``WATCHDOG=1`` gönderir.
+- Her 60 sn DB'ye ``service_heartbeats`` upsert'i yapar
+  (cross-service kontrolü analytics loop tarafında).
 """
 
 from __future__ import annotations
@@ -13,12 +18,28 @@ import signal
 
 import structlog
 
+from custos.analytics.heartbeat import write_heartbeat
 from custos.critical.collector import FastPollingBudgetError, ModbusCollector
 from custos.shared.config import settings
-from custos.shared.database import create_database
+from custos.shared.database import DatabaseInterface, create_database
 from custos.shared.logging import configure_logging
+from custos.shared.watchdog import SystemdWatchdog
 
 logger = structlog.get_logger(logger_name="critical")
+
+# Cross-service heartbeat aralığı — analytics CRIT_THRESHOLD (180s) ile
+# uyumlu güvenli üst sınır.
+HEARTBEAT_INTERVAL_SECONDS: float = 60.0
+
+
+async def _heartbeat_loop(db: DatabaseInterface, service_name: str) -> None:
+    """DB'ye periyodik heartbeat yazar — cross-service watchdog için."""
+    while True:
+        await write_heartbeat(db, service_name)
+        try:
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            break
 
 
 async def main() -> None:
@@ -69,9 +90,22 @@ async def main() -> None:
             # Windows'ta add_signal_handler desteklenmez
             pass
 
+    # Watchdog setup — systemd Type=notify + cross-service heartbeat.
+    watchdog = SystemdWatchdog(interval_seconds=30.0)
+    watchdog.notify_ready()
+    sd_task = asyncio.create_task(watchdog.heartbeat_loop())
+    hb_task = asyncio.create_task(_heartbeat_loop(database, "custos-critical"))
+
     try:
         await collector.start()
     finally:
+        watchdog.notify_stopping()
+        for task in (sd_task, hb_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await collector.stop()
         await database.close()
 

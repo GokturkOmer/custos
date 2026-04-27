@@ -36,18 +36,38 @@ def _is_quiet_hour(sub: PushSubscription, now_time: time) -> bool:
 
 
 def _should_notify(sub: PushSubscription, severity: str, now_time: time) -> bool:
-    """Aboneliğe bildirim gönderilmeli mi kontrol eder."""
-    # Sessiz saat kontrolü
+    """Aboneliğe bildirim gönderilmeli mi kontrol eder.
+
+    4-tier severity (V11-107/K10):
+    - ``emergency`` : Sessiz saat ve abonelik filtresi BYPASS — her zaman
+      gönderilir (insan hayatı/operasyon riski).
+    - ``crit``      : ``notify_crit`` boolean'ına bağlı.
+    - ``warn``      : ``notify_warn`` boolean'ına bağlı.
+    - ``info``      : Abonelikte ayrı kolon yok (P-03 eklenecek);
+      şimdilik ``notify_warn`` fallback (info zaten "haberdar et" tier'i).
+
+    Sessiz saat kuralı emergency haricinde uygulanır.
+    """
+    # Emergency: tüm filtreler bypass — gönder.
+    if severity == "emergency":
+        return True
+
+    # Sessiz saat kontrolü (emergency dışındaki tüm tier'ler)
     if _is_quiet_hour(sub, now_time):
         return False
 
     # Severity filtresi
-    if severity == "warn" and not sub.notify_warn:
-        return False
-    if severity == "crit" and not sub.notify_crit:
-        return False
+    if severity == "crit":
+        return sub.notify_crit
+    if severity == "warn":
+        return sub.notify_warn
+    if severity == "info":
+        # P-03'te ``notify_info`` kolonu eklenince bu fallback kalkar.
+        return sub.notify_warn
 
-    return True
+    # Bilinmeyen severity — varsayılan olarak gönderme (constraint
+    # sayesinde 4 değer dışı gelmemeli, defansif).
+    return False
 
 
 async def send_push_notifications(
@@ -75,12 +95,16 @@ async def send_push_notifications(
     # Sessiz saat karsilastirmasi kullanicinin yerel saatinde yapilmali
     local_tz = ZoneInfo(settings.custos_timezone)
     now_time = datetime.now(UTC).astimezone(local_tz).time()
+    is_emergency = severity == "emergency"
     payload = json.dumps(
         {
             "title": title,
             "body": body,
             "tag": f"custos-{severity}",
             "url": "/dashboard/alarms",
+            # Emergency'de browser yüksek öncelik gösterimi — service worker
+            # bu flag'i okuyup vibrate + requireInteraction uygulayabilir.
+            "priority": "high" if is_emergency else "normal",
         }
     )
 

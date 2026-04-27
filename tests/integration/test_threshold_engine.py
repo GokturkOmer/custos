@@ -250,6 +250,79 @@ async def test_engine_low_direction_breach_and_clear(
 
 
 @pytest.mark.usefixtures("_check_db_available")
+async def test_engine_emergency_skips_auto_clear(
+    db: TimescaleDBDatabase,
+) -> None:
+    """Emergency severity (V11-107/K10): hysteresis ile auto-clear OLMAZ.
+
+    Operatör manuel acknowledge yapana kadar alarm açık kalır — kritik
+    yangın/CO/elektrik gibi senaryolarda yanlışlıkla "değer normale döndü
+    sayıldı" hatasını engeller.
+    """
+    await _setup_tag_with_reading(db, "TEST_EMG1", 90.0)
+    threshold = await db.insert_threshold(
+        Threshold(
+            tag_id="TEST_EMG1",
+            name="Emergency Auto-Clear Bypass",
+            direction="high",
+            set_point=80.0,
+            severity="emergency",
+            debounce_seconds=0,
+            hysteresis=5.0,
+        ),
+    )
+    assert threshold.id is not None
+
+    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
+    # Alarm tetikle
+    await engine._check_cycle()
+    await engine._check_cycle()
+    active = await db.get_active_alarm_for_threshold(threshold.id)
+    assert active is not None
+
+    # Değer normale döndü (hysteresis bandının çok altı) — yine de temizlenmemeli
+    await _setup_tag_with_reading(db, "TEST_EMG1", 10.0)
+    await engine._check_cycle()
+    still_active = await db.get_active_alarm_for_threshold(threshold.id)
+    assert still_active is not None  # Emergency: manuel ack zorunlu
+
+
+@pytest.mark.usefixtures("_check_db_available")
+async def test_engine_emergency_uses_audit_category_alarm_emergency(
+    db: TimescaleDBDatabase,
+) -> None:
+    """Emergency tetiklendiğinde audit_log'un category'si 'alarm_emergency' olmalı."""
+    await _setup_tag_with_reading(db, "TEST_EMG2", 95.0)
+    threshold = await db.insert_threshold(
+        Threshold(
+            tag_id="TEST_EMG2",
+            name="Emergency Audit Category",
+            direction="high",
+            set_point=80.0,
+            severity="emergency",
+            debounce_seconds=0,
+        ),
+    )
+    assert threshold.id is not None
+
+    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
+    await engine._check_cycle()
+    await engine._check_cycle()
+
+    # Audit log'u doğrula
+    pool = db._get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT category, action FROM audit_log WHERE entity_id = $1",
+            str(threshold.id),
+        )
+    categories = {r["category"] for r in rows}
+    actions = {r["action"] for r in rows}
+    assert "alarm_emergency" in categories
+    assert "emergency_alarm_triggered" in actions
+
+
+@pytest.mark.usefixtures("_check_db_available")
 async def test_engine_clears_debounce_tracker_when_reading_disappears(
     db: TimescaleDBDatabase,
 ) -> None:
