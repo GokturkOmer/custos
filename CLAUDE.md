@@ -4,7 +4,7 @@ Bu dosyayı her oturumun başında oku ve içindeki kurallara uy. Bu kurallar ta
 
 ## Proje hakkında
 
-Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sensör verisi okur, ML ile anomali tespit eder, alarm üretir. Lokal çalışır, sadece okur (asla yazmaz). Detaylı bilgi için `docs/brief_v1.4.md` dosyasını oku.
+Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sensör verisi okur, ML ile anomali tespit eder, alarm üretir. Lokal çalışır, sadece okur (asla yazmaz). Detaylı bilgi için `docs/brief_v1.7.md` dosyasını oku.
 
 ## Değişmez kurallar
 
@@ -59,7 +59,7 @@ Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sen
 ## Çalışma akışı
 
 1. Görev al
-2. İlgili dosyaları oku (özellikle `CLAUDE.md` ve `docs/brief_v1.2.md`)
+2. İlgili dosyaları oku (özellikle `CLAUDE.md` ve `docs/brief_v1.7.md`)
 3. Uygula
 4. Test et
 5. `ruff check .` ve `mypy src/` temiz mi kontrol et
