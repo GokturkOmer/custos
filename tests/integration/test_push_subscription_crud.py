@@ -120,7 +120,7 @@ async def test_list_push_subscriptions(db: TimescaleDBDatabase) -> None:
 
 @pytest.mark.usefixtures("_check_db_available")
 async def test_update_subscription_settings(db: TimescaleDBDatabase) -> None:
-    """Subscription ayarlarını günceller."""
+    """Subscription ayarlarını günceller (P-03 ile info/emergency/label/enabled)."""
     sub = PushSubscription(
         endpoint="https://test.push/settings1",
         p256dh="set-p256dh",
@@ -133,6 +133,10 @@ async def test_update_subscription_settings(db: TimescaleDBDatabase) -> None:
         updates={
             "notify_warn": False,
             "notify_crit": True,
+            "notify_info": True,
+            "notify_emergency": False,
+            "label": "Ali — Telefon",
+            "enabled": False,
             "quiet_start": time(22, 0),
             "quiet_end": time(7, 0),
         },
@@ -140,6 +144,10 @@ async def test_update_subscription_settings(db: TimescaleDBDatabase) -> None:
     assert updated is not None
     assert updated.notify_warn is False
     assert updated.notify_crit is True
+    assert updated.notify_info is True
+    assert updated.notify_emergency is False
+    assert updated.label == "Ali — Telefon"
+    assert updated.enabled is False
     assert updated.quiet_start == time(22, 0)
     assert updated.quiet_end == time(7, 0)
 
@@ -149,3 +157,51 @@ async def test_update_subscription_settings(db: TimescaleDBDatabase) -> None:
         updates={"notify_warn": False},
     )
     assert result is None
+
+
+@pytest.mark.usefixtures("_check_db_available")
+async def test_subscribe_with_label_and_owner(db: TimescaleDBDatabase) -> None:
+    """P-03: subscribe sırasında label + created_by_user_id atanır."""
+    sub = PushSubscription(
+        endpoint="https://test.push/owner-sub",
+        p256dh="owner-p256dh",
+        auth="owner-auth",
+        label="Ayşe — Laptop",
+        # created_by_user_id NULL — gerçek bir user_id'ye bağlanmadan test.
+    )
+    created = await db.upsert_push_subscription(sub)
+    assert created.label == "Ayşe — Laptop"
+    assert created.enabled is True
+    assert created.notify_info is False  # default
+    assert created.notify_emergency is True  # default
+
+    # get_push_subscription_by_endpoint ile geri okuma
+    fetched = await db.get_push_subscription_by_endpoint("https://test.push/owner-sub")
+    assert fetched is not None
+    assert fetched.label == "Ayşe — Laptop"
+
+
+@pytest.mark.usefixtures("_check_db_available")
+async def test_master_switch_via_retention_config(
+    db: TimescaleDBDatabase,
+) -> None:
+    """P-03: push_global_enabled retention_config singleton üzerinden toggle edilir."""
+    # Default: True
+    cfg = await db.get_retention_config()
+    initial = cfg.push_global_enabled
+
+    # Toggle off
+    updated = await db.update_retention_config(
+        push_global_enabled=False,
+        updated_by="test",
+    )
+    assert updated.push_global_enabled is False
+    # Geri okumada da kalıcı
+    cfg_after = await db.get_retention_config()
+    assert cfg_after.push_global_enabled is False
+
+    # Toggle on geri (test temizliği — diğer testleri etkilemesin)
+    await db.update_retention_config(
+        push_global_enabled=initial,
+        updated_by="test",
+    )

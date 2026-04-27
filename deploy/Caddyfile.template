@@ -1,0 +1,56 @@
+# Custos Caddyfile şablonu — V11-102 / P-03.
+#
+# setup.sh tarafından ${CUSTOS_HOST_IP} yerine pilot mini PC'nin statik IP'si
+# yazılarak /etc/caddy/Caddyfile altına kopyalanır. Bu dosya repo içinde
+# referans olarak tutulur — manuel edit GEREKMİYOR.
+#
+# Davranış:
+#   - 443: TLS termination (self-signed cert), reverse proxy → custos uvicorn
+#   - 80 : HTTPS redirect (HSTS preload öncesi yumuşak geçiş)
+#   - Güvenlik header'ları: HSTS 1 yıl + nosniff + DENY frame
+#
+# Self-signed cert açıklaması:
+#   "tls /etc/custos/tls/cert.pem /etc/custos/tls/key.pem" Caddy'ye verilen
+#   cert/key ile çalışmasını söyler. Caddy'nin otomatik Let's Encrypt akışı
+#   devre dışı (K9: program internete açık olmasın). Browser ilk girişte
+#   "güvenli değil" uyarısı verir; kullanıcı "Devam et" tıklayınca tarayıcı
+#   sertifikayı kaydeder, sonraki girişlerde uyarı gösterilmez (TOFU).
+
+${CUSTOS_HOST_IP}:443 {
+    tls /etc/custos/tls/cert.pem /etc/custos/tls/key.pem
+
+    # Reverse proxy → uvicorn localhost-only dinleyici
+    reverse_proxy 127.0.0.1:8000 {
+        # Web Push / SSE / uzun istekler için akış desteği — analytics loop
+        # background task'leri yanıt akışı kullanmıyor ama gelecekte bozmasın.
+        flush_interval -1
+    }
+
+    # HSTS — 1 yıl. Pilot LAN'da preload'a girmiyor; yanlış sertifikayı
+    # tarayıcı 1 yıl boyunca hatırlar. Reset: rm /etc/custos/tls/* + force regen.
+    header Strict-Transport-Security "max-age=31536000"
+
+    # MIME sniff kapatma — yanlış Content-Type ile XSS önler.
+    header X-Content-Type-Options "nosniff"
+
+    # Clickjacking savunması — Custos kendisi iframe edilmez.
+    header X-Frame-Options "DENY"
+
+    # Çapraz origin XHR'lar için (Custos tek origin'de çalışır, yine de defansif).
+    header Referrer-Policy "same-origin"
+
+    # Server header sızdırma azaltma.
+    header -Server
+}
+
+# HTTP 80 → HTTPS 443 yönlendirme. ":80" yazılırsa Caddy tüm IP'lerde dinler;
+# IP'ye bağlamak network namespace bağımlılıkları için daha temiz.
+http://${CUSTOS_HOST_IP} {
+    redir https://${CUSTOS_HOST_IP}{uri} permanent
+}
+
+# 127.0.0.1 üzerinden gelen istekler (lokal healthcheck) — bunlar HTTPS
+# zorunluluğu olmadan loopback'e doğrudan gidebilir.
+http://127.0.0.1, http://localhost {
+    reverse_proxy 127.0.0.1:8000
+}

@@ -224,7 +224,14 @@ class AnomalyScore:
 
 @dataclass
 class PushSubscription:
-    """Web Push bildirim aboneliği — push_subscriptions tablosunun Python temsili."""
+    """Web Push bildirim aboneliği — push_subscriptions tablosunun Python temsili.
+
+    P-03 ile çoklu alıcı kolonları: ``label`` (insana okunabilir etiket),
+    ``enabled`` (tek-tıkla sustur), ``notify_info`` / ``notify_emergency``
+    (4-tier severity için ayrı kolonlar — info default kapalı, emergency
+    default açık), ``created_by_user_id`` (yetki: Operator sadece kendi
+    aboneliğini düzenler — app-katmanında enforce edilir).
+    """
 
     endpoint: str
     p256dh: str
@@ -233,6 +240,11 @@ class PushSubscription:
     notify_crit: bool = True
     quiet_start: time | None = None
     quiet_end: time | None = None
+    label: str = ""
+    enabled: bool = True
+    notify_info: bool = False
+    notify_emergency: bool = True
+    created_by_user_id: int | None = None
     id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -354,12 +366,17 @@ class RetentionConfig:
     ``auto_clean_enabled=False`` iken TimescaleDB retention policy'si
     ``tag_readings`` ve ``features`` hypertable'larından kaldırılır; kullanıcı
     disk dolana kadar uyarı alır, veri silinmez.
+
+    ``push_global_enabled=False`` master switch — P-03 ile eklendi. Tatil /
+    eğitim sırasında tüm push'lar tek tıkla sustulur (her bir aboneliğin
+    ``enabled`` flag'inden bağımsız, sender erken-dönüşü ile kestirme).
     """
 
     raw_retention_days: int
     auto_clean_enabled: bool
     updated_at: datetime
     updated_by: str
+    push_global_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -870,6 +887,13 @@ class DatabaseInterface(abc.ABC):
         """Tüm push subscription'ları döndürür."""
 
     @abc.abstractmethod
+    async def get_push_subscription_by_endpoint(
+        self,
+        endpoint: str,
+    ) -> PushSubscription | None:
+        """Endpoint ile tek aboneliği döndürür (yetki kontrolü için)."""
+
+    @abc.abstractmethod
     async def update_push_subscription_settings(
         self,
         endpoint: str,
@@ -1111,6 +1135,7 @@ class DatabaseInterface(abc.ABC):
         raw_retention_days: int | None = None,
         auto_clean_enabled: bool | None = None,
         updated_by: str = "user",
+        push_global_enabled: bool | None = None,
     ) -> RetentionConfig:
         """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
 
@@ -1118,6 +1143,8 @@ class DatabaseInterface(abc.ABC):
           hypertable'larından retention policy kaldırılır.
         - ``auto_clean_enabled=True`` → policy yeniden kurulur; varsa önce
           remove edilir (idempotent).
+        - ``push_global_enabled`` (P-03 master switch) sadece satıra yazılır;
+          runtime'da push_sender erken-dönüşle okur.
         - ``raw_retention_days`` değişmişse ve auto-clean açıksa policy
           yeni aralıkla tekrar eklenir.
 
@@ -1477,13 +1504,21 @@ def _row_to_anomaly_score(row: asyncpg.Record) -> AnomalyScore:
     )
 
 
-# İzin verilen güncelleme alanları — Push Subscription (SQL injection önlemi)
+# İzin verilen güncelleme alanları — Push Subscription (SQL injection önlemi).
+# P-03 ile genişledi: label / enabled / notify_info / notify_emergency.
+# ``endpoint``, ``created_by_user_id``, ``p256dh``, ``auth`` whitelist dışında
+# tutuluyor — bunlar abonelik kimliği veya altyapı verisi, kullanıcı UI'dan
+# değiştiremez.
 _ALLOWED_PUSH_SUB_UPDATE_FIELDS: frozenset[str] = frozenset(
     {
         "notify_warn",
         "notify_crit",
+        "notify_info",
+        "notify_emergency",
         "quiet_start",
         "quiet_end",
+        "label",
+        "enabled",
     }
 )
 
@@ -1497,8 +1532,13 @@ def _row_to_push_subscription(row: asyncpg.Record) -> PushSubscription:
         auth=row["auth"],
         notify_warn=row["notify_warn"],
         notify_crit=row["notify_crit"],
+        notify_info=row["notify_info"],
+        notify_emergency=row["notify_emergency"],
         quiet_start=row["quiet_start"],
         quiet_end=row["quiet_end"],
+        label=row["label"],
+        enabled=row["enabled"],
+        created_by_user_id=row["created_by_user_id"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -2922,16 +2962,26 @@ class TimescaleDBDatabase(DatabaseInterface):
         self,
         sub: PushSubscription,
     ) -> PushSubscription:
-        """Push subscription kaydeder veya günceller (endpoint bazlı upsert)."""
+        """Push subscription kaydeder veya günceller (endpoint bazlı upsert).
+
+        Çakışma davranışı (P-03): aynı ``endpoint`` ikinci kez subscribe
+        edilirse cihaz anahtarları (``p256dh``, ``auth``) ve ``label`` /
+        ``created_by_user_id`` güncellenir; mevcut ``enabled`` ve severity
+        tier ayarları korunur (kullanıcının önceki seçimi sıfırlanmasın).
+        """
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "INSERT INTO push_subscriptions "
                 "(endpoint, p256dh, auth, notify_warn, notify_crit, "
-                "quiet_start, quiet_end) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7) "
+                "notify_info, notify_emergency, "
+                "quiet_start, quiet_end, label, enabled, "
+                "created_by_user_id) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) "
                 "ON CONFLICT (endpoint) DO UPDATE SET "
                 "p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, "
+                "label = EXCLUDED.label, "
+                "created_by_user_id = EXCLUDED.created_by_user_id, "
                 "updated_at = NOW() "
                 "RETURNING *",
                 sub.endpoint,
@@ -2939,8 +2989,13 @@ class TimescaleDBDatabase(DatabaseInterface):
                 sub.auth,
                 sub.notify_warn,
                 sub.notify_crit,
+                sub.notify_info,
+                sub.notify_emergency,
                 sub.quiet_start,
                 sub.quiet_end,
+                sub.label,
+                sub.enabled,
+                sub.created_by_user_id,
             )
         assert row is not None
         return _row_to_push_subscription(row)
@@ -2961,6 +3016,21 @@ class TimescaleDBDatabase(DatabaseInterface):
         async with pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM push_subscriptions ORDER BY created_at DESC")
         return [_row_to_push_subscription(row) for row in rows]
+
+    async def get_push_subscription_by_endpoint(
+        self,
+        endpoint: str,
+    ) -> PushSubscription | None:
+        """Endpoint ile tek aboneliği döndürür. Bulunamazsa None."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM push_subscriptions WHERE endpoint = $1",
+                endpoint,
+            )
+        if row is None:
+            return None
+        return _row_to_push_subscription(row)
 
     async def update_push_subscription_settings(
         self,
@@ -3657,7 +3727,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT raw_retention_days, auto_clean_enabled, "
-                "       updated_at, updated_by "
+                "       push_global_enabled, updated_at, updated_by "
                 "FROM retention_config WHERE id = 1",
             )
         # Migration 026 INSERT garantiler ki satır her zaman var; defansif
@@ -3669,6 +3739,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         return RetentionConfig(
             raw_retention_days=int(row["raw_retention_days"]),
             auto_clean_enabled=bool(row["auto_clean_enabled"]),
+            push_global_enabled=bool(row["push_global_enabled"]),
             updated_at=row["updated_at"],
             updated_by=row["updated_by"],
         )
@@ -3678,6 +3749,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         raw_retention_days: int | None = None,
         auto_clean_enabled: bool | None = None,
         updated_by: str = "user",
+        push_global_enabled: bool | None = None,
     ) -> RetentionConfig:
         """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
 
@@ -3690,6 +3762,10 @@ class TimescaleDBDatabase(DatabaseInterface):
             auto_clean_enabled=False → tag_readings + features retention policy
                 remove_retention_policy ile kaldırılır (idempotent).
             auto_clean_enabled=True  → önce remove, sonra add (yeni aralıkla).
+
+        ``push_global_enabled`` (P-03 master switch) sadece satıra yazılır;
+        runtime'da push_sender erken-dönüşle okur (TimescaleDB policy ile
+        ilgisiz).
 
         ``add_retention_policy`` transaction içinde çalışmaya uygun — background
         worker job kaydı oluşturur; TimescaleDB docs'ına göre güvenli.
@@ -3705,18 +3781,21 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "UPDATE retention_config SET "
                 "    raw_retention_days = COALESCE($1, raw_retention_days), "
                 "    auto_clean_enabled = COALESCE($2, auto_clean_enabled), "
+                "    push_global_enabled = COALESCE($4, push_global_enabled), "
                 "    updated_by = $3, "
                 "    updated_at = NOW() "
                 "WHERE id = 1 "
                 "RETURNING raw_retention_days, auto_clean_enabled, "
-                "          updated_at, updated_by",
+                "          push_global_enabled, updated_at, updated_by",
                 raw_retention_days,
                 auto_clean_enabled,
                 updated_by,
+                push_global_enabled,
             )
             assert row is not None, "retention_config satırı güncellenemedi"
             new_days = int(row["raw_retention_days"])
             new_auto = bool(row["auto_clean_enabled"])
+            new_push_global = bool(row["push_global_enabled"])
 
             # TimescaleDB policy senkronu — her iki hypertable da (tag_readings
             # ham veri, features türev) aynı kullanıcı tercihini takip eder.
@@ -3736,11 +3815,13 @@ class TimescaleDBDatabase(DatabaseInterface):
             "Retention config güncellendi",
             raw_retention_days=new_days,
             auto_clean_enabled=new_auto,
+            push_global_enabled=new_push_global,
             updated_by=updated_by,
         )
         return RetentionConfig(
             raw_retention_days=new_days,
             auto_clean_enabled=new_auto,
+            push_global_enabled=new_push_global,
             updated_at=row["updated_at"],
             updated_by=row["updated_by"],
         )

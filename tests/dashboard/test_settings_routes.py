@@ -55,5 +55,41 @@ def test_push_unsubscribe_missing_endpoint() -> None:
 def test_push_test_without_vapid() -> None:
     """VAPID yokken test bildirimi 400 döndürmeli."""
     response = client.post("/dashboard/api/push/test")
-    # VAPID yoksa 400, DB yoksa 503
-    assert response.status_code in (400, 503)
+    # VAPID yoksa 400, DB yoksa 503, auth yoksa 303 (login redirect)
+    assert response.status_code in (303, 400, 503)
+
+
+# --- P-03 yeni endpoint smoke testleri (auth/DB olmadan da pattern doğru) ---
+
+
+def test_push_subscriptions_list_endpoint_exists() -> None:
+    """P-03: GET /api/push/subscriptions endpoint'i tanımlı olmalı."""
+    response = client.get("/dashboard/api/push/subscriptions")
+    # Auth yoksa 303 redirect, DB yoksa 503, başarılıysa 200.
+    # 404 dönerse endpoint hiç eklenmemiş demektir → fail.
+    assert response.status_code in (200, 303, 503)
+
+
+def test_push_master_switch_get_endpoint_exists() -> None:
+    """P-03: GET /api/push/master-switch endpoint'i tanımlı olmalı (Operator+)."""
+    response = client.get("/dashboard/api/push/master-switch")
+    assert response.status_code in (200, 303, 503)
+
+
+def test_push_master_switch_post_requires_developer() -> None:
+    """P-03: POST /api/push/master-switch developer-only.
+
+    Auth yokken 303 (login redirect); auth varsa Operator için 403.
+    Hiçbir koşulda 200 dönmemeli (developer cookie'si olmadan).
+    """
+    response = client.post(
+        "/dashboard/api/push/master-switch",
+        json={"enabled": False},
+    )
+    assert response.status_code in (303, 403, 503)
+
+
+def test_push_active_count_endpoint_exists() -> None:
+    """P-03: GET /api/push/active-count developer-only footer rozet endpoint'i."""
+    response = client.get("/dashboard/api/push/active-count")
+    assert response.status_code in (200, 303, 403, 503)

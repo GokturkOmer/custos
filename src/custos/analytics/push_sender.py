@@ -1,13 +1,14 @@
 """Web Push bildirim gönderici.
 
 Alarm tetiklendiğinde aktif abonelere push bildirim gönderir.
-Sessiz saat ve severity filtresi uygular.
+Master switch + sessiz saat + severity filtresi uygular.
 """
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, time
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -38,36 +39,111 @@ def _is_quiet_hour(sub: PushSubscription, now_time: time) -> bool:
 def _should_notify(sub: PushSubscription, severity: str, now_time: time) -> bool:
     """Aboneliğe bildirim gönderilmeli mi kontrol eder.
 
-    4-tier severity (V11-107/K10):
-    - ``emergency`` : Sessiz saat ve abonelik filtresi BYPASS — her zaman
-      gönderilir (insan hayatı/operasyon riski).
-    - ``crit``      : ``notify_crit`` boolean'ına bağlı.
-    - ``warn``      : ``notify_warn`` boolean'ına bağlı.
-    - ``info``      : Abonelikte ayrı kolon yok (P-03 eklenecek);
-      şimdilik ``notify_warn`` fallback (info zaten "haberdar et" tier'i).
+    4-tier severity (V11-107/K10) + P-03 abonelik tercihleri:
 
-    Sessiz saat kuralı emergency haricinde uygulanır.
+    - ``enabled=False``        : Cihaz tek-tıkla susturulmuş — hiçbir tier gitmez.
+    - ``emergency``            : ``notify_emergency`` aktif ise sessiz saat
+      bypass (insan hayatı/operasyon riski). Kullanıcı bu cihazda emergency
+      almayı kapatmışsa (notify_emergency=False) gitmez.
+    - ``crit`` / ``warn`` / ``info``: Sessiz saat içindeyse atlanır; ardından
+      ilgili ``notify_<tier>`` boolean'ına bakılır.
     """
-    # Emergency: tüm filtreler bypass — gönder.
+    # Cihaz susturulduysa hiçbir tier gitmez (master switch sender içinde).
+    if not sub.enabled:
+        return False
+
+    # Emergency: sessiz saat bypass, ama abonelik tercihi geçerli.
     if severity == "emergency":
-        return True
+        return sub.notify_emergency
 
     # Sessiz saat kontrolü (emergency dışındaki tüm tier'ler)
     if _is_quiet_hour(sub, now_time):
         return False
 
-    # Severity filtresi
+    # Severity filtresi — her tier kendi kolonunda.
     if severity == "crit":
         return sub.notify_crit
     if severity == "warn":
         return sub.notify_warn
     if severity == "info":
-        # P-03'te ``notify_info`` kolonu eklenince bu fallback kalkar.
-        return sub.notify_warn
+        return sub.notify_info
 
     # Bilinmeyen severity — varsayılan olarak gönderme (constraint
     # sayesinde 4 değer dışı gelmemeli, defansif).
     return False
+
+
+def _build_payload(title: str, body: str, severity: str) -> str:
+    """Web Push payload JSON'unu üretir.
+
+    Service worker emergency'de ``priority='high'`` flag'ini okuyup
+    vibrate + requireInteraction uygular.
+    """
+    return json.dumps(
+        {
+            "title": title,
+            "body": body,
+            "tag": f"custos-{severity}",
+            "url": "/dashboard/alarms",
+            "priority": "high" if severity == "emergency" else "normal",
+        }
+    )
+
+
+async def _send_one_push(
+    sub: PushSubscription,
+    payload: str,
+    private_key: str,
+    mailto: str,
+    db: DatabaseInterface,
+) -> bool:
+    """Tek bir aboneliğe push gönderir. 410 Gone'da abonelik silinir.
+
+    Başarılı gönderim için ``True``; hata (geçersiz / aktarım) durumlarında
+    ``False`` döner. Beklenmeyen exception'ları log'a yazar ama yutar —
+    bir aboneliğin başarısızlığı diğerlerini etkilemesin.
+    """
+    try:
+        webpush(
+            subscription_info={
+                "endpoint": sub.endpoint,
+                "keys": {
+                    "p256dh": sub.p256dh,
+                    "auth": sub.auth,
+                },
+            },
+            data=payload,
+            vapid_private_key=private_key,
+            vapid_claims={
+                "sub": mailto,
+                "aud": _extract_origin(sub.endpoint),
+            },
+        )
+        return True
+    except WebPushException as exc:
+        if hasattr(exc, "response") and exc.response is not None:
+            status_code = exc.response.status_code
+            if status_code == 410:
+                # 410 Gone — abonelik artık geçersiz, sil
+                await db.delete_push_subscription(sub.endpoint)
+                await logger.ainfo(
+                    "Geçersiz push aboneliği silindi (410 Gone)",
+                    endpoint=sub.endpoint[:50],
+                )
+                return False
+        await logger.awarning(
+            "Push bildirim gönderilemedi",
+            endpoint=sub.endpoint[:50],
+            error=str(exc),
+        )
+        return False
+    except Exception:
+        await logger.awarning(
+            "Push bildirim gönderiminde beklenmeyen hata",
+            endpoint=sub.endpoint[:50],
+            exc_info=True,
+        )
+        return False
 
 
 async def send_push_notifications(
@@ -78,14 +154,29 @@ async def send_push_notifications(
 ) -> int:
     """Aktif abonelere push bildirim gönderir.
 
-    Sessiz saat ve severity filtresi uygular.
-    Gönderilen bildirim sayısını döndürür.
+    Master switch (``retention_config.push_global_enabled=False``) → erken
+    dönüş, hiçbir cihaza gitmez (her abonelik ``enabled`` flag'inden
+    bağımsız). Tatil/eğitim sırasında tek anahtarla susturma için (P-03).
+
+    Sessiz saat ve severity filtresi her abonelik için ``_should_notify``
+    içinde uygulanır. Gönderilen bildirim sayısını döndürür.
     """
     if not is_push_enabled():
         await logger.adebug("Push bildirim devre dışı — VAPID anahtarları yapılandırılmamış")
         return 0
 
-    public_key, private_key = get_vapid_keys()
+    # Master switch — runtime tablosundan oku. Pratikte her alarm push'unda
+    # DB hit, ama push'lar seyrek (alarm sırasında) ve abonelik sayısı az,
+    # cache eklemeye gerek yok.
+    retention = await db.get_retention_config()
+    if not retention.push_global_enabled:
+        await logger.ainfo(
+            "Push global devre dışı (master switch) — bildirim atlandı",
+            severity=severity,
+        )
+        return 0
+
+    _public_key, private_key = get_vapid_keys()
     mailto = get_vapid_mailto()
 
     subs = await db.list_push_subscriptions()
@@ -95,63 +186,14 @@ async def send_push_notifications(
     # Sessiz saat karsilastirmasi kullanicinin yerel saatinde yapilmali
     local_tz = ZoneInfo(settings.custos_timezone)
     now_time = datetime.now(UTC).astimezone(local_tz).time()
-    is_emergency = severity == "emergency"
-    payload = json.dumps(
-        {
-            "title": title,
-            "body": body,
-            "tag": f"custos-{severity}",
-            "url": "/dashboard/alarms",
-            # Emergency'de browser yüksek öncelik gösterimi — service worker
-            # bu flag'i okuyup vibrate + requireInteraction uygulayabilir.
-            "priority": "high" if is_emergency else "normal",
-        }
-    )
+    payload = _build_payload(title, body, severity)
 
     sent = 0
     for sub in subs:
         if not _should_notify(sub, severity, now_time):
             continue
-
-        try:
-            webpush(
-                subscription_info={
-                    "endpoint": sub.endpoint,
-                    "keys": {
-                        "p256dh": sub.p256dh,
-                        "auth": sub.auth,
-                    },
-                },
-                data=payload,
-                vapid_private_key=private_key,
-                vapid_claims={
-                    "sub": mailto,
-                    "aud": _extract_origin(sub.endpoint),
-                },
-            )
+        if await _send_one_push(sub, payload, private_key, mailto, db):
             sent += 1
-        except WebPushException as exc:
-            if hasattr(exc, "response") and exc.response is not None:
-                status_code = exc.response.status_code
-                if status_code == 410:
-                    # 410 Gone — abonelik artık geçersiz, sil
-                    await db.delete_push_subscription(sub.endpoint)
-                    await logger.ainfo(
-                        "Geçersiz push aboneliği silindi (410 Gone)",
-                        endpoint=sub.endpoint[:50],
-                    )
-                    continue
-            await logger.awarning(
-                "Push bildirim gönderilemedi",
-                endpoint=sub.endpoint[:50],
-                error=str(exc),
-            )
-        except Exception:
-            await logger.awarning(
-                "Push bildirim gönderiminde beklenmeyen hata",
-                endpoint=sub.endpoint[:50],
-                exc_info=True,
-            )
 
     if sent > 0:
         await logger.ainfo(
@@ -164,10 +206,31 @@ async def send_push_notifications(
     return sent
 
 
+async def send_push_to_subscription(
+    db: DatabaseInterface,
+    sub: PushSubscription,
+    title: str,
+    body: str,
+    severity: str = "warn",
+) -> int:
+    """Tek bir aboneliğe test push gönderir.
+
+    Settings UI'daki "test bildirimi gönder" butonu için. Master switch ve
+    filtreler BYPASS — kullanıcı cihazında push'un çalıştığını doğrulayabilsin
+    (tatildeyken bile cihazını test edebilmeli).
+
+    Başarı için 1, başarısız/VAPID yok için 0 döner.
+    """
+    if not is_push_enabled():
+        return 0
+    _public_key, private_key = get_vapid_keys()
+    mailto = get_vapid_mailto()
+    payload = _build_payload(title, body, severity)
+    return 1 if await _send_one_push(sub, payload, private_key, mailto, db) else 0
+
+
 def _extract_origin(endpoint: str) -> str:
     """Endpoint URL'sinden origin kısmını çıkarır."""
     # https://fcm.googleapis.com/fcm/send/xxx → https://fcm.googleapis.com
-    from urllib.parse import urlparse
-
     parsed = urlparse(endpoint)
     return f"{parsed.scheme}://{parsed.netloc}"

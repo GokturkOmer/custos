@@ -8,8 +8,9 @@ URL düzeni (root level, ``/dashboard`` prefix'inden BAĞIMSIZ):
 - ``GET  /change-password``   : parola değiştirme formu (must_change_password=True)
 - ``POST /change-password``   : parolayı güncelle, /dashboard'a redirect
 
-Cookie: ``custos_session``, HttpOnly, SameSite=Lax. Secure flag P-03 (TLS)
-sonrası true; pilot LAN'da şu an false.
+Cookie: ``custos_session``, HttpOnly, SameSite=Lax, Secure (P-03 / V11-102
+sonrası TLS zorunlu — Caddy reverse proxy 80 → 443 redirect ediyor, plain
+HTTP'de cookie set edilmesin diye Secure=True).
 """
 
 from __future__ import annotations
@@ -58,16 +59,29 @@ def _set_session_cookie(response: RedirectResponse, token: str) -> None:
     """Session cookie'yi response'a ekler.
 
     HttpOnly: JS erişemez (XSS savunması). SameSite=Lax: cross-site POST
-    engellenir (CSRF temel savunması). Secure: P-03 (TLS) sonrası true.
+    engellenir (CSRF temel savunması). Secure: P-03 (V11-102 TLS) sonrası
+    True — cookie sadece HTTPS üzerinden gönderilir; plain HTTP isteğine
+    iliştirilmez (LAN sniff koruması).
+
+    Geliştirme ortamında HTTPS yoksa (lokal `python -m custos.analytics`
+    gibi), Secure cookie tarayıcı tarafından gönderilmez ve login akışı
+    bozulur — `CUSTOS_DEV_INSECURE_COOKIE=1` çevresel değişkeni Secure
+    flag'ini kapatmak için escape hatch sunar.
+
     Max-Age 12 saat — TTL sabitiyle senkron.
     """
+    # Geliştirme escape hatch: CUSTOS_DEV_INSECURE_COOKIE=1 ise Secure kapanır.
+    # Pilot deploy'da set edilmez (default güvenli).
+    import os
+
+    secure_flag = os.environ.get("CUSTOS_DEV_INSECURE_COOKIE", "").strip() != "1"
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=False,  # P-03 (TLS + caddy reverse-proxy) sonrası True olacak
+        secure=secure_flag,
         path="/",
     )
 
@@ -174,10 +188,17 @@ async def logout_submit(request: Request) -> RedirectResponse:
             )
 
     response = RedirectResponse(url="/login", status_code=303)
+    # Set ile aynı flag'lerle sil — RFC 6265 §5.3 madde 11 gereği tarayıcının
+    # cookie'yi gerçekten unutması için. Secure flag'i .env override'ı ile
+    # senkron tutuyoruz.
+    import os
+
+    secure_flag = os.environ.get("CUSTOS_DEV_INSECURE_COOKIE", "").strip() != "1"
     response.delete_cookie(
         key=SESSION_COOKIE_NAME,
         httponly=True,
         samesite="lax",
+        secure=secure_flag,
         path="/",
     )
     return response

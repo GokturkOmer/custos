@@ -89,6 +89,10 @@ Anahtarlar:
 - `POSTGRES_PASSWORD` — setup.sh tarafından rastgele üretildi (değiştirme gereksiz).
 - `CUSTOS_VAPID_*` — otomatik üretildi.
 - `CUSTOS_TIMEZONE` — default `Europe/Istanbul` (AVM için doğru).
+- `CUSTOS_HOST_IP` — TLS sertifikası bu IP için üretildi (V11-102 / P-03).
+  IT bir statik IP atadı ise burada doğrula; değiştirilirse
+  `sudo bash /opt/custos/scripts/generate_tls_cert.sh --force` ile cert yenilenmeli
+  ve `sudo systemctl reload caddy` çağrılmalı.
 - `LOG_LEVEL` — default `INFO`; sorun araştırırken `DEBUG` yapılabilir.
 
 **Önemli:** `.env` sahiplik: `custos:custos`, mod `0600`. Başka kullanıcıya
@@ -112,19 +116,54 @@ Beklenen: her iki servis de `active (running)`.
 
 ## 7. Dashboard Erişimi
 
-Tarayıcıda:
+Tarayıcıda **HTTPS** ile:
 
 ```
-http://custos.local:8000/dashboard
+https://192.168.X.Y/login
 ```
 
-veya statik IP ile:
+(`X.Y` = `.env` içindeki `CUSTOS_HOST_IP`)
 
-```
-http://192.168.X.Y:8000/dashboard
+HTTP üzerinden gelen istekler 301 ile HTTPS'e yönlendirilir; cookie sadece
+HTTPS üzerinden gönderilir (Secure flag, V11-102).
+
+### 7.1 İlk girişte tarayıcı uyarısı (TOFU)
+
+Self-signed sertifika kullanıldığı için tarayıcı **ilk girişte** uyarı
+gösterir:
+
+> **Bu bağlantı güvenli değil**
+> NET::ERR_CERT_AUTHORITY_INVALID
+
+Bu **beklenen** davranıştır — gerçek bir güvenlik açığı değildir. Sertifika
+mini PC üzerinde lokal olarak üretildi ve trafiği şifreliyor; yalnızca bir
+bilinmeyen yetkili (CA) tarafından imzalanmadığı için tarayıcı tanımıyor.
+
+**Yapılacak:**
+1. **Gelişmiş** (Chromium) / **Riski Kabul Et ve Devam Et** (Firefox) tıkla.
+2. Sayfanın yüklenmesini bekle. Üst köşede **kilitli kilit** ikonu (Firefox)
+   veya **uyarı simgesi** (Chrome) görünür — bu cihazda kayıtlı.
+3. Sonraki girişlerde uyarı tekrar gelmez (TOFU — Trust On First Use).
+
+### 7.2 Sertifika yenileme
+
+Cert 10 yıl geçerli; normalde dokunulmaz. Mini PC IP'si değiştiğinde:
+
+```bash
+# 1. .env'deki CUSTOS_HOST_IP'yi güncelle
+sudo nano /opt/custos/.env
+
+# 2. Cert'i yeniden üret
+sudo CUSTOS_HOST_IP=<yeni-IP> bash /opt/custos/scripts/generate_tls_cert.sh --force
+
+# 3. Caddyfile'ı yeniden render et + reload
+sudo sed "s|\${CUSTOS_HOST_IP}|<yeni-IP>|g" /opt/custos/deploy/Caddyfile.template \
+    | sudo tee /etc/caddy/Caddyfile >/dev/null
+sudo systemctl reload caddy
 ```
 
-Windows istemcilerde `custos.local` çalışmazsa Bonjour servisi gerekli.
+Tarayıcıda eski IP için kayıtlı uyarı kalmaması için tarayıcı önbelleğini
+temizlemek gerekebilir (`chrome://net-internals/#hsts`).
 
 ---
 

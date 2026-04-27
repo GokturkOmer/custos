@@ -47,7 +47,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # --- 2. Pre-flight sistem kontrolleri ---
-echo "[1/12] Sistem onkosullari kontrol ediliyor..."
+echo "[1/13] Sistem onkosullari kontrol ediliyor..."
 
 # Ubuntu versiyon — 22.04+ zorunlu, 24.04 onerilen
 if ! command -v lsb_release >/dev/null 2>&1; then
@@ -103,9 +103,9 @@ fi
 echo "  Disk bos: ${AVAIL_GB} GB — OK."
 
 # --- 3. APT repo'lari — deadsnakes PPA (Python 3.12) + PGDG (PG 16) + TimescaleDB ---
-# Tum repo eklemeleri TEK apt-get update ile sonlanir, paket kurulumu [3/12]'de
+# Tum repo eklemeleri TEK apt-get update ile sonlanir, paket kurulumu [3/13]'de
 # tek transaction. Bu dry-run'daki "4 kez rerun" sorununu giderir (kalem 13).
-echo "[2/12] APT repo'lari hazirlaniyor..."
+echo "[2/13] APT repo'lari hazirlaniyor..."
 
 # Temel repo araclari (sonraki repo eklemeleri icin gerekli)
 apt-get update -qq
@@ -151,7 +151,7 @@ apt-get update -qq
 # postgresql-16 explicit (kalem 8) — meta paket "postgresql" PGDG ile latest
 # (PG 18'e) yonleniyordu, cluster upgrade dialog'u tetikliyordu.
 # timescaledb-2-postgresql-16 TimescaleDB repo ile ayni transaction'a eklendi.
-echo "[3/12] Sistem paketleri kuruluyor (Python ${PYTHON_VERSION} + PG ${PG_VERSION} + TimescaleDB)..."
+echo "[3/13] Sistem paketleri kuruluyor (Python ${PYTHON_VERSION} + PG ${PG_VERSION} + TimescaleDB)..."
 apt-get install -y -qq \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
     postgresql-${PG_VERSION} postgresql-client-${PG_VERSION} \
@@ -167,7 +167,7 @@ echo "  Paketler kuruldu."
 #      dolu -> uyari + exit 2 (kullanici manuel karar versin, Q2).
 #   2. PG 16/main yok veya port 5432 degil -> dropcluster + createcluster.
 #   3. timescaledb-tune explicit --pg-config ile preload + restart.
-echo "[4/12] PostgreSQL ${PG_VERSION} cluster hazirlaniyor..."
+echo "[4/13] PostgreSQL ${PG_VERSION} cluster hazirlaniyor..."
 
 if command -v pg_lsclusters >/dev/null 2>&1; then
     # PG 14/main boslugu (kalem 10, Q2): user DB sayisi (postgres/template0/template1 haric)
@@ -227,7 +227,7 @@ systemctl restart postgresql@${PG_VERSION}-main
 echo "  TimescaleDB preload aktif, PG ${PG_VERSION} cluster hazir."
 
 # --- 6. Custos kullanicisi ---
-echo "[5/12] Custos kullanicisi hazirlaniyor..."
+echo "[5/13] Custos kullanicisi hazirlaniyor..."
 if ! id "$CUSTOS_USER" &>/dev/null; then
     useradd --system --create-home --shell /bin/bash "$CUSTOS_USER"
     echo "  Kullanici '$CUSTOS_USER' olusturuldu."
@@ -242,7 +242,7 @@ fi
 usermod -aG systemd-journal "$CUSTOS_USER"
 
 # --- 7. Kurulum dizinleri + veri/log klasorleri ---
-echo "[6/12] Kurulum ve veri dizinleri hazirlaniyor..."
+echo "[6/13] Kurulum ve veri dizinleri hazirlaniyor..."
 mkdir -p "$INSTALL_DIR"
 if [[ -d "$(dirname "$0")/../src" ]]; then
     # shopt dotglob: `*` glob'u .env.example gibi dotfile'lari da kapsasin (kalem 7).
@@ -278,7 +278,7 @@ echo "  $INSTALL_DIR, $ARCHIVE_DIR, $BACKUP_DIR, $LOG_DIR hazir."
 #   - setuptools<82 kisitlamasi +cpu wheel'de yok (kalem 12);
 #   - A3 denetim setuptools>=78.1.1 korunur (PYSEC-2025-49 path-traversal RCE);
 #   - sentence-transformers + faiss otomatik CPU backend.
-echo "[7/12] Python sanal ortami kuruluyor (torch CPU-only wheel)..."
+echo "[7/13] Python sanal ortami kuruluyor (torch CPU-only wheel)..."
 if [[ ! -d "$INSTALL_DIR/.venv" ]]; then
     sudo -u "$CUSTOS_USER" python${PYTHON_VERSION} -m venv "$INSTALL_DIR/.venv"
 fi
@@ -305,7 +305,7 @@ echo "  Bagimoliklar yuklendi (torch 2.11.0+cpu)."
 #   custos_admin → migration / DDL owner (alembic)
 #   custos_app   → runtime / sadece DML (uvicorn + critical loop)
 # Runtime credential sizinca DROP/ALTER yetkisi yok — blast radius kucuk.
-echo "[8/12] Veritabani hazirlaniyor (custos_admin + custos_app)..."
+echo "[8/13] Veritabani hazirlaniyor (custos_admin + custos_app)..."
 DB_EXISTS=0
 if sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw custos; then
     DB_EXISTS=1
@@ -426,7 +426,7 @@ SQL
 fi
 
 # --- 10. Seed — AVM Template Pack + bakim checklist'leri ---
-echo "[9/12] Seed script'leri calistiriliyor..."
+echo "[9/13] Seed script'leri calistiriliyor..."
 # F9 raporu karari: idempotent upsert, hata durumunda uyari ver ama exit etme
 # (sablonlar sonradan dashboard API'sinden de tetiklenebilir).
 if ! sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
@@ -439,7 +439,7 @@ if ! sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
 fi
 
 # --- 11. VAPID anahtari (otomatik uret + .env'e yaz) ---
-echo "[10/12] VAPID anahtarlari kontrol ediliyor..."
+echo "[10/13] VAPID anahtarlari kontrol ediliyor..."
 if ! grep -qE '^CUSTOS_VAPID_PRIVATE_KEY=.+' "$INSTALL_DIR/.env"; then
     echo "  VAPID anahtarlari uretiliyor..."
     sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/python" \
@@ -453,7 +453,7 @@ fi
 # adiminda). Burada ilk developer hesabi 'gokturk' olusturulur. Parola
 # rastgele uretilir, .env'e CUSTOS_DEV_INITIAL_PASSWORD anahtariyla yazilir.
 # Idempotent: ON CONFLICT DO NOTHING — yeniden calistirilinca duplike olmaz.
-echo "[11/12] Bootstrap developer user olusturuluyor..."
+echo "[11/13] Bootstrap developer user olusturuluyor..."
 if ! grep -qE '^CUSTOS_DEV_INITIAL_PASSWORD=.+' "$INSTALL_DIR/.env"; then
     # 20 karakter URL-safe rastgele parola (slash/+ /= karakterleri ayikla)
     DEV_PW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)
@@ -490,8 +490,58 @@ if [[ -f "$INSTALL_DIR/deploy/logrotate.custos" ]]; then
     chmod 644 /etc/logrotate.d/custos
 fi
 
-# --- 13. Systemd service'ler (analytics + critical) ---
-echo "[12/12] Systemd service'ler kuruluyor..."
+# --- 13. TLS Self-Signed + Caddy Reverse Proxy (V11-102 / P-03) ---
+# Pilot LAN'da HTTP plaintext: session cookie sniff edilebilir. Caddy reverse
+# proxy + self-signed sertifika ile şifreleme. Browser TOFU: ilk girişte
+# uyarı, sonraki girişlerde uyarısız (K9: program internete açık olmasın,
+# Let's Encrypt yok).
+echo "[12/13] TLS sertifikasi + Caddy reverse proxy kuruluyor..."
+
+# CUSTOS_HOST_IP — .env'den oku, yoksa hostname -I ile tahmin (uyarı ver).
+CUSTOS_HOST_IP=$(grep -E '^CUSTOS_HOST_IP=' "$INSTALL_DIR/.env" 2>/dev/null \
+    | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "")
+if [[ -z "$CUSTOS_HOST_IP" ]]; then
+    CUSTOS_HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [[ -z "$CUSTOS_HOST_IP" ]]; then
+        echo "  UYARI: CUSTOS_HOST_IP belirlenemedi. .env'e ekle ve generate_tls_cert.sh'i manuel calistir." >&2
+        # TLS adimini atla — sistem yine de HTTP'de calisir.
+        echo "  TLS adimi atlandi."
+    else
+        echo "  CUSTOS_HOST_IP .env'de yok, ${CUSTOS_HOST_IP} otomatik tahmin edildi."
+        echo "CUSTOS_HOST_IP=${CUSTOS_HOST_IP}" >> "$INSTALL_DIR/.env"
+        chmod 600 "$INSTALL_DIR/.env"
+    fi
+fi
+
+if [[ -n "$CUSTOS_HOST_IP" ]]; then
+    # Caddy paketinin repo'sunu ekle (apt'ta default yok / eski versiyon).
+    if [[ ! -f /etc/apt/sources.list.d/caddy-stable.list ]]; then
+        apt-get install -y -qq debian-keyring debian-archive-keyring
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+            | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+            | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+        apt-get update -qq
+    fi
+    apt-get install -y -qq caddy
+
+    # Self-signed sertifika üret (script idempotent).
+    CUSTOS_HOST_IP="$CUSTOS_HOST_IP" bash "$INSTALL_DIR/scripts/generate_tls_cert.sh" "$CUSTOS_HOST_IP"
+
+    # Caddyfile şablonunu IP ile substitute et — plain envsubst yerine sed
+    # (envsubst opsiyonel paket, sed her yerde mevcut).
+    sed "s|\${CUSTOS_HOST_IP}|${CUSTOS_HOST_IP}|g" \
+        "$INSTALL_DIR/deploy/Caddyfile.template" > /etc/caddy/Caddyfile
+    chmod 644 /etc/caddy/Caddyfile
+
+    # Caddy systemd service apt install ile geldi — sadece restart + enable.
+    systemctl enable --now caddy >/dev/null
+    systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy
+    echo "  Caddy aktif: https://${CUSTOS_HOST_IP}/ — uvicorn 127.0.0.1:8000'a proxy."
+fi
+
+# --- 14. Systemd service'ler (analytics + critical) ---
+echo "[13/13] Systemd service'ler kuruluyor..."
 cp "$INSTALL_DIR/deploy/custos.service" /etc/systemd/system/custos.service
 if [[ -f "$INSTALL_DIR/deploy/custos-critical.service" ]]; then
     cp "$INSTALL_DIR/deploy/custos-critical.service" /etc/systemd/system/custos-critical.service
@@ -533,9 +583,15 @@ if [[ -n "$BOOTSTRAP_DEV_PW" ]]; then
     echo ""
 fi
 echo "Siradaki adimlar:"
-echo "  1. .env dosyasini gozden gecir: $INSTALL_DIR/.env (VAPID, DB sifre, dev parola)"
+echo "  1. .env dosyasini gozden gecir: $INSTALL_DIR/.env (VAPID, DB sifre, dev parola, host IP)"
 echo "  2. Servisleri baslat: sudo systemctl start custos.service custos-critical.service"
-echo "  3. Durum kontrolu: sudo systemctl status custos.service custos-critical.service"
+echo "  3. Durum kontrolu: sudo systemctl status custos.service custos-critical.service caddy.service"
 echo "  4. Healthcheck: sudo -u $CUSTOS_USER $INSTALL_DIR/.venv/bin/python $INSTALL_DIR/scripts/healthcheck.py --json"
-echo "  5. Tarayicida ac: http://custos.local:8000/login"
+if [[ -n "${CUSTOS_HOST_IP:-}" ]]; then
+    echo "  5. Tarayicida ac: https://${CUSTOS_HOST_IP}/login"
+    echo "     NOT: Ilk girisinizde tarayici 'Baglanti guvenli degil' uyarisi verir."
+    echo "     'Gelismis > Devam et' tiklayin (self-signed sertifika, beklenen davranis)."
+else
+    echo "  5. Tarayicida ac: http://custos.local:8000/login"
+fi
 echo ""

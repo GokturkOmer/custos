@@ -38,7 +38,10 @@ from custos.analytics.dashboard.bulk_import import (
     validate_rows,
 )
 from custos.analytics.disk_telemetry import DiskMonitor, DiskUsage, get_disk_usage
-from custos.analytics.push_sender import send_push_notifications
+from custos.analytics.push_sender import (
+    send_push_notifications,
+    send_push_to_subscription,
+)
 from custos.analytics.scanner import ModbusScanner
 from custos.analytics.templates import (
     TemplateLoadError,
@@ -60,6 +63,7 @@ from custos.shared.database import (
     MaintenanceTaskStepResult,
     OverviewChart,
     PushSubscription,
+    Session,
     TagBinding,
     TagRecord,
     Threshold,
@@ -2879,7 +2883,71 @@ async def users_toggle_enabled(
     )
 
 
-# --- Push API ---
+# --- Push API (P-03 çoklu alıcı + UI) ---
+
+# Push subscription güncelleme için izin verilen alanların whitelist'i.
+# Boolean alanları + label string'i + quiet_start/quiet_end (HH:MM string).
+# Endpoint, p256dh, auth değiştirilemez (cihaz kimliği). created_by_user_id
+# subscribe sırasında atanır, sonradan değişmez.
+_PUSH_SUB_BOOL_FIELDS: frozenset[str] = frozenset(
+    {"enabled", "notify_info", "notify_warn", "notify_crit", "notify_emergency"},
+)
+
+
+def _parse_quiet_time(raw: object) -> time | None:
+    """Body'den gelen ``"HH:MM"`` (veya boş) değerini ``time`` objesine çevirir.
+
+    Hem null/boş string'i (= sessiz saat kapalı) hem geçerli ``HH:MM``'yi
+    kabul eder. Geçersiz format ``ValueError`` fırlatır — caller 400 dönsün.
+    """
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        msg = "quiet_start / quiet_end string olmalı (HH:MM)"
+        raise ValueError(msg)
+    parts = raw.split(":")
+    if len(parts) < 2:
+        msg = f"Geçersiz saat formatı: {raw} (HH:MM bekleniyor)"
+        raise ValueError(msg)
+    hour = int(parts[0])
+    minute = int(parts[1])
+    return time(hour=hour, minute=minute)
+
+
+def _can_modify_subscription(session: Session, sub: PushSubscription) -> bool:
+    """Operator kendi aboneliğini, Developer hepsini düzenleyebilir (K3).
+
+    Anonim kayıtlar (``created_by_user_id IS NULL``, P-03 öncesi cihazlar)
+    sadece Developer için modifiye edilebilir — Operator kendisininki
+    olmadığı sürece yetki alamaz.
+    """
+    if session.role == "developer":
+        return True
+    return sub.created_by_user_id == session.user_id
+
+
+def _serialize_subscription(
+    sub: PushSubscription,
+    owner_username: str | None,
+    owner_role: str | None,
+) -> dict[str, Any]:
+    """Push aboneliğini UI için JSON-uyumlu dict'e çevirir."""
+    return {
+        "id": sub.id,
+        "endpoint": sub.endpoint,
+        "label": sub.label,
+        "enabled": sub.enabled,
+        "notify_info": sub.notify_info,
+        "notify_warn": sub.notify_warn,
+        "notify_crit": sub.notify_crit,
+        "notify_emergency": sub.notify_emergency,
+        "quiet_start": sub.quiet_start.strftime("%H:%M") if sub.quiet_start else None,
+        "quiet_end": sub.quiet_end.strftime("%H:%M") if sub.quiet_end else None,
+        "created_by_user_id": sub.created_by_user_id,
+        "created_by_username": owner_username,
+        "created_by_role": owner_role,
+        "created_at": sub.created_at.isoformat() if sub.created_at else None,
+    }
 
 
 @router.get("/api/push/vapid-public-key")
@@ -2891,13 +2959,16 @@ async def vapid_public_key() -> JSONResponse:
 
 @router.post("/api/push/subscribe", dependencies=[_OPERATOR_DEP])
 async def push_subscribe(request: Request) -> JSONResponse:
-    """Push subscription kaydeder."""
+    """Push subscription kaydeder. P-03 ile label + created_by_user_id eklendi."""
     db = _get_db(request)
+    session: Session = request.state.session
     body = await request.json()
 
     endpoint = body.get("endpoint", "")
     p256dh = body.get("p256dh", "")
     auth = body.get("auth", "")
+    # 80 char ile kırp — DB TEXT ama UI'da uzun etiket bozuk gösterilir.
+    label = (body.get("label") or "").strip()[:80]
 
     if not endpoint or not p256dh or not auth:
         return JSONResponse(
@@ -2905,28 +2976,207 @@ async def push_subscribe(request: Request) -> JSONResponse:
             status_code=400,
         )
 
-    sub = PushSubscription(endpoint=endpoint, p256dh=p256dh, auth=auth)
+    sub = PushSubscription(
+        endpoint=endpoint,
+        p256dh=p256dh,
+        auth=auth,
+        label=label,
+        created_by_user_id=session.user_id,
+    )
     created = await db.upsert_push_subscription(sub)
-    return JSONResponse({"id": created.id, "endpoint": created.endpoint})
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="push",
+            action="subscribe",
+            entity_type="push_subscription",
+            entity_id=str(created.id),
+            detail=f"{session.username}: {label or '(etiketsiz)'}",
+        )
+    )
+    return JSONResponse(
+        {
+            "id": created.id,
+            "endpoint": created.endpoint,
+            "label": created.label,
+        }
+    )
 
 
 @router.delete("/api/push/subscribe", dependencies=[_OPERATOR_DEP])
 async def push_unsubscribe(request: Request) -> JSONResponse:
-    """Push subscription siler."""
+    """Push subscription siler. K3: Operator yalnız kendi aboneliğini siler."""
     db = _get_db(request)
+    session: Session = request.state.session
     body = await request.json()
     endpoint = body.get("endpoint", "")
 
     if not endpoint:
         return JSONResponse({"detail": "endpoint alanı gerekli"}, status_code=400)
 
+    sub = await db.get_push_subscription_by_endpoint(endpoint)
+    if sub is None:
+        return JSONResponse({"detail": "Abonelik bulunamadı"}, status_code=404)
+    if not _can_modify_subscription(session, sub):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendi aboneliğinizi silebilirsiniz",
+        )
+
     deleted = await db.delete_push_subscription(endpoint)
+    if deleted:
+        await db.insert_audit_log(
+            AuditLogEntry(
+                category="push",
+                action="unsubscribe",
+                entity_type="push_subscription",
+                entity_id=str(sub.id),
+                detail=f"{session.username}: {sub.label or '(etiketsiz)'}",
+            )
+        )
     return JSONResponse({"deleted": deleted})
+
+
+@router.get("/api/push/subscriptions", dependencies=[_OPERATOR_DEP])
+async def push_list_subscriptions(request: Request) -> JSONResponse:
+    """Tüm aboneliklerin listesi (UI için). created_by user info dahil.
+
+    Operator hepsini görür (read-only başkasının aboneliği için), Developer
+    aynı listeyi alıp düzenleme yetkili. Yetki kontrolü PATCH/DELETE
+    sırasında app-katmanında yapılır.
+    """
+    db = _get_db(request)
+    subs = await db.list_push_subscriptions()
+    # User lookup tek sorguda — abonelik sayısı 5-10 civarı, çok az.
+    users = {u.id: u for u in await db.list_users()}
+    result = [
+        _serialize_subscription(
+            sub=s,
+            owner_username=users[s.created_by_user_id].username
+            if s.created_by_user_id is not None and s.created_by_user_id in users
+            else None,
+            owner_role=users[s.created_by_user_id].role
+            if s.created_by_user_id is not None and s.created_by_user_id in users
+            else None,
+        )
+        for s in subs
+    ]
+    return JSONResponse({"subscriptions": result})
+
+
+@router.patch("/api/push/subscriptions", dependencies=[_OPERATOR_DEP])
+async def push_update_subscription(request: Request) -> JSONResponse:
+    """Bir aboneliğin ayarlarını günceller (K3 yetki kontrolü)."""
+    db = _get_db(request)
+    session: Session = request.state.session
+    body = await request.json()
+    endpoint = body.get("endpoint", "")
+    if not endpoint:
+        return JSONResponse({"detail": "endpoint alanı gerekli"}, status_code=400)
+
+    sub = await db.get_push_subscription_by_endpoint(endpoint)
+    if sub is None:
+        return JSONResponse({"detail": "Abonelik bulunamadı"}, status_code=404)
+    if not _can_modify_subscription(session, sub):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendi aboneliğinizi düzenleyebilirsiniz",
+        )
+
+    updates: dict[str, object] = {}
+    if "label" in body:
+        updates["label"] = (body.get("label") or "").strip()[:80]
+    for key in _PUSH_SUB_BOOL_FIELDS:
+        if key in body:
+            updates[key] = bool(body[key])
+    for time_key in ("quiet_start", "quiet_end"):
+        if time_key in body:
+            try:
+                updates[time_key] = _parse_quiet_time(body[time_key])
+            except ValueError as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    if not updates:
+        return JSONResponse({"detail": "Güncellenecek alan yok"}, status_code=400)
+
+    updated = await db.update_push_subscription_settings(endpoint, updates)
+    if updated is None:
+        return JSONResponse({"detail": "Güncelleme başarısız"}, status_code=500)
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="push",
+            action="settings_changed",
+            entity_type="push_subscription",
+            entity_id=str(updated.id),
+            detail=f"{session.username}: {','.join(sorted(updates.keys()))}",
+        )
+    )
+    return JSONResponse(
+        {
+            "updated": True,
+            "subscription": _serialize_subscription(updated, None, None),
+        },
+    )
+
+
+@router.get("/api/push/master-switch", dependencies=[_OPERATOR_DEP])
+async def push_master_switch_state(request: Request) -> JSONResponse:
+    """Master switch durumunu okur (Operator + Developer)."""
+    db = _get_db(request)
+    cfg = await db.get_retention_config()
+    return JSONResponse({"push_global_enabled": cfg.push_global_enabled})
+
+
+@router.post("/api/push/master-switch", dependencies=[_DEVELOPER_DEP])
+async def push_master_switch_toggle(request: Request) -> JSONResponse:
+    """Push master switch'i açar/kapatır. K3: developer-only.
+
+    Tatil/eğitim sırasında tüm push'ları tek anahtarla durdurmak için.
+    Bireysel ``enabled`` flag'lerini değiştirmez — tekrar açılınca
+    aboneliklerin kendi tercihi devreye girer.
+    """
+    db = _get_db(request)
+    session: Session = request.state.session
+    body = await request.json()
+    new_state = bool(body.get("enabled", True))
+    cfg = await db.update_retention_config(
+        push_global_enabled=new_state,
+        updated_by=session.username,
+    )
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="push",
+            action="master_switch",
+            entity_type="retention_config",
+            entity_id="1",
+            detail=f"push_global_enabled={new_state}",
+        )
+    )
+    return JSONResponse({"push_global_enabled": cfg.push_global_enabled})
+
+
+@router.get("/api/push/active-count", dependencies=[_DEVELOPER_DEP])
+async def push_active_count(request: Request) -> JSONResponse:
+    """Aktif (enabled=true) abonelik sayısı — footer rozet için (Developer)."""
+    db = _get_db(request)
+    subs = await db.list_push_subscriptions()
+    cfg = await db.get_retention_config()
+    return JSONResponse(
+        {
+            "active": sum(1 for s in subs if s.enabled),
+            "total": len(subs),
+            "global_enabled": cfg.push_global_enabled,
+        }
+    )
 
 
 @router.post("/api/push/test", dependencies=[_OPERATOR_DEP])
 async def push_test(request: Request) -> JSONResponse:
-    """Test bildirimi gönderir."""
+    """Test bildirimi gönderir.
+
+    Body'de ``endpoint`` varsa o spesifik aboneliğe (K3 yetki kontrolü).
+    Yoksa tüm filtrelerden geçer (eski davranış — Settings sayfasında
+    ana "test" butonu için).
+    """
     if not is_push_enabled():
         return JSONResponse(
             {"detail": "VAPID anahtarları yapılandırılmamış"},
@@ -2934,12 +3184,36 @@ async def push_test(request: Request) -> JSONResponse:
         )
 
     db = _get_db(request)
-    sent = await send_push_notifications(
-        db=db,
-        title="Custos Test Bildirimi",
-        body="Bu bir test bildirimidir. Push bildirimler çalışıyor!",
-        severity="warn",
-    )
+    session: Session = request.state.session
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    endpoint = body.get("endpoint") if isinstance(body, dict) else None
+
+    if endpoint:
+        sub = await db.get_push_subscription_by_endpoint(endpoint)
+        if sub is None:
+            return JSONResponse({"detail": "Abonelik bulunamadı"}, status_code=404)
+        if not _can_modify_subscription(session, sub):
+            raise HTTPException(
+                status_code=403,
+                detail="Sadece kendi aboneliğinize test gönderebilirsiniz",
+            )
+        sent = await send_push_to_subscription(
+            db=db,
+            sub=sub,
+            title="Custos Test Bildirimi",
+            body="Bu bir test bildirimidir. Push bildirimler çalışıyor!",
+            severity="warn",
+        )
+    else:
+        sent = await send_push_notifications(
+            db=db,
+            title="Custos Test Bildirimi",
+            body="Bu bir test bildirimidir. Push bildirimler çalışıyor!",
+            severity="warn",
+        )
     return JSONResponse({"sent": sent})
 
 

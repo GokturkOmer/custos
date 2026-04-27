@@ -160,12 +160,178 @@
                        bg-bg-elevated border border-border-weak rounded-md
                        hover:text-text-primary hover:border-border-medium transition-colors">
           {{ icon_inline('bell', class='w-4 h-4 inline-block mr-1') }}
-          Test Bildirimi Gönder
+          Test Bildirimi Gönder (tüm aktif aboneliklere)
         </button>
       </div>
       {% endif %}
     </div>
   </div>
+
+  {# B2) Bildirim Alıcıları (P-03 / V11-103) — push çoklu alıcı yönetimi #}
+  {% if push_enabled %}
+  <div id="push-recipients"
+       class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden"
+       x-data="pushRecipients({{ _session.user_id if _session else 'null' }}, {{ 'true' if _is_dev else 'false' }})">
+    <div class="px-4 py-3 border-b border-border-weak flex items-center justify-between">
+      <h2 class="text-panel-title text-text-primary font-semibold">Bildirim Alıcıları</h2>
+      <span class="text-small text-text-secondary"
+            x-text="subs.length + ' kayıtlı cihaz'"></span>
+    </div>
+
+    {# Master switch — sadece Developer #}
+    {% if _is_dev %}
+    <div class="px-4 py-3 border-b border-border-weak flex items-center justify-between
+                bg-bg-elevated">
+      <div>
+        <p class="text-body text-text-primary font-medium">Tüm bildirimleri sustur</p>
+        <p class="text-small text-text-secondary mt-0.5">
+          Tatil/eğitim sırasında push bildirimleri kapat. Aboneler silinmez,
+          tekrar açıldığında bireysel ayarlar devreye girer.
+        </p>
+      </div>
+      <label class="inline-flex items-center cursor-pointer">
+        <input type="checkbox" class="sr-only peer"
+               :checked="!masterEnabled"
+               @change="toggleMaster(!$event.target.checked)">
+        <div class="relative w-11 h-6 bg-bg-surface rounded-full
+                    peer-checked:bg-status-warn
+                    after:content-[''] after:absolute after:top-[2px] after:left-[2px]
+                    after:bg-white after:rounded-full after:h-5 after:w-5
+                    after:transition-all peer-checked:after:translate-x-full
+                    border border-border-weak"></div>
+        <span class="ml-2 text-small text-text-secondary"
+              x-text="masterEnabled ? 'Aktif' : 'Sustur'"></span>
+      </label>
+    </div>
+    {% endif %}
+
+    <div class="p-4 space-y-3">
+      <template x-if="error">
+        <div class="p-3 bg-status-crit/10 border border-status-crit/30 rounded-md">
+          <p class="text-small text-status-crit" x-text="error"></p>
+        </div>
+      </template>
+      <template x-if="success">
+        <div class="p-3 bg-status-ok/10 border border-status-ok/30 rounded-md">
+          <p class="text-small text-status-ok" x-text="success"></p>
+        </div>
+      </template>
+
+      <template x-if="!loading && subs.length === 0">
+        <p class="text-small text-text-disabled">
+          Henüz kayıtlı cihaz yok. Bu cihazdan abone olmak için yukarıdaki
+          "Abone Ol" butonunu kullan.
+        </p>
+      </template>
+
+      {# Cihaz kartları — mobile-friendly, tablo değil #}
+      <template x-for="sub in subs" :key="sub.endpoint">
+        <div class="border border-border-weak rounded-md p-3 space-y-2"
+             :class="{'opacity-60': !sub.enabled}">
+          {# Üst satır: label + owner + actions #}
+          <div class="flex items-start justify-between gap-2 flex-wrap">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <input type="text"
+                       :value="sub.label"
+                       :disabled="!canEdit(sub)"
+                       @blur="updateField(sub, 'label', $event.target.value)"
+                       placeholder="Etiketsiz cihaz"
+                       class="text-body text-text-primary font-medium bg-transparent
+                              border-b border-transparent hover:border-border-weak
+                              focus:border-accent-primary focus:outline-none
+                              disabled:cursor-not-allowed">
+              </div>
+              <p class="text-small text-text-secondary mt-1">
+                <span x-text="sub.created_by_username || '(anonim)'"></span>
+                <span class="text-text-disabled" x-show="sub.created_by_role"
+                      x-text="' · ' + sub.created_by_role"></span>
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              {# Enabled toggle #}
+              <label class="inline-flex items-center cursor-pointer"
+                     :class="{'cursor-not-allowed opacity-50': !canEdit(sub)}">
+                <input type="checkbox" class="sr-only peer"
+                       :checked="sub.enabled"
+                       :disabled="!canEdit(sub)"
+                       @change="updateField(sub, 'enabled', $event.target.checked)">
+                <div class="relative w-9 h-5 bg-bg-elevated rounded-full
+                            peer-checked:bg-status-ok
+                            after:content-[''] after:absolute after:top-[2px] after:left-[2px]
+                            after:bg-white after:rounded-full after:h-4 after:w-4
+                            after:transition-all peer-checked:after:translate-x-full
+                            border border-border-weak"></div>
+              </label>
+              <button type="button"
+                      @click="testSub(sub)"
+                      :disabled="!canEdit(sub)"
+                      class="px-2 py-1 text-xs font-medium text-text-secondary
+                             bg-bg-elevated border border-border-weak rounded
+                             hover:text-text-primary hover:border-border-medium
+                             disabled:opacity-50 disabled:cursor-not-allowed
+                             transition-colors">
+                Test
+              </button>
+              <button type="button"
+                      @click="deleteSub(sub)"
+                      :disabled="!canEdit(sub)"
+                      class="px-2 py-1 text-xs font-medium text-status-crit
+                             bg-status-crit/10 border border-status-crit/30 rounded
+                             hover:bg-status-crit/20
+                             disabled:opacity-50 disabled:cursor-not-allowed
+                             transition-colors">
+                Sil
+              </button>
+            </div>
+          </div>
+
+          {# Severity tier checkbox'ları #}
+          <div class="flex flex-wrap gap-3 text-small">
+            {% set tier_specs = [
+              ('notify_info',      'Info',      'text-status-info'),
+              ('notify_warn',      'Warn',      'text-status-warn'),
+              ('notify_crit',      'Crit',      'text-status-crit'),
+              ('notify_emergency', 'Emergency', 'text-status-crit font-semibold')
+            ] %}
+            {% for field, lbl, cls in tier_specs %}
+            <label class="inline-flex items-center gap-1 cursor-pointer"
+                   :class="{'cursor-not-allowed opacity-50': !canEdit(sub)}">
+              <input type="checkbox"
+                     :checked="sub.{{ field }}"
+                     :disabled="!canEdit(sub)"
+                     @change="updateField(sub, '{{ field }}', $event.target.checked)"
+                     class="rounded border-border-weak">
+              <span class="{{ cls }}">{{ lbl }}</span>
+            </label>
+            {% endfor %}
+          </div>
+
+          {# Sessiz saat — collapsible / inline #}
+          <div class="flex flex-wrap items-center gap-2 text-small text-text-secondary">
+            <span>Sessiz saat:</span>
+            <input type="time"
+                   :value="sub.quiet_start || ''"
+                   :disabled="!canEdit(sub)"
+                   @change="updateField(sub, 'quiet_start', $event.target.value || null)"
+                   class="bg-bg-elevated border border-border-weak rounded px-2 py-0.5
+                          text-small text-text-primary disabled:opacity-50">
+            <span>—</span>
+            <input type="time"
+                   :value="sub.quiet_end || ''"
+                   :disabled="!canEdit(sub)"
+                   @change="updateField(sub, 'quiet_end', $event.target.value || null)"
+                   class="bg-bg-elevated border border-border-weak rounded px-2 py-0.5
+                          text-small text-text-primary disabled:opacity-50">
+            <span class="text-text-disabled text-xs">
+              (Emergency bypass — sessiz saatte de gider)
+            </span>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+  {% endif %}
 
   {# C) Veri Saklama (F11 Paket F) #}
   <div id="retention"
