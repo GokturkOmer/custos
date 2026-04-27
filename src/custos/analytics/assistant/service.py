@@ -18,7 +18,7 @@ from pathlib import Path
 import structlog
 
 from custos.analytics.assistant.index import AssistantIndex
-from custos.analytics.assistant.loader import load_knowledge_base
+from custos.analytics.assistant.loader import load_knowledge_base_multi
 from custos.analytics.assistant.retriever import AssistantRetriever
 from custos.shared.config import Settings
 from custos.shared.config import settings as default_settings
@@ -49,10 +49,21 @@ def get_assistant_retriever() -> AssistantRetriever:
 def build_retriever(settings: Settings) -> AssistantRetriever:
     """Verilen ayarlarla bir retriever örneği kurar. Test ve production
     yolları aynı fonksiyonu kullanır; production yalnızca singleton
-    sarmalıyor olması fark."""
-    knowledge_dir = Path(settings.custos_assistant_knowledge_dir)
-    logger.info("assistant_service_init", knowledge_dir=str(knowledge_dir))
-    chunks = load_knowledge_base(knowledge_dir)
+    sarmalıyor olması fark.
+
+    Bilgi tabanı iki dizinden yüklenir (V11-110 hibrit yapı): repo'daki
+    `data/knowledge/` (temel) + `/var/custos/knowledge/local/` (saha-spesifik).
+    Aynı slug ikisinde de varsa lokal kazanır (bkz. `load_knowledge_base_multi`).
+    """
+    knowledge_dirs = [
+        Path(settings.custos_assistant_knowledge_dir),
+        Path(settings.custos_assistant_knowledge_local_dir),
+    ]
+    logger.info(
+        "assistant_service_init",
+        knowledge_dirs=[str(d) for d in knowledge_dirs],
+    )
+    chunks = load_knowledge_base_multi(knowledge_dirs)
     yaml_chunks = [c for c in chunks if c.yaml_question]
     index = AssistantIndex()
     index.build(chunks)
@@ -62,6 +73,21 @@ def build_retriever(settings: Settings) -> AssistantRetriever:
         score_threshold=settings.custos_assistant_score_threshold,
         top_k=settings.custos_assistant_top_k,
     )
+
+
+def rebuild_assistant_retriever() -> AssistantRetriever:
+    """Singleton'ı sync olarak yeniden kurar (V11-110 indeks reload).
+
+    Settings → Knowledge Base sayfasındaki "İndeksi yeniden oluştur"
+    butonu bu fonksiyonu çağırır. Yeni doküman ekleme/silme/düzenleme
+    sonrası FAISS indeksini güncellemek için. ~2-3 saniye sürer (24
+    doküman, sentence-transformers embedding); pilot ölçeğinde sync
+    çağrı yeterli — race-free, basit.
+    """
+    global _service
+    with _lock:
+        _service = build_retriever(default_settings)
+        return _service
 
 
 def reset_assistant_retriever() -> None:

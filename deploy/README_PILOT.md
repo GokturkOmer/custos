@@ -423,7 +423,92 @@ tarafında cloud sync yok (veri lokal kalır).
 
 ---
 
-## 14. Offline Kurulum (internet yok)
+## 14. Sistem Güncellemeleri (Git Pull)
+
+Custos kodu güncellendiğinde mini PC'ye yeni sürümü çekmek için. Repo
+private olduğu için Personal Access Token (PAT) gerekli — ilk kurulumda
+bir kere ayarla, sonra `git pull` parolasız çalışır.
+
+### 14.1 PAT (Personal Access Token) oluşturma
+
+1. GitHub'da **Settings → Developer settings → Personal access tokens
+   (classic) → Generate new token (classic)**.
+2. **Note**: `custos-pilot-mini-pc` (hangi cihaz olduğunu hatırlamak için).
+3. **Expiration**: 90 gün (kısa tutulması güvenlik için iyi; süresi dolunca
+   yenilenir — bkz. §14.4).
+4. **Yetkiler**: yalnızca `repo` (private repo erişimi). Diğer kutulara
+   dokunma — least-privilege.
+5. **Generate token** → token'ı (`ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
+   kopyala. Bu sayfayı kapatınca bir daha gösterilmez; geliştirici
+   ofisindeki şifre kasasına da bir kopya kaydet.
+
+### 14.2 Mini PC'de tek seferlik PAT kurulumu
+
+Pilot kurulumdan hemen sonra (veya PAT yenilendikten sonra) tek sefer
+çalıştırılır. `<PAT>` yerine üstteki token'ı, `<org>` yerine GitHub
+organizasyonunu/kullanıcısını yaz:
+
+```bash
+# Remote URL'sine PAT'ı göm — sadece custos kullanıcısının okuyabileceği
+# .git/config dosyasına yazılır.
+sudo -u custos git -C /opt/custos remote set-url origin \
+    https://<PAT>@github.com/<org>/custos.git
+
+# Test: ilk fetch parolasız çalışmalı
+sudo -u custos git -C /opt/custos fetch
+```
+
+**Güvenlik notu:** PAT URL'in içine yazıldığı için `/opt/custos/.git/config`
+dosyası `custos:custos` sahipliğinde + `0640` izinde tutulmalıdır
+(setup.sh varsayılanı zaten bu). Başka kullanıcıya okutma.
+
+### 14.3 Güncelleme akışı
+
+Yeni bir sürüm tag'i çıktığında (örn. `v1.1.2`):
+
+```bash
+# 1. Servisleri durdur (collector + dashboard)
+sudo systemctl stop custos.service custos-critical.service
+
+# 2. Yeni kodu çek + tag'e geç
+sudo -u custos git -C /opt/custos fetch --tags
+sudo -u custos git -C /opt/custos checkout v1.1.2
+
+# 3. Bağımlılıkları güncelle (yeni paket eklenmişse)
+sudo -u custos /opt/custos/.venv/bin/pip install -e /opt/custos -q
+
+# 4. DB migration (yeni alembic versiyonu varsa)
+cd /opt/custos
+sudo -u custos /opt/custos/.venv/bin/alembic upgrade head
+
+# 5. Servisleri başlat
+sudo systemctl start custos-critical.service custos.service
+
+# 6. Sağlık kontrolü
+sudo -u custos /opt/custos/.venv/bin/python /opt/custos/scripts/healthcheck.py --json
+```
+
+**Rollback:** Yeni sürümde sorun çıkarsa `git checkout <eski-tag>` +
+`alembic downgrade` (release notes'ta downgrade hash'i belirtilir) +
+servisleri yeniden başlat.
+
+### 14.4 PAT yenileme
+
+Token'ın süresi dolmadan **1 hafta önce** yenilemeyi planla:
+
+1. Geliştirici takvimine "Custos PAT yenile" hatırlatıcısı (90 gün
+   sonrasının 1 hafta öncesi).
+2. GitHub'da yeni token üret (§14.1).
+3. Mini PC'de §14.2 komutunu yeni token'la tekrar çalıştır — eski URL
+   üzerine yazılır.
+4. Eski token'ı GitHub'da **Revoke** et (kullanılmıyorsa).
+
+Süre dolduktan sonra `git fetch` "authentication failed" verirse panik
+yapma — yenile, yeniden ayarla, devam et.
+
+---
+
+## 15. Offline Kurulum (internet yok)
 
 1. Hazır bir internetli Ubuntu 24.04 makinede tüm paketleri `apt-get download`
    ile indir ve mini PC'ye USB kopya.
@@ -436,7 +521,7 @@ tarafında cloud sync yok (veri lokal kalır).
 
 ---
 
-## 15. Rollback (Kurulum Yarıda Kalırsa)
+## 16. Rollback (Kurulum Yarıda Kalırsa)
 
 ```bash
 sudo systemctl disable --now custos.service custos-critical.service 2>/dev/null

@@ -11,7 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from custos.analytics.assistant.loader import Chunk, load_knowledge_base
+from custos.analytics.assistant.loader import (
+    Chunk,
+    DocumentSummary,
+    load_knowledge_base,
+    load_knowledge_base_multi,
+    summarize_documents,
+)
 
 
 def _write(path: Path, content: str) -> None:
@@ -250,3 +256,136 @@ def test_chunk_is_frozen_dataclass() -> None:
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         chunk.text = "farkli"  # type: ignore[misc]
+
+
+# --- V11-110: hibrit KB (multi-dir + override) ---
+
+
+def test_multi_dir_local_overrides_git_for_same_slug(tmp_path: Path) -> None:
+    """Aynı slug iki dizinde varsa lokal kazanır (V11-110, K6 hibrit)."""
+    git_dir = tmp_path / "git"
+    local_dir = tmp_path / "local"
+    _write(
+        git_dir / "chiller.md",
+        """---
+title: "Chiller (git versiyonu)"
+category: ariza
+---
+
+## Genel
+
+Genel içerik (git).
+""",
+    )
+    _write(
+        local_dir / "chiller.md",
+        """---
+title: "Chiller (Torunlar saha)"
+category: ariza
+---
+
+## Saha notu
+
+Torunlar GYO chiller özelleri.
+""",
+    )
+    chunks = load_knowledge_base_multi([git_dir, local_dir])
+    titles = [c.source_title for c in chunks]
+    # Lokal kazanmalı; git versiyonunun başlığı listede olmamalı.
+    assert any("Torunlar saha" in t for t in titles)
+    assert not any("git versiyonu" in t for t in titles)
+
+
+def test_multi_dir_handles_missing_dir_gracefully(tmp_path: Path) -> None:
+    """Dizinlerden biri yoksa diğerinden yine de chunk üretilir."""
+    git_dir = tmp_path / "git"
+    local_dir = tmp_path / "yok_olmayan_dizin"  # exists() == False
+    _write(
+        git_dir / "ahu.md",
+        "---\ntitle: AHU\ncategory: ekipman\n---\n\n## X\n\ny.\n",
+    )
+    chunks = load_knowledge_base_multi([git_dir, local_dir])
+    assert len(chunks) >= 1
+    assert any(c.source_title.startswith("AHU") for c in chunks)
+
+
+def test_multi_dir_combines_unique_slugs_from_both_dirs(tmp_path: Path) -> None:
+    """Farklı slug'lar her iki dizinden toplanır (override yok)."""
+    git_dir = tmp_path / "git"
+    local_dir = tmp_path / "local"
+    _write(
+        git_dir / "chiller.md",
+        "---\ntitle: Chiller\ncategory: ariza\n---\n\n## A\n\nm.\n",
+    )
+    _write(
+        local_dir / "torunlar_pompa.md",
+        "---\ntitle: Torunlar Pompa\ncategory: ekipman\n---\n\n## B\n\nn.\n",
+    )
+    chunks = load_knowledge_base_multi([git_dir, local_dir])
+    titles = {c.source_title.split(" — ")[0] for c in chunks}
+    assert "Chiller" in titles
+    assert "Torunlar Pompa" in titles
+
+
+# --- V11-110: dashboard listesi için summarize_documents ---
+
+
+def test_summarize_documents_returns_one_per_file(tmp_path: Path) -> None:
+    """`summarize_documents` her dosya için tek özet döner (chunk değil)."""
+    _write(
+        tmp_path / "chiller.md",
+        """---
+title: Chiller arıza
+category: ariza
+---
+
+## A
+
+m.
+
+## B
+
+n.
+""",
+    )
+    _write(
+        tmp_path / "sss.yaml",
+        (
+            "title: SSS\ncategory: ekipman\nitems:\n"
+            "  - q: 's1'\n    a: 'c1'\n"
+            "  - q: 's2'\n    a: 'c2'\n"
+        ),
+    )
+    summaries = summarize_documents(tmp_path)
+    assert len(summaries) == 2
+    by_slug = {s.slug: s for s in summaries}
+    assert by_slug["chiller"].title == "Chiller arıza"
+    assert by_slug["chiller"].file_format == "md"
+    assert by_slug["sss"].title == "SSS"
+    assert by_slug["sss"].file_format == "yaml"
+
+
+def test_summarize_documents_skips_readme(tmp_path: Path) -> None:
+    """README.md indekslenmediği gibi özet listesinde de görünmemeli."""
+    _write(tmp_path / "README.md", "# Rehber\n\nİçerik.\n")
+    _write(
+        tmp_path / "asil.md",
+        "---\ntitle: Asil\ncategory: sistem\n---\n\n## X\n\ny.\n",
+    )
+    summaries = summarize_documents(tmp_path)
+    slugs = [s.slug for s in summaries]
+    assert "README" not in slugs and "readme" not in slugs
+    assert "asil" in slugs
+
+
+def test_document_summary_is_frozen() -> None:
+    """`DocumentSummary` frozen — UI'a geçtiğinde mutasyon engellenir."""
+    summary = DocumentSummary(
+        slug="x",
+        title="X",
+        category="sistem",
+        source_path="x.md",
+        file_format="md",
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        summary.title = "Y"  # type: ignore[misc]

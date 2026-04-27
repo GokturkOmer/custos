@@ -77,12 +77,17 @@ class Settings(BaseSettings):
 
     # Teknik asistan chatbot (F8b) ayarları.
     # knowledge_dir: Bilgi tabanı kök dizini — Markdown + YAML dokümanlar burada.
+    # knowledge_local_dir: Saha-spesifik (lokal) dizin (V11-110, K6 hibrit).
+    #   git'le birleştirilir; aynı slug local'de varsa override eder.
+    #   setup.sh kurar (chown custos:custos, chmod 0750). Dev makinesinde
+    #   dizin yoksa loader sessizce atlar.
     # score_threshold: Semantic search'te minimum cosine benzerlik; altındaysa
     #   "bilgi bulamadım" döner. 0.35 brief §4.9'daki multilingual model için
     #   makul başlangıç değeridir (pilot sırasında ayarlanabilir).
     # top_k: Search'ten dönen en yakın chunk sayısı. Kaynak link üretimi için
     #   şimdilik en yüksek skorlu olan kullanılır; 3 future-proof.
     custos_assistant_knowledge_dir: str = "data/knowledge"
+    custos_assistant_knowledge_local_dir: str = "/var/custos/knowledge/local"
     custos_assistant_score_threshold: float = 0.60
     custos_assistant_top_k: int = 3
 

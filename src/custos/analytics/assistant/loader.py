@@ -77,6 +77,56 @@ class _DocMeta:
     tags: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class DocumentSummary:
+    """Knowledge base dashboard listesi için doküman bazında özet (V11-110).
+
+    Chunk değil — bir dosya = bir özet. Settings → KB sayfası bu listeyi
+    render eder; CRUD endpoint'leri slug üstünden çalışır.
+    """
+
+    slug: str
+    title: str
+    category: str
+    source_path: str  # dizin köküne göreli posix yol
+    file_format: str  # "md" | "yaml"
+
+
+def load_knowledge_base_multi(dirs: list[Path]) -> list[Chunk]:
+    """Birden fazla dizinden chunk listesi üretir; aynı slug sonraki
+    dizinde varsa öncekini override eder (V11-110, K6 hibrit yapı).
+
+    Slug = dosya adının extension'sız hali (`Path(source_path).stem`).
+    Aynı slug birden fazla dizinde tanımlıysa, `dirs` listesinde sonraki
+    dizin önceki dizini "yener" — pratikte git/temel dizin önce, lokal/
+    saha dizin sonra konur. Override yapıldığında structlog'a `kb_override`
+    info kaydı düşer.
+
+    Olmayan dizinler atlanır (örn. `/var/custos/knowledge/local/` dev
+    makinesinde yoksa). Override semantiği dizin bazında — bir dizinin
+    sahip olduğu tüm chunk'lar atomik birim, kısmi merge yok.
+    """
+    chunks_by_slug: dict[str, list[Chunk]] = {}
+    for src_dir in dirs:
+        if not src_dir.exists():
+            continue
+        # Bu dizinin chunk'larını slug bazında grupla — aynı slug bu
+        # dizinde de birden fazla dosyada varsa (sub-dir nedeniyle), hepsi
+        # birarada kalır; override yalnızca *önceki* dizine karşı.
+        this_dir: dict[str, list[Chunk]] = {}
+        for chunk in load_knowledge_base(src_dir):
+            slug = Path(chunk.source_path).stem
+            this_dir.setdefault(slug, []).append(chunk)
+        for slug, items in this_dir.items():
+            if slug in chunks_by_slug:
+                logger.info("kb_override", slug=slug, source=str(src_dir))
+            chunks_by_slug[slug] = items
+    out: list[Chunk] = []
+    for items in chunks_by_slug.values():
+        out.extend(items)
+    return out
+
+
 def load_knowledge_base(knowledge_dir: Path) -> list[Chunk]:
     """Verilen dizindeki tüm `*.md` ve `*.yaml/*.yml` dosyalarını okuyup
     chunk listesi üretir.
@@ -126,6 +176,63 @@ def load_knowledge_base(knowledge_dir: Path) -> list[Chunk]:
         yaml_files=len(yaml_files),
     )
     return chunks
+
+
+def summarize_documents(knowledge_dir: Path) -> list[DocumentSummary]:
+    """Dizindeki her doküman için bir özet üretir (V11-110 KB dashboard).
+
+    Chunk listesi değil; her `.md`/`.yaml` dosyası = bir özet. README.md
+    atlanır (rehber dosyası). Frontmatter parse hatası olan dosya için
+    title file stem fallback'iyle yine de listeye girer — kullanıcı UI'dan
+    görüp düzeltebilsin diye. Path traversal sorunu yok: `rglob` zaten
+    `knowledge_dir` köküyle sınırlı.
+    """
+    if not knowledge_dir.exists() or not knowledge_dir.is_dir():
+        return []
+
+    summaries: list[DocumentSummary] = []
+    for path in sorted(knowledge_dir.rglob("*.md")):
+        if path.name.lower() == "readme.md":
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            meta_dict, _ = _split_frontmatter(raw)
+            meta = _parse_meta(meta_dict, path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("kb_summary_md_failed", path=str(path), error=str(exc))
+            continue
+        summaries.append(
+            DocumentSummary(
+                slug=path.stem,
+                title=meta.title,
+                category=meta.category,
+                source_path=path.relative_to(knowledge_dir).as_posix(),
+                file_format="md",
+            )
+        )
+
+    yaml_paths = sorted([*knowledge_dir.rglob("*.yaml"), *knowledge_dir.rglob("*.yml")])
+    for path in yaml_paths:
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw) or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("kb_summary_yaml_failed", path=str(path), error=str(exc))
+            continue
+        if not isinstance(data, dict):
+            continue
+        meta = _parse_meta(data, path)
+        summaries.append(
+            DocumentSummary(
+                slug=path.stem,
+                title=meta.title,
+                category=meta.category,
+                source_path=path.relative_to(knowledge_dir).as_posix(),
+                file_format="yaml",
+            )
+        )
+
+    return summaries
 
 
 def _load_markdown(path: Path, root: Path) -> list[Chunk]:

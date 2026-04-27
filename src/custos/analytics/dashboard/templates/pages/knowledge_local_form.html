@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}{% if mode == 'edit' %}Düzenle: {{ slug }}{% else %}Yeni Lokal Doküman{% endif %} — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-6 max-w-4xl">
+  <div class="flex items-center justify-between">
+    <h1 class="text-heading text-text-primary font-semibold">
+      {% if mode == 'edit' %}
+        Düzenle: <span class="font-mono">{{ slug }}</span>
+      {% else %}
+        Yeni Lokal Doküman
+      {% endif %}
+    </h1>
+    <a href="/dashboard/knowledge"
+       class="text-small text-text-secondary hover:text-text-primary transition-colors">
+      ← Knowledge Base
+    </a>
+  </div>
+
+  {% if error == 'invalid_slug' %}
+  <div class="p-3 bg-status-crit/10 border border-status-crit rounded text-small text-status-crit">
+    Geçersiz slug — yalnızca küçük harf, rakam, alt çizgi ve tire (1-80 karakter).
+  </div>
+  {% elif error == 'duplicate' %}
+  <div class="p-3 bg-status-crit/10 border border-status-crit rounded text-small text-status-crit">
+    Bu slug ile lokal doküman zaten var.
+  </div>
+  {% elif error == 'too_large' %}
+  <div class="p-3 bg-status-crit/10 border border-status-crit rounded text-small text-status-crit">
+    Doküman içeriği 100 KB sınırını aşıyor.
+  </div>
+  {% endif %}
+
+  <div class="bg-bg-surface border border-border-weak rounded-lg p-4 text-small text-text-secondary">
+    <p class="mb-2">
+      <strong class="text-text-primary">Format:</strong> Ham Markdown — frontmatter ve gövde tek metinde.
+    </p>
+    <p class="mb-1">Örnek frontmatter (dosyanın en başına):</p>
+    <pre class="font-mono text-small bg-bg-base border border-border-weak rounded p-2 overflow-x-auto">---
+title: "Başlık"
+category: ariza        # sistem | ekipman | ariza | bakim | diger
+asset_template: chiller   # opsiyonel
+tags: [chiller, alarm]    # opsiyonel
+---
+
+## Bölüm başlığı
+
+İçerik metni...</pre>
+  </div>
+
+  <form method="post"
+        action="{% if mode == 'edit' %}/dashboard/knowledge/local/edit/{{ slug }}{% else %}/dashboard/knowledge/local/new{% endif %}"
+        class="space-y-4">
+    {% if mode == 'new' %}
+    <div>
+      <label for="slug" class="block text-small text-text-secondary mb-1">
+        Slug (dosya adı, .md uzantısı otomatik eklenir)
+      </label>
+      <input type="text" name="slug" id="slug" required
+             pattern="[a-z0-9_\-]{1,80}"
+             value="{{ slug }}"
+             placeholder="ornegin_chiller_torunlar"
+             class="w-full px-3 py-2 bg-bg-base border border-border-weak rounded
+                    font-mono text-small text-text-primary focus:outline-none
+                    focus:border-accent-primary"
+             autofocus>
+      <p class="text-small text-text-secondary mt-1">
+        Yalnızca küçük harf, rakam, <code>_</code> ve <code>-</code>. 1-80 karakter.
+      </p>
+    </div>
+    {% endif %}
+
+    <div>
+      <label for="body" class="block text-small text-text-secondary mb-1">
+        İçerik (Markdown)
+      </label>
+      <textarea name="body" id="body" required
+                rows="24"
+                class="w-full px-3 py-2 bg-bg-base border border-border-weak rounded
+                       font-mono text-small text-text-primary focus:outline-none
+                       focus:border-accent-primary"
+                {% if mode == 'edit' %}autofocus{% endif %}>{{ body }}</textarea>
+      <p class="text-small text-text-secondary mt-1">
+        Maks. 100 KB. Frontmatter syntax hatası olursa loader sessizce dosya adını title yapar.
+      </p>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                     bg-accent-primary text-white rounded-md hover:bg-accent-primary/90 transition-colors">
+        {{ icon_inline('save', class='w-4 h-4') }}
+        {% if mode == 'edit' %}Güncelle{% else %}Kaydet{% endif %}
+      </button>
+      <a href="/dashboard/knowledge"
+         class="text-small text-text-secondary hover:text-text-primary transition-colors">
+        İptal
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

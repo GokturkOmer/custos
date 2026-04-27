@@ -270,7 +270,14 @@ mkdir -p "$LOG_DIR"
 chown "$CUSTOS_USER:$CUSTOS_USER" "$LOG_DIR"
 chmod 750 "$LOG_DIR"
 
-echo "  $INSTALL_DIR, $ARCHIVE_DIR, $BACKUP_DIR, $LOG_DIR hazir."
+# Bilgi tabani lokal (saha-spesifik) dizini — V11-110 hibrit KB.
+# Repo'daki data/knowledge/ ile birlestirilir; ayni slug burada varsa
+# git'i yener. Saha mu_hendisi pilot sirasinda buraya .md dosyalari ekler.
+mkdir -p /var/custos/knowledge/local
+chown "$CUSTOS_USER:$CUSTOS_USER" /var/custos/knowledge/local
+chmod 750 /var/custos/knowledge/local
+
+echo "  $INSTALL_DIR, $ARCHIVE_DIR, $BACKUP_DIR, $LOG_DIR, /var/custos/knowledge/local hazir."
 
 # --- 8. Python venv + bagimoliklar ---
 # Torch CPU-only wheel explicit (kalem 6): pilot mini-PC'de GPU yok. PyPI default
