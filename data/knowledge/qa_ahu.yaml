@@ -1,0 +1,52 @@
+title: "AHU (Klima Santrali) sıkça sorulan sorular"
+category: ekipman
+asset_template: ahu
+tags: [ahu, sss, filtre, fan, batarya]
+items:
+  - q: "AHU nedir?"
+    a: >
+      AHU (Air Handling Unit / Klima Santrali), bir AVM bölgesinin havasını
+      şartlandıran orta büyüklükte cihazdır. Filtre, soğutma/ısıtma bataryası,
+      fan, dış hava karışım odası içerir. AVM'de tipik 5-30 AHU bulunur.
+      Detay: ahu_calismaprensip.md.
+
+  - q: "AHU filtre basınç farkı yüksek"
+    a: >
+      Filtre ΔP > kalibre değer → filter kirli, hava akışı kısıtlı. Müdahale:
+      (1) Filtre görsel kontrol, (2) ΔP transmitter kalibre, (3) Pre-filter
+      değişimi (4-12 hafta), main filter değişimi (3-6 ay). Geciktirilmiş
+      değişim fan elektriğini %5-15 artırır. Detay: ahu_filter_dp_yuksek.md.
+
+  - q: "AHU supply temp setpoint tutmuyor"
+    a: >
+      Setpoint sapması ±1.5 °C üstü ve saatlerce sürüyorsa kontrol problemi.
+      Yüksek sıcaklık: vana açılmıyor, batarya kireçli, filtre çok kirli.
+      Düşük sıcaklık: vana sızıntılı, donma koruması aktif. Osilasyon: PID
+      yanlış, sensör konum hatası. Detay: ahu_supply_temp_kontrol.md.
+
+  - q: "AHU fan trip oldu ne yapayım?"
+    a: >
+      Fan termik koruma açtı. Kontrol: motor sigortası, kayış (eski tip),
+      kapasitör (kondansatör tipi motor), VFD alarm logu. Reset deneyin;
+      tekrar trip ediyorsa motor sargı testi gerek. Bölgede konfor 30-60
+      dakikada bozulur, AVM yönetim haberdar olmalı.
+
+  - q: "AHU dış hava damperi neden kontrol edilir?"
+    a: >
+      Dış hava damperi yanlış pozisyonda kalırsa: kapalı = iç hava CO₂ artar,
+      konfor düşer; tam açık = kış soğutması veya yaz ısıtması artar, enerji
+      israf. Yaygın CO₂ kontrolü ile damper otomatik modüle edilir. Aylık
+      damper hareket testi yeterli.
+
+  - q: "AHU kondens drenajı tıkanırsa ne olur?"
+    a: >
+      Soğutma sırasında bataryadan ayrılan su (kondens) drenajdan tahliye
+      edilemez. Kondens tabağı taşar, AVM tavanı zarar görür, mağaza ürünleri
+      etkilenebilir. Aylık görsel kontrol önemli. Tahliye eğimi minimum %1.
+
+  - q: "AHU yangın damperi nasıl çalışır?"
+    a: >
+      AVM yangın algılama sisteminden gelen sinyalle yangın damperi otomatik
+      kapanır ve AHU durur. Bu yangının havalandırma kanalı ile yayılmasını
+      önler. Yıllık test zorunlu. Yangın olmadığı halde damper kapanırsa
+      sigorta veya kontrol problemi vardır.

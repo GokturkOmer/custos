@@ -1,0 +1,31 @@
+title: "FCU (Fan Coil Unit) sıkça sorulan sorular"
+category: ekipman
+asset_template: fcu
+tags: [fcu, sss, kondens, vana]
+items:
+  - q: "FCU nedir?"
+    a: >
+      FCU (Fan Coil Unit), bir oda veya küçük zone (25-100 m²) için yerelde
+      havayı şartlandıran küçük cihazdır. AHU'dan farklı olarak taze hava
+      işlemi yapmaz, oda havasını sirküle eder. AVM'de yönetim ofisleri,
+      mağaza arka oda, soyunma odaları için yaygın. Detay: fcu_calismaprensip.md.
+
+  - q: "FCU kondens taşması nasıl müdahale edilir?"
+    a: >
+      ACİL — su tavandan sızabilir. Yapılacaklar: (1) FCU'yu durdur, (2) drenaj
+      borusu tıkanma kontrolü, (3) drenaj eğimi kontrolü (1-2% düşey).
+      Kondens tabağı kırık veya eğimsizse servis çağırılır. Detay:
+      fcu_aciliyet_alarmlari.md.
+
+  - q: "FCU fan çalışmıyor"
+    a: >
+      Termik trip, motor arızası, kayış kopması (eski tip) veya kapasitör
+      arızası. Termik reset deneyin; tekrar trip ediyorsa motor sargı testi.
+      Kapasitör tipi motorda sık görülen arıza kapasitör değişimi.
+
+  - q: "FCU oda sıcaklığı setpoint'ten farklı"
+    a: >
+      Fan, vana, filtre, sensör problemlerinden biri olabilir. Vana motor
+      arızalı veya kapalı kalmış, filtre tıkalı, fan arızası, oda termostatı
+      kalibre kaymış. Kontrol sırasında fan akımı + vana açıklığı + filtre
+      durumu paralel incelenir.

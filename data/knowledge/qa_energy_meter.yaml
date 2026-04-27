@@ -1,0 +1,39 @@
+title: "Enerji ölçer sıkça sorulan sorular"
+category: ekipman
+asset_template: energy_analyzer
+tags: [energy_analyzer, akim_trafosu, kalibrasyon, harmonik, cosfi]
+items:
+  - q: "Enerji analizör nedir?"
+    a: >
+      AVM'de elektrik tüketimini izlemek için panellere yerleştirilen ölçüm
+      cihazı. Aktif/reaktif güç, akım, gerilim, cosφ, frekans, harmonik
+      bozulma ölçer. AVM'de 20-100 nokta yaygın — ana giriş, mağaza, mekanik.
+      Detay: energy_meter_kalibrasyon.md.
+
+  - q: "Enerji ölçer kalibrasyonu ne sıklıkla?"
+    a: >
+      AVM ana giriş için yılda 1 zorunlu (yasal raporlama gerekir), mağaza
+      ölçümleri için 2-3 yılda 1. Akım trafoları (CT) yıllık %0.5-1 sapma
+      yaşar. Akredite kalibrasyon firması yapar; Custos bakım sayfasına
+      kayıt + sertifika eklenir.
+
+  - q: "Aktif güç sıfır ama cihaz çalışıyor"
+    a: >
+      CT bağlantısı kopmuş veya polarite ters bağlı. Belirti: gerilim normal,
+      akım 0. Pens ampermetre ile gerçek akım kontrol; analizörle fark %5+
+      ise CT problemi. Akredite servis panel açık çalışma izinli kişi.
+      Detay: energy_meter_anomali.md.
+
+  - q: "Cosφ düşük ne demek?"
+    a: >
+      Cosφ (power factor) = aktif güç / görünen güç. AVM'de hedef 0.95+.
+      0.95 altı elektrik dağıtım reaktif ceza çeker (Türkiye'de aylık %20
+      üst sınır). Sebepler: kompanze tablosu arızası, büyük motor yükü,
+      eski AHU motorları. Acil: capacitor bank servis.
+
+  - q: "THD harmonik nedir?"
+    a: >
+      Total Harmonic Distortion = sinüs dalgasının bozulma yüzdesi. VFD'li
+      cihazlar, LED aydınlatma, UPS harmonik üretir. Hedef: gerilim THD <%5,
+      akım THD <%10. Yüksek THD trafonun ısınmasına ve motor verim kaybına
+      neden olur; harmonik filtre çözüm.

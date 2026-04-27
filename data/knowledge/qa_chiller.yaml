@@ -1,0 +1,77 @@
+title: "Chiller sıkça sorulan sorular"
+category: ekipman
+asset_template: chiller
+tags: [chiller, sss, kompresor, alarm]
+items:
+  - q: "Chiller nedir?"
+    a: >
+      Soğutma sistemlerinde akışkanın ısısını alan merkezi ekipmandır.
+      Tipik olarak kompresör, kondenser, evaporatör ve genleşme valfinden
+      oluşur. AVM'lerde klima santrallerine soğuk su besler. Detay:
+      chiller_calismaprensip.md.
+
+  - q: "Chiller short-cycle yapıyor ne yapayım?"
+    a: >
+      Short-cycling = kompresörün aşırı sık on/off yapması. Olası sebepler:
+      (1) yetersiz refrigerant şarjı, (2) düşük yük (proses tarafı su debisi
+      az), (3) kontrolör histeresis dar, (4) evaporator scaling. İlk yapılacak:
+      Custos compressor_current grafiği son 6 saat incele, üretici panelinden
+      son trip sebeplerini oku. Detay: chiller_short_cycle.md.
+
+  - q: "Chiller düşük emiş basıncı alarmı nedir?"
+    a: >
+      Kompresör emiş tarafındaki basınç üreticinin alt sınırının altına
+      düşmesi. Sebepler: refrigerant kayıp, evaporator kireçlenmesi, düşük
+      su debisi, TXV arızası. Cihaz kendiliğinden trip eder; manuel reset
+      etmeden servis çağırın. Detay: chiller_low_pressure_alarm.md.
+
+  - q: "Chiller yüksek deşarj basıncı alarmı"
+    a: >
+      Kompresör çıkış basıncı (HP) üreticinin üst sınırının üstüne çıkması.
+      Yaz aylarında en sık alarm. Sebepler: kondenser kirli, fan arıza,
+      ortam çok sıcak, refrigerant fazla şarj, su soğutmalıda tower problemi.
+      İlk aksiyon: kondenser görsel kontrol + fan akım okuma. Detay:
+      chiller_yuksek_basinc.md.
+
+  - q: "Chiller COP düştü ne demek?"
+    a: >
+      COP = soğutma kW / elektrik kW. Aynı yükte daha çok elektrik tüketmek
+      verim kaybıdır. Sebepler: kondenser kirli, evaporator scaling, refrigerant
+      kayıp, kompresör yıpranma, yanlış setpoint. Custos COP trendini günlük
+      izler. Detay: chiller_cop_dustuk.md.
+
+  - q: "Kondenser temizliği ne sıklıkla yapılmalı?"
+    a: >
+      Kullanım yoğunluğuna bağlı olarak 30-90 gün aralığında görsel inceleme;
+      belirgin kirlilik varsa basınçlı su ile temizlik. AVM için tipik periyot
+      30 gün (yaz), 60 gün (kış). Yaz öncesi nisan-mayıs ayında kapsamlı
+      kimyasal temizlik önerilir.
+
+  - q: "Chiller donma alarmı ne demek?"
+    a: >
+      Evaporator çıkış sıcaklığı 2 °C altına düştüğünde tetiklenir. Genellikle
+      düşük su debisi sebebidir — pompa devre dışı, vana kapalı, kirli filtre.
+      İkincil sebep: yanlış setpoint, kontrol problemi. Acil aksiyon: pompa ve
+      su akışı kontrolü.
+
+  - q: "Chiller yağ basıncı düşük alarmı"
+    a: >
+      Kompresör yağ basıncı üreticinin alt sınırının altı. Sebepler: yağ
+      kirlenmesi, yağ filtresi tıkalı, soğuk start (yağ viskoz), kompresör iç
+      yıpranma, sensör arızası. Acil: cihazı kapat ve servisi çağır; yağ
+      problemi devam ederse kompresör arızası kaçınılmaz.
+
+  - q: "Refrigerant kaçağı nasıl tespit edilir?"
+    a: >
+      Belirti: LP düşüş, sight glass'ta köpük, COP düşüş, periyodik yeniden
+      şarj gereksinimi. Tespit yöntemleri: UV boya + UV lamba, elektronik
+      sniffer (en yaygın), sabunlu su (basit), sıcaklık görüntüleme. İşlem
+      sertifikalı soğutma teknisyeni tarafından yapılır.
+
+  - q: "Chiller ne sıklıkla bakım istiyor?"
+    a: >
+      Üretici tipik tavsiye: günlük (operatör kontrolü, ses ses), aylık
+      (akım okumalar, yağ seviyesi), 3-6 aylık (kondenser temizlik, sensör
+      kalibre), yıllık (kapsamlı servis, refrigerant test, vibration),
+      3-5 yıllık (kompresör bakım, evaporator chemical clean). AVM saha
+      şartları yüksek kullanımdır, periyotlar daha sık.

@@ -1,0 +1,53 @@
+title: "Custos genel sorular ve alarm yaklaşımı"
+category: sistem
+tags: [custos, alarm, prosedur, operator, bakim_modu]
+items:
+  - q: "Alarm geldi ne yapayım?"
+    a: >
+      7 adımlı yaklaşım: (1) sakin oku alarm metnini, (2) sınıfı belirle
+      (info/warn/crit), (3) bağlam topla (Custos grafiği aç), (4) Custos
+      asistana sor, (5) doküman adımlarını uygula, (6) karar ver
+      (kendi/servis/takvime), (7) kayıt al. Detay: alarm_genel_yaklasim.md.
+
+  - q: "Custos bakım modu nedir?"
+    a: >
+      Maintenance Mode (F8a). Bir ekipmanı geçici olarak alarm ve anomali
+      tespitinden hariç tutar. Servis sırasında kullanılır. Açtığınızda
+      sebep + tahmini bitiş süresi + sorumlu kişi kayıt. Bittiğinde mutlaka
+      kapatın; aksi halde gerçek arızalar fark edilmez.
+
+  - q: "Custos cihaza komut gönderebilir mi?"
+    a: >
+      HAYIR. Custos sadece okur, asla yazmaz — bu mimari kuraldır.
+      Ekipman kontrolü local PLC veya BMS üstünden yapılır. Custos sadece
+      izleme + alarm + log + raporlama. Bu kural güvenlik için hayatidir;
+      yanlış komut endüstriyel ekipmanda büyük hasar verir.
+
+  - q: "Custos arşiv ne kadar süre saklıyor?"
+    a: >
+      Pilot kurulumda raw veri 90 gün, downsampled (saatlik) veri 1 yıl,
+      günlük özet 5 yıl. AVM yıllık enerji ve performans raporu için yeterli.
+      Saha-spesifik istek varsa pilot sözleşmesinde özel saklama süresi
+      belirlenebilir.
+
+  - q: "Custos asistan nasıl çalışıyor?"
+    a: >
+      F8b modülü. data/knowledge/ altındaki Markdown ve YAML dokümanları
+      indeksler. Soru sorduğunuzda exact match (YAML Q&A) → semantic search
+      (FAISS embedding) → boş sırasıyla deneyenir. LLM kullanılmaz, cevaplar
+      sadece doküman içeriğinden gelir. Yanıt güvensizse "bilgi tabanında
+      bulamadım" der.
+
+  - q: "Setpoint nedir?"
+    a: >
+      Bir kontrol cihazının ulaşmaya çalıştığı hedef değer. AHU supply temp
+      setpoint 16 °C, chiller LCHWT setpoint 6 °C, hidrofor basınç setpoint
+      5 bar gibi. Setpoint değişimi enerji tüketimini doğrudan etkiler — her
+      1 °C değişim chiller COP'sini %2-3 etkileyebilir.
+
+  - q: "Confined space nedir?"
+    a: >
+      Sınırlı kapalı alan — yetersiz havalandırma, sınırlı giriş/çıkış, gaz
+      birikim riski. Lift station haznesi, büyük tank içi, eski borular. Tek
+      başına girilmez. Gaz ölçer + havalandırma + ikinci kişi gözetim
+      zorunlu. Profesyonel olmayan giriş hayati tehlike.

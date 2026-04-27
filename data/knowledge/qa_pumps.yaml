@@ -1,0 +1,47 @@
+title: "Pompa (booster + sirkülasyon) sıkça sorulan sorular"
+category: ekipman
+asset_template: booster_pump_set
+tags: [pompa, sirkulasyon, hidrofor, basinc, titresim, vfd]
+items:
+  - q: "Booster pump nedir?"
+    a: >
+      Booster pump set (Türkçe: hidrofor / basınç yükseltme grubu), AVM içinde
+      su ihtiyaç noktalarına yeterli basınçla su sağlar. Şehir 2-4 bar, AVM
+      üst kat ihtiyacı 5-7 bar. 2-6 paralel pompa, basınç tankı, VFD'li
+      kontrolör içerir. Detay: booster_pump_calismaprensip.md.
+
+  - q: "Hidrofor basınç dalgalanması nasıl giderilir?"
+    a: >
+      Setpoint çevresinde sürekli osilasyon. En yaygın sebep basınç tankı
+      havası boşalmış. Kontrol: pompa kapalı + sistem basınçsız iken tank
+      manometresinden hava ölç (setpoint -0.5 bar olmalı). Diğer sebepler:
+      çekvalf sızıntısı, PID yanlış, setpoint çok düşük. Detay:
+      booster_pump_basinc_dalgalanma.md.
+
+  - q: "Sirkülasyon pompası nedir?"
+    a: >
+      Kapalı devre HVAC sisteminde soğuk veya sıcak suyu santraller arasında
+      dolaştırır. AVM'de chiller-AHU arası soğuk su, kazan-radyatör arası
+      sıcak su. Booster pump farklıdır — sirkülasyon pompası basınç değil
+      akış sağlar. Detay: circulation_pump_calismaprensip.md.
+
+  - q: "Sirkülasyon pompası titreşiyor"
+    a: >
+      ISO 10816 sınıfına göre 1.4-2.8 mm/s rms üstü uyarı, 4.5-7.1 mm/s üstü
+      acil. Sebepler: bearing arızası, balanssızlık, mil eğilim, kavitasyon,
+      hava sıkışma, kapling yıpranma. Custos titreşim trendini günlük izler.
+      Detay: circulation_pump_titresim.md.
+
+  - q: "Pompa salmastrası sızdırıyor"
+    a: >
+      Pompa milinde mekanik conta yıpranmış. Damla seviyesinde günlük 1-2
+      damla normal; sürekli akış sızıntı acil değişim gerektirir. Salmastra
+      değişimi pompayı sökmeyi gerektirir, AVM bakım pencere planlanması
+      önemli. AVM kullanımında 4-7 yıl ortalama ömür.
+
+  - q: "Pompa kavitasyon nedir?"
+    a: >
+      Emiş tarafında basınç çok düşerse sıvı içinde gaz baloncukları oluşur,
+      çark yüzeyinde patlayarak metal aşındırır. Belirti: gürültü, titreşim,
+      verim kaybı. Sebepler: NPSH yetersiz, emiş tarafı tıkalı, su sıcak,
+      pompa fazla yüksek monte edilmiş.

@@ -1,0 +1,56 @@
+# Asistan smoke test soruları (P-08 tamamlanma kriteri).
+#
+# Bu YAML, gerçek bilgi tabanından (data/knowledge/) doğru chunk dönüp
+# dönmediğini doğrulayan integration testi tarafından okunur.
+#
+# Geçme kriteri (her soru için):
+#   - retriever cevabı match_type != "empty"
+#   - VE top chunk source_path stem'i acceptable_slugs içinde
+#
+# Toplam başarı eşiği: 10 sorudan ≥ 8'i geçmeli (brief P-08 §5).
+#
+# acceptable_slugs: Hem markdown ana doküman slug'ı hem de varsa karşılık
+# gelen YAML Q&A dosyası (qa_*) listelenir. Exact-match YAML üstünden
+# yakalanan sorular qa_* slug'ı, semantic match ile yakalanan sorular .md
+# slug'ı ile geçer.
+
+questions:
+  - soru: "chiller compressor neden short-cycle yapıyor"
+    beklenen_keywords: [refrigerant, evaporator, kapasite]
+    acceptable_slugs: [chiller_short_cycle, qa_chiller]
+
+  - soru: "AHU filter dp yüksek"
+    beklenen_keywords: [filtre, değişim, kirli]
+    acceptable_slugs: [ahu_filter_dp_yuksek, qa_ahu]
+
+  - soru: "cooling tower approach sıcaklığı yüksek nedeni"
+    beklenen_keywords: [dolgu, kireç, fan]
+    acceptable_slugs: [cooling_tower_approach_yuksek, qa_cooling_tower]
+
+  - soru: "Hidrofor basınç dalgalanması nasıl giderilir?"
+    beklenen_keywords: [tank, hava, çekvalf]
+    acceptable_slugs: [booster_pump_basinc_dalgalanma, qa_pumps]
+
+  - soru: "lift station yüksek seviye alarmı kritik mi?"
+    beklenen_keywords: [tıkanma, servis, gaz]
+    acceptable_slugs: [lift_station_waste_seviye_alarmi, lift_station_fresh_seviye_alarmi, qa_lift_station]
+
+  - soru: "Chiller yüksek deşarj basıncı alarmı"
+    beklenen_keywords: [kondenser, fan, kirli]
+    acceptable_slugs: [chiller_yuksek_basinc, qa_chiller]
+
+  - soru: "Enerji ölçer kalibrasyonu ne sıklıkla?"
+    beklenen_keywords: [yıl, akredite, kalibrasyon]
+    acceptable_slugs: [qa_energy_meter, energy_meter_kalibrasyon]
+
+  - soru: "Alarm geldi ne yapayım?"
+    beklenen_keywords: [sınıf, kayıt, oku]
+    acceptable_slugs: [qa_genel, alarm_genel_yaklasim]
+
+  - soru: "FCU kondens taşması nasıl müdahale edilir?"
+    beklenen_keywords: [drenaj, eğim, tahliye]
+    acceptable_slugs: [qa_fcu, fcu_aciliyet_alarmlari]
+
+  - soru: "Custos cihaza komut gönderebilir mi?"
+    beklenen_keywords: [okur, yazma, yazmaz]
+    acceptable_slugs: [qa_genel]

@@ -1,0 +1,33 @@
+title: "Lift station sıkça sorulan sorular"
+category: ekipman
+asset_template: lift_station_waste
+tags: [lift_station, terfi, atik_su, dalgic_pompa, h2s]
+items:
+  - q: "Lift station nedir?"
+    a: >
+      Yer çekimine karşı su veya atık suyu üst kotaya pompalayan otomatik
+      istasyon. AVM bodrumlarında zorunlu. İki tip: temiz su (yağmur,
+      proses) ve atık su (sifon, food court, foseptik). 2 dalgıç pompa,
+      seviye sensörleri, kontrol paneli içerir. Detay: lift_station_calismaprensip.md.
+
+  - q: "Lift station yüksek seviye alarmı kritik mi?"
+    a: >
+      EVET — KRİTİK. Atık su tipinde 30 dakikada AVM içine taşma riski.
+      Sebep en yaygın pompa tıkanması (poşet, hijyenik bez, food court
+      atığı). Acil: Custos bakım modu aç + AVM teknik servis acil çağrı.
+      Atık su haznesine TEK BAŞINA GİRİLMEZ — H₂S gazı + boğulma riski.
+      Detay: lift_station_seviye_alarmi.md.
+
+  - q: "Lift station haznesinde gaz tehlikesi var mı?"
+    a: >
+      Atık su tipinde EVET. H₂S (hidrojen sülfür) ve metan gazı birikebilir.
+      Hazneye giriş confined space prosedürü gerektirir: gaz ölçer +
+      havalandırma + ikinci kişi gözetim. Profesyonel olmayan personel
+      hayatını kaybedebilir.
+
+  - q: "Lift station pompa rotation çalışmıyor"
+    a: >
+      Lead pompa hep duty, lag pompa hiç çalışmıyor. Eşitsiz yıpranma,
+      bir pompa hızla bozulur. Sebepler: kontrolör rotation parametre
+      yanlış, lag pompa zaten arızalı (start denemesi başarısız), kabel
+      sorunu. Custos pump_runtime_hours raporu eşitsizliği yakalar.

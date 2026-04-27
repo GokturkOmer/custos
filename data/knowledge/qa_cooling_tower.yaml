@@ -1,0 +1,38 @@
+title: "Cooling Tower (Soğutma Kulesi) sıkça sorulan sorular"
+category: ekipman
+asset_template: cooling_tower
+tags: [cooling_tower, sss, kireç, fan, legionella]
+items:
+  - q: "Cooling tower nedir?"
+    a: >
+      Su soğutmalı çillerlerin kondenser tarafındaki ısıyı atmosfere atan
+      ekipman. Evaporatif soğutma prensibi — sıcak suyun bir kısmı buharlaşır,
+      kalanı soğur. AVM'de 1-3 kule yaygın, her biri 200-1500 kW. Detay:
+      cooling_tower_calismaprensip.md.
+
+  - q: "Cooling tower approach yüksek ne demek?"
+    a: >
+      Approach = supply suyu sıcaklığı − dış havanın yaş termometre sıcaklığı.
+      Yeni cihazda 3-5 °C, sahanın aşınma ile 5-7 °C. 10 °C üstü performans
+      kaybı. Sebepler: dolgu kireçli, nozzle tıkalı, fan yetersiz, hava
+      sirkülasyonu blokesi. Detay: cooling_tower_approach_yuksek.md.
+
+  - q: "Cooling tower fan trip oldu"
+    a: >
+      Fan motoru termik trip etti veya mekanik arıza. Multi-cell kulede tek
+      hücre çalışmıyor olabilir. Kontrol: termik reset, motor akım, ses ve
+      titreşim, pala açısı. Acilen düzeltilmezse chiller HP trip kaçınılmaz.
+
+  - q: "Cooling tower legionella riski"
+    a: >
+      Soğutma kuleleri Legionella üremesi için ideal koşul (su + ılık sıcaklık
+      + organik madde). Yıllık mikrobiyolojik analiz zorunlu, biyosit dozajı
+      sürekli, dolgu temizliği periyodik. Risk yönetimi olmazsa AVM çevresine
+      bakteri yayabilir. Aylık kontrol önemli.
+
+  - q: "Make-up water nedir?"
+    a: >
+      Cooling tower'da buharlaşma + drift + blowdown yoluyla kaybedilen suyu
+      yenileyen taze su girişidir. Otomatik float valve ile kontrol edilir.
+      Make-up valve arızası sürekli su israfı veya seviye düşmesi yapar.
+      İletkenlik kontrolü blowdown hızını otomatik ayarlar.
