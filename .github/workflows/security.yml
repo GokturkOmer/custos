@@ -1,0 +1,43 @@
+name: Security Audit
+
+# PP-02 (29 Nis 2026): Bagimlilik guvenlik taramasi.
+# Haftalik cron + manuel tetikleyici + lockfile/pyproject degisikliginde PR.
+
+on:
+  schedule:
+    # Pazartesi 06:00 UTC = 09:00 Turkiye saati.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "requirements.lock"
+      - "pyproject.toml"
+      - ".github/workflows/security.yml"
+
+jobs:
+  pip-audit:
+    name: pip-audit (lockfile)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: pip-audit kurulum
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Bagimlilik guvenlik taramasi
+        run: |
+          # torch==2.11.0+cpu PyPI'da yok (CPU wheel pytorch.org'dan geliyor),
+          # pip-audit lookup yapamiyor — bu satirlari hariç tut.
+          grep -v -E '^(torch==2|--extra-index)' requirements.lock > /tmp/audit_targets.txt
+
+          # transformers CVE-2026-1839: Trainer class kullanilmiyor, sadece
+          # sentence-transformers Pipeline (embeddings). PP-01 kabul edilen
+          # risk; v1.2'de transformers 5.x major bump planli.
+          pip-audit -r /tmp/audit_targets.txt --strict --ignore-vuln CVE-2026-1839

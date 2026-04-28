@@ -1,0 +1,44 @@
+version: 2
+
+# PP-02 (29 Nis 2026): Otomatik bagimlilik guncellemesi.
+# Haftalik PR'lar — guvenlik patch'leri 5 PR limit ile.
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Istanbul"
+    open-pull-requests-limit: 5
+    target-branch: "main"
+    labels:
+      - "dependencies"
+      - "security"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    ignore:
+      # transformers major bump (4.x -> 5.x) v1.2 backlog'da planli; PP-01 notu.
+      # sentence-transformers da bu zincire bagli.
+      - dependency-name: "transformers"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "sentence-transformers"
+        update-types: ["version-update:semver-major"]
+      # torch — CPU varyanti pytorch.org index'inden geliyor, manuel yonetim.
+      - dependency-name: "torch"
+      # pymodbus 3.13.0 SimData API breaking; v1.1'de upgrade planli.
+      - dependency-name: "pymodbus"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "ci"
+    commit-message:
+      prefix: "ci"
