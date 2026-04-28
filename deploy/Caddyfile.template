@@ -7,7 +7,8 @@
 # Davranış:
 #   - 443: TLS termination (self-signed cert), reverse proxy → custos uvicorn
 #   - 80 : HTTPS redirect (HSTS preload öncesi yumuşak geçiş)
-#   - Güvenlik header'ları: HSTS 1 yıl + nosniff + DENY frame
+#   - Güvenlik header'ları: HSTS 1 yıl + nosniff + DENY frame +
+#     CSP + Permissions-Policy + COOP/CORP (PP-07 — 29 Nis 2026)
 #
 # Self-signed cert açıklaması:
 #   "tls /etc/custos/tls/cert.pem /etc/custos/tls/key.pem" Caddy'ye verilen
@@ -38,6 +39,25 @@ ${CUSTOS_HOST_IP}:443 {
 
     # Çapraz origin XHR'lar için (Custos tek origin'de çalışır, yine de defansif).
     header Referrer-Policy "same-origin"
+
+    # PP-07 (29 Nis 2026) — Content Security Policy.
+    # htmx (hx-on:), alpine (x-data, x-bind:style), uPlot inline script ve
+    # style kullanıyor → 'unsafe-inline' geçici olarak script-src ve style-src
+    # için gerekli. Nonce-based CSP v1.2 backlog'da (htmx config + middleware
+    # ile her response'a nonce inject).
+    # data: URI img-src — SVG icon library inline data:image/svg+xml.
+    # frame-ancestors 'none' X-Frame-Options DENY ile çift savunma.
+    # base-uri / form-action: HTML injection saldırılarında base/form override
+    # ile origin değiştirmeyi engeller.
+    header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+    # Permissions-Policy — Custos'un kullanmadığı tarayıcı API'lerini kapatır.
+    # Saldırgan XSS bulsa bile kamera/mikrofon/jeolokasyon erişimi alamaz.
+    header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()"
+
+    # Cross-Origin izolasyon — popup ve embed'lerden gelen saldırı yüzeyini kapat.
+    header Cross-Origin-Opener-Policy "same-origin"
+    header Cross-Origin-Resource-Policy "same-origin"
 
     # Server header sızdırma azaltma.
     header -Server
