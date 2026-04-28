@@ -280,12 +280,16 @@ chmod 750 /var/custos/knowledge/local
 echo "  $INSTALL_DIR, $ARCHIVE_DIR, $BACKUP_DIR, $LOG_DIR, /var/custos/knowledge/local hazir."
 
 # --- 8. Python venv + bagimoliklar ---
-# Torch CPU-only wheel explicit (kalem 6): pilot mini-PC'de GPU yok. PyPI default
-# wheel CUDA+cudnn cekiyor (~4-5 GB + 10 dk). torch==2.11.0+cpu sabitli:
-#   - setuptools<82 kisitlamasi +cpu wheel'de yok (kalem 12);
-#   - A3 denetim setuptools>=78.1.1 korunur (PYSEC-2025-49 path-traversal RCE);
+# PP-01 (29 Nis 2026): requirements.lock ile reprodusibility — tum transitif
+# bagimliliklar pinli. pip-compile cikti, header'da PIP_EXTRA_INDEX_URL pytorch
+# CPU wheel referansi var. torch==2.11.0+cpu lockfile'da pin'li (mini-PC'de GPU
+# yok; PyPI default CUDA wheel ~4-5 GB + 10 dk). Kabul edilen riskler:
+#   - setuptools 78.1.1<=v<82: PYSEC-2025-49 path-traversal RCE fix + +cpu wheel
+#     setuptools<82 kisitlamasi (lockfile bu araligi tutar);
+#   - transformers 4.57.6 CVE-2026-1839: Trainer kullanilmiyor, sadece
+#     sentence-transformers Pipeline (embedding); v1.2'de major bump planli;
 #   - sentence-transformers + faiss otomatik CPU backend.
-echo "[7/17] Python sanal ortami kuruluyor (torch CPU-only wheel)..."
+echo "[7/17] Python sanal ortami kuruluyor (lockfile'dan)..."
 if [[ ! -d "$INSTALL_DIR/.venv" ]]; then
     sudo -u "$CUSTOS_USER" python${PYTHON_VERSION} -m venv "$INSTALL_DIR/.venv"
 fi
@@ -293,19 +297,18 @@ sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip -q
 # setuptools >=78.1.1 — PYSEC-2025-49 path traversal RCE fix (A3 denetim).
 sudo -u "$CUSTOS_USER" "$INSTALL_DIR/.venv/bin/pip" install --upgrade 'setuptools>=78.1.1' -q
 
-# Torch CPU wheel — GPU disinda calisan tum edge deploy'lar icin.
-# PIP_EXTRA_INDEX_URL pytorch CPU endeksini pyproject resolution icin de ekler
-# (sentence-transformers'in transitive torch ihtiyacini ayni kaynaktan cozer).
+# PP-01 (29 Nis 2026): pinli kurulum requirements.lock uzerinden.
+# torch==2.11.0+cpu lockfile'da pin'li; PIP_EXTRA_INDEX_URL pytorch CPU endeksi
+# sentence-transformers'in transitive torch ihtiyacini ayni kaynaktan cozer.
 export PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
 sudo -u "$CUSTOS_USER" \
     PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu \
-    "$INSTALL_DIR/.venv/bin/pip" install 'torch==2.11.0+cpu' -q
+    "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.lock" -q
 
-# Ana paket kurulumu (transitive torch artik kurulu, tekrar indirmez)
+# Custos paketinin kendisi editable — deps lockfile'dan kuruldu.
 sudo -u "$CUSTOS_USER" \
-    PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu \
-    "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR" -q
-echo "  Bagimoliklar yuklendi (torch 2.11.0+cpu)."
+    "$INSTALL_DIR/.venv/bin/pip" install --no-deps -e "$INSTALL_DIR" -q
+echo "  Bagimoliklar lockfile'dan yuklendi (torch 2.11.0+cpu pinli)."
 
 # --- 9. Veritabani + .env ---
 # DB user ayrimi (V11-106/K14): iki PG user kurulur.
