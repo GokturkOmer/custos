@@ -225,6 +225,26 @@ temizlemek gerekebilir (`chrome://net-internals/#hsts`).
 
 ## 8. Modbus Tag Ekleme
 
+### 8.0 Ağ Topolojisi (Önkoşul — Güvenlik)
+
+**Önemli:** Modbus TCP protokolü authentication desteklemez (sektör
+standardı). PLC'lere yetkisiz erişimi engellemek için aşağıdaki ağ
+topolojisi şarttır:
+
+- PLC'leri **ayrı bir VLAN/subnet'te** tutun (örn. `192.168.10.0/24`).
+- Custos mini PC'sini bu VLAN'a yönlendirin; router/switch ACL veya
+  firewall kuralı ile **diğer cihazların PLC trafiğini engelleyin**
+  (sadece Custos IP'sinden TCP/502 izinli).
+- Custos mini PC'nin kendi yönetim arayüzü (8001/HTTPS) ise tesis
+  LAN'ında veya yalnız operator'ün VLAN'ında erişilebilir olmalı.
+
+Tipik akış: `Plant LAN ↔ Custos mini PC ↔ PLC VLAN`.
+
+Custos mimari olarak **yalnızca okur**; Modbus write fonksiyonları
+kodda implement edilmemiştir (bkz. CLAUDE.md kuralı). Yine de bu ağ
+izolasyonu defansif derinliği sağlar — saldırgan başka bir cihazdan
+PLC'lere doğrudan komut gönderemez.
+
 ### 8a. Dashboard'dan otomatik keşif (önerilen)
 
 1. Dashboard → **Settings → Connection Profiles** → "Yeni profil" (PLC IP, port 502, unit ID).
@@ -438,7 +458,7 @@ bir kere ayarla, sonra `git pull` parolasız çalışır.
    yenilenir — bkz. §14.4).
 4. **Yetkiler**: yalnızca `repo` (private repo erişimi). Diğer kutulara
    dokunma — least-privilege.
-5. **Generate token** → token'ı (`ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
+5. **Generate token** → token'ı (`ghp_<TOKEN_BURAYA>`, ~40 karakter)
    kopyala. Bu sayfayı kapatınca bir daha gösterilmez; geliştirici
    ofisindeki şifre kasasına da bir kopya kaydet.
 

@@ -85,10 +85,10 @@ src/custos/
 ```
 
 Diğer dizinler:
-- `tests/` — 129 entegrasyon ve dashboard testi
+- `tests/` — 713 test (286 unit + 244 integration + 183 dashboard)
 - `deploy/` — systemd service, setup script, pilot dokümanı
 - `scripts/` — VAPID key üretimi, model eğitimi, healthcheck
-- `alembic/` — Veritabanı migration'ları (001-017)
+- `alembic/` — Veritabanı migration'ları (001-037)
 - `docs/` — Proje brief'i
 
 ## Veritabanı
