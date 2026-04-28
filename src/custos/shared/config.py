@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     custos_db_dsn: str = ""
     custos_db_admin_dsn: str = ""
 
+    # PP-09 (29 Nis 2026): Pytest integration testleri için ayrı DSN.
+    # Boşsa runtime DSN'e fallback yapılır (geriye uyumlu); set edilince
+    # integration testleri sadece bu DSN'e yazar — pilot/dev DB'sine
+    # TEST_ prefix'li satır sızıntısı riski kapanır. Önerilen pattern:
+    #   CUSTOS_TEST_DSN=postgresql://custos:test@localhost:5433/custos_test
+    custos_test_dsn: str = ""
+
     # VAPID push bildirim ayarları
     custos_vapid_private_key: str = ""
     custos_vapid_public_key: str = ""

@@ -9,6 +9,11 @@
 Not: Mevcut (F8a öncesi) test dosyaları kendi `db` fixture'larını tanımlıyor
 ve pytest local-scope öncelikli olduğundan onlar etkilenmez. Yeni F8a
 testleri (maintenance_*) fixture tanımlamayıp conftest'tekini kullanır.
+
+PP-09 (29 Nis 2026): ``CUSTOS_TEST_DSN`` env değişkeni tanımlıysa
+fixture'lar onu kullanır; boşsa runtime DSN'e fallback (geriye uyumlu).
+Pilot DB'sine yanlışlıkla yazma riskini kapatmak için saha geliştirici
+makinelerinde ``CUSTOS_TEST_DSN`` set edilmeli.
 """
 
 from __future__ import annotations
@@ -102,13 +107,24 @@ async def _cleanup_test_rows(pool: asyncpg.Pool) -> None:
         )
 
 
+def _test_settings() -> Settings:
+    """PP-09: CUSTOS_TEST_DSN tanımlıysa runtime DSN'i o ile override et.
+
+    Boşsa Settings olduğu gibi döner (geriye uyumlu — saha dışı CI'da
+    test DB ayrı set edilmeden de çalışsın).
+    """
+    s = Settings()
+    if s.custos_test_dsn:
+        return s.model_copy(update={"custos_db_dsn": s.custos_test_dsn})
+    return s
+
+
 @pytest.fixture
 def _check_db_available() -> None:
     """TimescaleDB erişilebilir değilse testi atla."""
 
     async def _probe() -> bool:
-        s = Settings()
-        database = TimescaleDBDatabase(s)
+        database = TimescaleDBDatabase(_test_settings())
         try:
             await database.connect()
             result = await database.health_check()
@@ -125,8 +141,7 @@ def _check_db_available() -> None:
 @pytest.fixture
 async def db() -> AsyncIterator[TimescaleDBDatabase]:
     """Maintenance + threshold + tag test satırlarını temizleyen DB fixture."""
-    s = Settings()
-    database = TimescaleDBDatabase(s)
+    database = TimescaleDBDatabase(_test_settings())
     await database.connect()
     pool = database._get_pool()
     await _cleanup_test_rows(pool)
