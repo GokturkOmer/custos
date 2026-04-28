@@ -29,23 +29,55 @@
       </span>
       {% endif %}
     </div>
-    <form method="post"
-          action="/dashboard/overview/charts/{{ chart.chart_key }}/time-window"
-          class="flex items-center gap-2">
-      <label for="time-window" class="text-small text-text-secondary">Zaman aralığı</label>
-      <select id="time-window" name="minutes"
-              onchange="this.form.submit()"
-              class="px-2 py-1 bg-bg-base border border-border-weak rounded-sm
-                     text-cell text-text-primary focus:outline-none
-                     focus:border-accent-primary">
-        {% for tw in time_windows %}
-        <option value="{{ tw.minutes }}"
-                {% if tw.minutes == chart.time_window_minutes %}selected{% endif %}>
-          {{ tw.label }}
-        </option>
-        {% endfor %}
-      </select>
-    </form>
+    <div class="flex items-center gap-3 flex-wrap">
+      {% if custom_range_active %}
+      <span class="text-small text-accent-primary px-2 py-0.5 rounded-sm bg-bg-elevated"
+            title="Ozel tarih aralığı aktif — preset'e dönmek için aşağıdaki dropdown'u kullanın"
+            data-custom-range="true">
+        {{ time_label }}
+      </span>
+      {% endif %}
+      <form method="post"
+            action="/dashboard/overview/charts/{{ chart.chart_key }}/time-window"
+            class="flex items-center gap-2">
+        <label for="time-window" class="text-small text-text-secondary">Zaman aralığı</label>
+        <select id="time-window" name="minutes"
+                onchange="this.form.submit()"
+                class="px-2 py-1 bg-bg-base border border-border-weak rounded-sm
+                       text-cell text-text-primary focus:outline-none
+                       focus:border-accent-primary">
+          {% for tw in time_windows %}
+          <option value="{{ tw.minutes }}"
+                  {% if not custom_range_active and tw.minutes == chart.time_window_minutes %}selected{% endif %}>
+            {{ tw.label }}
+          </option>
+          {% endfor %}
+        </select>
+      </form>
+      <form method="get"
+            action="/dashboard/overview/charts/{{ chart.chart_key }}/view"
+            class="flex items-center gap-1.5 flex-wrap"
+            data-test-id="custom-range-form">
+        <label for="custom-start" class="text-small text-text-secondary">Özel aralık</label>
+        <input type="datetime-local" id="custom-start" name="start"
+               value="{{ custom_start_local }}"
+               class="px-2 py-1 bg-bg-base border border-border-weak rounded-sm
+                      text-cell text-text-primary focus:outline-none
+                      focus:border-accent-primary">
+        <span class="text-small text-text-disabled">–</span>
+        <input type="datetime-local" id="custom-end" name="end"
+               value="{{ custom_end_local }}"
+               class="px-2 py-1 bg-bg-base border border-border-weak rounded-sm
+                      text-cell text-text-primary focus:outline-none
+                      focus:border-accent-primary">
+        <button type="submit"
+                class="px-2 py-1 text-small text-text-primary bg-bg-elevated
+                       border border-border-weak rounded-sm
+                       hover:border-accent-primary transition-colors">
+          Göster
+        </button>
+      </form>
+    </div>
   </div>
 
   {# Chart + Kontrol paneli grid #}

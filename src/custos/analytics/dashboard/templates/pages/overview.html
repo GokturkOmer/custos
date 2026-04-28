@@ -21,9 +21,20 @@
     {% for slot in chart_slots %}
       {% set mins = slot.time_window_minutes %}
       {% if mins < 60 %}
-        {% set time_label = 'Last ' ~ mins ~ ' min' %}
+        {% set time_label = 'Son ' ~ mins ~ ' dk' %}
+      {% elif mins < 1440 %}
+        {% set time_label = 'Son ' ~ (mins // 60) ~ ' sa' %}
       {% else %}
-        {% set time_label = 'Last ' ~ (mins // 60) ~ 'h' %}
+        {% set days = mins // 1440 %}
+        {% if days < 7 %}
+          {% set time_label = 'Son ' ~ days ~ ' gun' %}
+        {% elif days < 30 %}
+          {% set time_label = 'Son ' ~ (days // 7) ~ ' hafta' %}
+        {% elif days < 365 %}
+          {% set time_label = 'Son ' ~ (days // 30) ~ ' ay' %}
+        {% else %}
+          {% set time_label = 'Son ' ~ (days // 365) ~ ' yil' %}
+        {% endif %}
       {% endif %}
       {{ chart_panel(slot.title, slot.chart_key,
                      height=220, editable=true, deletable=true,

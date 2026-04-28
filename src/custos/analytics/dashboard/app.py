@@ -678,16 +678,102 @@ async def overview_chart_delete(
     return RedirectResponse(url="/dashboard/overview", status_code=303)
 
 
-# Detay sayfasinda izin verilen zaman aralik secenekleri (dakika)
-_ALLOWED_TIME_WINDOWS: frozenset[int] = frozenset({15, 30, 60, 180, 360, 720, 1440})
+# Detay sayfasinda izin verilen zaman aralik secenekleri (dakika).
+# v1.1 R-02: 24 saatin uzeri eklendi — 1 hafta, 1 ay, 3 ay, 1 yil.
+_ALLOWED_TIME_WINDOWS: frozenset[int] = frozenset(
+    {
+        15,
+        30,
+        60,
+        180,
+        360,
+        720,
+        1440,  # mevcut: 15 dk - 24 saat
+        10080,  # 1 hafta (7 gun)
+        43200,  # 1 ay (30 gun)
+        129600,  # 3 ay (90 gun)
+        525600,  # 1 yil (365 gun)
+    }
+)
 
 
 def _format_time_window_label(minutes: int) -> str:
-    """15 → 'Last 15 min', 60 → 'Last 1h', 1440 → 'Last 24h'."""
+    """Pencere dakika sayisini operatore dostu TR etikete cevirir.
+
+    Eslesme: 15 -> 'Son 15 dk', 60 -> 'Son 1 sa', 1440 -> 'Son 1 gun',
+    10080 -> 'Son 1 hafta', 43200 -> 'Son 1 ay', 525600 -> 'Son 1 yil'.
+    """
     if minutes < 60:
-        return f"Last {minutes} min"
-    hours = minutes // 60
-    return f"Last {hours}h"
+        return f"Son {minutes} dk"
+    if minutes < 1440:
+        return f"Son {minutes // 60} sa"
+    days = minutes // 1440
+    if days < 7:
+        return f"Son {days} gun"
+    if days < 30:
+        return f"Son {days // 7} hafta"
+    if days < 365:
+        return f"Son {days // 30} ay"
+    return f"Son {days // 365} yil"
+
+
+def _parse_custom_range(
+    start_raw: str | None,
+    end_raw: str | None,
+    *,
+    now: datetime,
+) -> tuple[datetime, datetime] | None:
+    """Custom date range query string'ini UTC datetime cifti olarak dondurur.
+
+    `<input type="datetime-local">` naive ISO string yollar (yerel saat).
+    Sunucu yerel timezone'unu (Settings.custos_timezone) varsayar, sonra
+    UTC'ye cevirir. Iki taraf da bos/None ise None doner — handler mevcut
+    `time_window_minutes` davranisina geri duser.
+
+    Validasyon:
+        - end > start
+        - end <= now (UTC)
+        - start >= now - 3650 gun (query guard ust limiti)
+    Aksi halde HTTPException 400.
+    """
+    if not start_raw and not end_raw:
+        return None
+    if not start_raw or not end_raw:
+        raise HTTPException(
+            status_code=400,
+            detail="Ozel aralik icin baslangic ve bitis birlikte verilmeli",
+        )
+    local_tz = ZoneInfo(settings.custos_timezone)
+    try:
+        start_local = datetime.fromisoformat(start_raw)
+        end_local = datetime.fromisoformat(end_raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Tarih formati gecersiz (YYYY-MM-DDTHH:MM bekleniyor)",
+        ) from exc
+    if start_local.tzinfo is None:
+        start_local = start_local.replace(tzinfo=local_tz)
+    if end_local.tzinfo is None:
+        end_local = end_local.replace(tzinfo=local_tz)
+    start_utc = start_local.astimezone(UTC)
+    end_utc = end_local.astimezone(UTC)
+    if end_utc <= start_utc:
+        raise HTTPException(
+            status_code=400,
+            detail="Bitis zamani baslangictan sonra olmali",
+        )
+    if end_utc > now:
+        raise HTTPException(
+            status_code=400,
+            detail="Bitis zamani gelecekte olamaz",
+        )
+    if start_utc < now - timedelta(days=3650):
+        raise HTTPException(
+            status_code=400,
+            detail="Baslangic zamani 10 yildan eski olamaz",
+        )
+    return start_utc, end_utc
 
 
 @router.get(
@@ -696,8 +782,15 @@ def _format_time_window_label(minutes: int) -> str:
 async def overview_chart_detail(
     request: Request,
     chart_key: str,
+    start: str | None = None,
+    end: str | None = None,
 ) -> HTMLResponse:
-    """Chart detay sayfasi — genis chart + tag panel + zaman araligi."""
+    """Chart detay sayfasi — genis chart + tag panel + zaman araligi.
+
+    `?start=...&end=...` parametreleri verilirse o ozel aralik kullanilir
+    (chart.time_window_minutes ignore). Aksi halde mevcut davranis: simdi
+    eksi pencere -> simdi.
+    """
     db = _get_db(request)
     chart = await db.get_overview_chart(chart_key)
     if chart is None:
@@ -708,8 +801,13 @@ async def overview_chart_detail(
     chart_tags = await db.list_overview_chart_tags(chart_key)
 
     now = datetime.now(UTC)
-    chart_start = now - timedelta(minutes=chart.time_window_minutes)
-    window = now - chart_start
+    custom_range = _parse_custom_range(start, end, now=now)
+    if custom_range is not None:
+        chart_start, chart_end = custom_range
+    else:
+        chart_start = now - timedelta(minutes=chart.time_window_minutes)
+        chart_end = now
+    window = chart_end - chart_start
     resolution = _resolution_hint_for(window)
     long_window = _is_long_window(window)
 
@@ -721,7 +819,7 @@ async def overview_chart_detail(
         db.query_readings_auto(
             ct.tag_id,
             chart_start,
-            now,
+            chart_end,
             target_points=_CHART_TARGET_POINTS,
             tag_count=chart_tag_count,
         )
@@ -760,7 +858,7 @@ async def overview_chart_detail(
         "labels": labels,
         "units": units,
         "window_start": int(chart_start.timestamp()),
-        "window_end": int(now.timestamp()),
+        "window_end": int(chart_end.timestamp()),
         "resolution": resolution,
         "long_window_hint": long_window,
     }
@@ -769,6 +867,22 @@ async def overview_chart_detail(
         {"minutes": m, "label": _format_time_window_label(m)} for m in sorted(_ALLOWED_TIME_WINDOWS)
     ]
 
+    # Custom range UI durumu — datetime-local input'larina yerel saatte deger
+    # basmak icin sunucu yerel timezone'una geri ceviririz.
+    custom_range_active = custom_range is not None
+    if custom_range_active:
+        local_tz = ZoneInfo(settings.custos_timezone)
+        custom_start_local = chart_start.astimezone(local_tz).strftime("%Y-%m-%dT%H:%M")
+        custom_end_local = chart_end.astimezone(local_tz).strftime("%Y-%m-%dT%H:%M")
+        time_label = (
+            f"{chart_start.astimezone(local_tz).strftime('%d.%m.%Y %H:%M')} – "
+            f"{chart_end.astimezone(local_tz).strftime('%d.%m.%Y %H:%M')}"
+        )
+    else:
+        custom_start_local = ""
+        custom_end_local = ""
+        time_label = _format_time_window_label(chart.time_window_minutes)
+
     ctx = _base_context(
         page_title=chart.title,
         active_nav="/dashboard/overview",
@@ -776,9 +890,12 @@ async def overview_chart_detail(
         chart_data=chart_data,
         tag_meta=tag_meta,
         time_windows=time_windows,
-        time_label=_format_time_window_label(chart.time_window_minutes),
+        time_label=time_label,
         resolution_hint=resolution,
         long_window_hint=long_window,
+        custom_range_active=custom_range_active,
+        custom_start_local=custom_start_local,
+        custom_end_local=custom_end_local,
     )
     return templates.TemplateResponse(
         request,
