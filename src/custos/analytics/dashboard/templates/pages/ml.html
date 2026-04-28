@@ -1,0 +1,254 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+{% from 'components/kpi_card.html' import kpi_card %}
+{% from 'components/status_badge.html' import status_badge %}
+
+{% block title %}ML Hub — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  {# Başlık + global master switch #}
+  <div class="flex items-center justify-between gap-4">
+    <div>
+      <h1 class="text-heading text-text-primary font-semibold">ML Hub</h1>
+      <p class="text-small text-text-secondary mt-0.5">
+        Anomali tespit modelleri ve gelecek (Faz 3) özellikleri için tek kontrol noktası.
+      </p>
+    </div>
+    <form method="post" action="/dashboard/ml/global-toggle" class="inline">
+      {% if summary.inference_enabled %}
+      <button type="submit"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                     border border-status-warn/40 text-status-warn rounded-md
+                     hover:bg-status-warn/10 transition-colors"
+              title="Sistem-geneli ML inference'ı kapat (push gönderilmez ama mevcut durum korunur)">
+        ML Inference: AÇIK — Kapat
+      </button>
+      {% else %}
+      <button type="submit"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+                     bg-accent-primary text-white rounded-md
+                     hover:bg-accent-primary/90 transition-colors"
+              title="Sistem-geneli ML inference'ı yeniden aç">
+        ML Inference: KAPALI — Aç
+      </button>
+      {% endif %}
+    </form>
+  </div>
+
+  {# Başarı / hata mesajları #}
+  {% if success == 'trained' %}
+  <div class="px-3 py-2 bg-status-ok/10 border border-status-ok/40 rounded text-small text-status-ok">
+    Model başarıyla eğitildi.
+  </div>
+  {% elif success == 'reset' %}
+  <div class="px-3 py-2 bg-status-ok/10 border border-status-ok/40 rounded text-small text-status-ok">
+    Model dosyası silindi.
+  </div>
+  {% elif success == 'toggled' %}
+  <div class="px-3 py-2 bg-status-ok/10 border border-status-ok/40 rounded text-small text-status-ok">
+    Per-instance ML durumu güncellendi.
+  </div>
+  {% elif success == 'global_toggled' %}
+  <div class="px-3 py-2 bg-status-ok/10 border border-status-ok/40 rounded text-small text-status-ok">
+    Sistem-geneli ML inference durumu güncellendi.
+  </div>
+  {% endif %}
+  {% if error == 'train_timeout' %}
+  <div class="px-3 py-2 bg-status-crit/10 border border-status-crit/40 rounded text-small text-status-crit">
+    Eğitim zaman aşımına uğradı (60 sn). Veri çok büyük veya CPU dolu olabilir.
+  </div>
+  {% elif error == 'train_insufficient_data' %}
+  <div class="px-3 py-2 bg-status-warn/10 border border-status-warn/40 rounded text-small text-status-warn">
+    Eğitim için yeterli veri yok (en az 10 satır). Tag binding'leri ve son 24 saatlik
+    veri akışını kontrol edin.
+  </div>
+  {% endif %}
+
+  {# A) Sistem geneli durum kartları — 4 stat tile #}
+  <section>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {{ kpi_card(
+          'Modelli Instance',
+          summary.modeled_count|string + ' / ' + summary.total_instances|string,
+          status='ok' if summary.modeled_pct >= 50 else ('warn' if summary.total_instances > 0 else 'neutral'),
+          delta='%' + summary.modeled_pct|string
+      ) }}
+      {{ kpi_card(
+          'ML Açık Instance',
+          summary.ml_enabled_count|string + ' / ' + summary.total_instances|string,
+          status='ok' if summary.ml_enabled_count == summary.total_instances else 'warn'
+      ) }}
+      {{ kpi_card(
+          'Son 24h Anomali',
+          summary.anomalies_24h|string,
+          status='warn' if summary.anomalies_24h > 0 else 'ok'
+      ) }}
+      {% if summary.last_train_at %}
+        {% set _is_stale = summary.last_train_age_days >= 14 %}
+        {{ kpi_card(
+            'Son Eğitim',
+            (summary.last_train_age_days|round(1)|string) + ' gün önce',
+            status='crit' if _is_stale else 'ok'
+        ) }}
+      {% else %}
+        {{ kpi_card('Son Eğitim', 'Yok', status='neutral') }}
+      {% endif %}
+    </div>
+  </section>
+
+  {# B) Instance tablosu — model durumu + manuel aksiyonlar #}
+  <section id="section-instances" class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak flex items-center justify-between">
+      <h2 class="text-panel-title text-text-primary font-semibold">Instance Modelleri</h2>
+      <span class="text-small text-text-disabled">
+        Eğitim ~5-30 sn sürer; tarayıcı yenilenince yeni durum görünür.
+      </span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Instance</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Model</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Son Eğitim</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Son Skor</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">ML Açık</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aksiyon</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% if rows %}
+            {% for row in rows %}
+            <tr id="row-{{ row.instance.id }}" class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2 text-cell text-text-primary font-medium">
+                <a href="/dashboard/processes/{{ row.instance.id }}"
+                   class="hover:text-accent-primary transition-colors">
+                  {{ row.instance.name }}
+                </a>
+              </td>
+              <td class="px-3 py-2 text-cell">
+                {% if row.has_model and row.stale %}
+                  {{ status_badge('Eski', 'warn') }}
+                  <span class="ml-1 text-small text-text-disabled">{{ row.model_size_kb }} KB</span>
+                {% elif row.has_model %}
+                  {{ status_badge('Var', 'ok') }}
+                  <span class="ml-1 text-small text-text-disabled">{{ row.model_size_kb }} KB</span>
+                {% else %}
+                  {{ status_badge('Yok', 'neutral') }}
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-secondary">
+                {% if row.last_train_at %}
+                  {{ row.last_train_age_days|round(1) }} gün önce
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell">
+                {% if row.last_score is not none %}
+                  <span class="{{ 'text-status-warn font-medium' if row.last_is_anomaly else 'text-text-secondary' }}">
+                    {{ '%.4f'|format(row.last_score) }}
+                  </span>
+                  {% if row.last_is_anomaly %}
+                    <span class="ml-1 text-xs text-status-warn">⚠</span>
+                  {% endif %}
+                {% else %}
+                  <span class="text-text-disabled">—</span>
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell">
+                {% if row.instance.ml_enabled %}
+                  {{ status_badge('Açık', 'ok') }}
+                {% else %}
+                  {{ status_badge('Kapalı', 'neutral') }}
+                {% endif %}
+              </td>
+              <td class="px-3 py-2 text-cell">
+                <div class="flex items-center gap-2">
+                  <form method="post" action="/dashboard/ml/instances/{{ row.instance.id }}/train"
+                        class="inline">
+                    <button type="submit"
+                            class="px-2 py-1 text-small font-medium
+                                   border border-border-weak text-text-primary rounded
+                                   hover:bg-bg-elevated transition-colors"
+                            title="{{ 'Yeniden eğit' if row.has_model else 'Eğit' }}">
+                      {{ 'Yeniden eğit' if row.has_model else 'Eğit' }}
+                    </button>
+                  </form>
+                  {% if row.has_model %}
+                  <form method="post" action="/dashboard/ml/instances/{{ row.instance.id }}/reset"
+                        onsubmit="return confirm('Model dosyası silinecek. Emin misiniz?');"
+                        class="inline">
+                    <button type="submit"
+                            class="px-2 py-1 text-small font-medium
+                                   border border-border-weak text-text-secondary rounded
+                                   hover:text-status-crit hover:border-status-crit/40
+                                   transition-colors"
+                            title="Model dosyasını sil">
+                      Resetle
+                    </button>
+                  </form>
+                  {% endif %}
+                  <form method="post" action="/dashboard/ml/instances/{{ row.instance.id }}/toggle"
+                        class="inline">
+                    <button type="submit"
+                            class="px-2 py-1 text-small font-medium
+                                   border border-border-weak text-text-secondary rounded
+                                   hover:bg-bg-elevated transition-colors"
+                            title="{{ 'ML inference\'ı kapat' if row.instance.ml_enabled else 'ML inference\'ı aç' }}">
+                      {{ 'Kapat' if row.instance.ml_enabled else 'Aç' }}
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="6" class="px-3 py-8 text-center text-text-disabled text-small">
+                Henüz asset instance yok. Önce <a href="/dashboard/processes/new"
+                class="text-accent-primary hover:underline">yeni asset ekle</a>.
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {# C) Faz 3 / R-05/R-06/R-07 placeholder bölümleri — anchor'lar sabit;
+       sonraki R-paketleri buraya doğrudan içerik ekler #}
+  <section class="space-y-3">
+    <h2 class="text-panel-title text-text-primary font-semibold">Olgunlaşma Yol Haritası</h2>
+    <p class="text-small text-text-secondary">
+      Aşağıdaki bölümler R-05/R-06/R-07 paketleriyle yerine gerçek özelliklerle
+      doldurulur. V11-302/303 (Stuck-at L3 + Shadow Mode) pilot kabul sonrasına
+      ertelendi (K9 — manuel onay, K11 — 2-4 hafta veri zorunlu).
+    </p>
+
+    {% for feat in future_features %}
+    <div id="{{ feat.anchor }}"
+         class="bg-bg-surface border border-border-weak rounded-lg p-4 space-y-2">
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h3 class="text-body text-text-primary font-medium">{{ feat.title }}</h3>
+            <span class="text-small text-text-disabled">— {{ feat.v11_id }}</span>
+          </div>
+          <p class="text-small text-text-secondary mt-1">{{ feat.description }}</p>
+        </div>
+        <span class="flex-shrink-0">
+          {{ status_badge(feat.badge, feat.badge_status) }}
+        </span>
+      </div>
+      <div class="text-small text-text-disabled italic pt-1 border-t border-border-weak">
+        İçerik bu pakette doldurulur — hub anchor'ı: <code>#{{ feat.anchor }}</code>
+      </div>
+    </div>
+    {% endfor %}
+  </section>
+
+</div>
+{% endblock %}

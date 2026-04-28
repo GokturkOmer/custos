@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from custos.analytics.anomaly_detector import train_model_for_instance
 from custos.analytics.archiver import ArchiveResult, ParquetArchiver
 from custos.analytics.assistant.loader import summarize_documents
 from custos.analytics.assistant.retriever import AssistantRetriever
@@ -258,6 +259,12 @@ def _base_context(**kwargs: Any) -> dict[str, Any]:
             {"href": "/dashboard/alarms", "icon": "alert-triangle", "label": "Alarms"},
             {"href": "/dashboard/maintenance", "icon": "tool", "label": "Maintenance"},
             {"href": "/dashboard/assistant", "icon": "message-circle", "label": "Asistan"},
+            {
+                "href": "/dashboard/ml",
+                "icon": "sparkles",
+                "label": "ML",
+                "dev_only": True,
+            },
             {
                 "href": "/dashboard/logs",
                 "icon": "file-text",
@@ -4804,3 +4811,439 @@ async def knowledge_rebuild_index(request: Request) -> RedirectResponse:
         )
     )
     return RedirectResponse(url="/dashboard/knowledge?ok=reindexed", status_code=303)
+
+
+# --- ML Hub (R-04) -----------------------------------------------------------
+#
+# Tek developer-only sayfa /dashboard/ml — sistem geneli durum kartları,
+# instance bazlı tablo (manuel train/reset/toggle), ve Faz 3'e ertelenen
+# özellikler için placeholder bölümleri (R-05/R-06/R-07 doldurur).
+#
+# AnomalyDetector tick'i ``retention_config.ml_inference_enabled`` (master
+# switch) ve ``asset_instances.ml_enabled`` (per-instance) flag'lerini respect
+# eder; ML hub bu iki bayrağı toggle eder.
+#
+# Eğitim subprocess: ``train_model_for_instance`` saniyeler süren CPU iş —
+# request thread'ini bloklamamak için ``asyncio.to_thread``. Pilot ölçeğinde
+# 30 sn timeout yeterli; daha karmaşık eğitim için ileride kuyruk eklenebilir.
+
+# Eğitim subprocess timeout (saniye). Pilot ölçeğinde 5-30 sn arası tipik;
+# 60 sn üst sınır şüpheli (veri çok büyük veya CPU kilitli).
+_ML_TRAIN_TIMEOUT_SECONDS = 60.0
+
+# Eski model eşiği (gün) — bunun üstündeki modeller "eski" badge alır.
+# UI tarafında uyarı rozeti (warn renk) için.
+_ML_MODEL_STALE_DAYS = 14
+
+# Faz 3'e ertelenen veya R-05/R-06/R-07 ile dolacak placeholder bölümler.
+# UI'da başlık + açıklama + "v1.1 R-XX'te" / "v1.1 Faz 3" badge ile
+# render edilir. Anchor'lar (#section-...) sonraki paketlerin doğrudan
+# hedef alabileceği sabit ID'lerdir; yeni nav öğesi yok.
+_ML_FUTURE_FEATURES: list[dict[str, str]] = [
+    {
+        "anchor": "section-labeling",
+        "title": "Etiketleme + Review Queue",
+        "description": (
+            "Operatör alarm'ları 4 sınıfta etiketler (Gerçek arıza / Yanlış "
+            "alarm / Bakım sırasında / Bilinmiyor); etiket verisi sonraki "
+            "model eğitimlerinde baseline olarak kullanılır."
+        ),
+        "badge": "v1.1 R-05",
+        "badge_status": "warn",
+        "v11_id": "V11-301",
+    },
+    {
+        "anchor": "section-layer1-rules",
+        "title": "Layer 1 Ek Kurallar",
+        "description": (
+            "Rate-of-change + range, cross-sensor consistency, severity "
+            "escalation (warn 30 dk → crit + push). Kural-bazlı, veri akar "
+            "akmaz çalışır — pilot ilk gün aktif."
+        ),
+        "badge": "v1.1 R-06",
+        "badge_status": "warn",
+        "v11_id": "V11-304/305/306",
+    },
+    {
+        "anchor": "section-mode-aware-spc",
+        "title": "Mode-aware Baseline + SPC",
+        "description": (
+            "Saat × gün baseline (weekday/weekend × morning/afternoon/night) "
+            "ve EWMA/CUSUM/MAD streaming SPC. Veri ile sessiz ısınır; "
+            "olgunlaşma 2-4 hafta."
+        ),
+        "badge": "v1.1 R-07",
+        "badge_status": "warn",
+        "v11_id": "V11-307/308",
+    },
+    {
+        "anchor": "section-stuck-at-l3",
+        "title": "Stuck-at L3 — ML kişiselleştirilmiş",
+        "description": (
+            "Her tag için kişiselleştirilmiş donukluk modeli — Layer 1 "
+            "preset'lerin yetmediği sensörler için. 2-4 hafta veri zorunlu, "
+            "pilot kabul sonrası açılır (K11)."
+        ),
+        "badge": "v1.1 Faz 3",
+        "badge_status": "neutral",
+        "v11_id": "V11-302",
+    },
+    {
+        "anchor": "section-shadow-mode",
+        "title": "Shadow Mode + Model Registry + Auto Retraining",
+        "description": (
+            "Yeni modeller önce shadow mode'da çalışır; manuel onaydan sonra "
+            "production'a alınır. Model registry versiyon geçmişi tutar; "
+            "haftalık otomatik retraining (K9 — manuel onay)."
+        ),
+        "badge": "v1.1 Faz 3",
+        "badge_status": "neutral",
+        "v11_id": "V11-303",
+    },
+]
+
+
+def _ml_model_path(models_dir: Path, instance_id: int) -> Path:
+    """Bir instance için model dosyasının disk yolunu döndürür.
+
+    AnomalyDetector ile aynı kural: ``{models_dir}/anomaly_{id}.joblib``.
+    Tek kaynak yapmak için ortak helper.
+    """
+    return models_dir / f"anomaly_{instance_id}.joblib"
+
+
+def _ml_models_dir_for(request: Request) -> Path:
+    """Request'in arkasındaki anomaly detector'ın model dizini.
+
+    Detector kaydedilmemişse (test/CI ortamında lifespan çalışmıyor olabilir)
+    default ``data/models`` döner — anomaly_detector.py'deki konvansiyonla
+    uyumlu.
+    """
+    detector = getattr(request.app.state, "anomaly_detector", None)
+    if detector is not None:
+        return Path(detector.models_dir)
+    return Path("data/models")
+
+
+async def _compute_ml_summary(
+    db: DatabaseInterface,
+    instances: list[AssetInstance],
+    models_dir: Path,
+) -> dict[str, Any]:
+    """Sistem geneli ML durumu — kart panelini besler.
+
+    Hesaplanan metrikler:
+    - ``total_instances``: toplam asset instance sayısı
+    - ``modeled_count``: model dosyası mevcut instance sayısı (.joblib)
+    - ``modeled_pct``: oran (%)
+    - ``ml_enabled_count``: ml_enabled=True instance sayısı
+    - ``anomalies_24h``: son 24 saatte tespit edilen anomali sayısı
+    - ``last_train_at``: en son eğitilen model dosyasının mtime'ı (UTC)
+    - ``last_train_age_days``: bugünden fark (gün, ondalıklı)
+    - ``inference_enabled``: global ML inference master switch
+    """
+    total = len(instances)
+    modeled = 0
+    last_train_mtime: float | None = None
+    if models_dir.exists():
+        for inst in instances:
+            assert inst.id is not None
+            model_path = _ml_model_path(models_dir, inst.id)
+            if model_path.exists():
+                modeled += 1
+                mtime = model_path.stat().st_mtime
+                if last_train_mtime is None or mtime > last_train_mtime:
+                    last_train_mtime = mtime
+
+    ml_enabled_count = sum(1 for inst in instances if inst.ml_enabled)
+    since_24h = datetime.now(UTC) - timedelta(hours=24)
+    anomalies_24h = await db.count_anomalies(since=since_24h)
+    config = await db.get_retention_config()
+
+    last_train_at: datetime | None = None
+    last_train_age_days: float | None = None
+    if last_train_mtime is not None:
+        last_train_at = datetime.fromtimestamp(last_train_mtime, tz=UTC)
+        last_train_age_days = (datetime.now(UTC) - last_train_at).total_seconds() / 86400.0
+
+    modeled_pct = round((modeled / total) * 100) if total > 0 else 0
+    return {
+        "total_instances": total,
+        "modeled_count": modeled,
+        "modeled_pct": modeled_pct,
+        "ml_enabled_count": ml_enabled_count,
+        "anomalies_24h": anomalies_24h,
+        "last_train_at": last_train_at,
+        "last_train_age_days": last_train_age_days,
+        "inference_enabled": config.ml_inference_enabled,
+    }
+
+
+async def _compute_ml_instance_rows(
+    db: DatabaseInterface,
+    instances: list[AssetInstance],
+    models_dir: Path,
+) -> list[dict[str, Any]]:
+    """Instance tablosu için satır verisi.
+
+    Her satırda şunlar var:
+    - ``instance``: AssetInstance kaydı
+    - ``has_model``: .joblib dosyası mevcut mu
+    - ``model_size_kb``: dosya boyutu (KB) — yoksa None
+    - ``last_train_at``: dosya mtime (UTC) — yoksa None
+    - ``last_train_age_days``: bugüne fark (gün) — yoksa None
+    - ``stale``: 14+ gündür eğitilmemiş mi
+    - ``last_score``: en son anomali skoru (latest) — yoksa None
+    - ``last_is_anomaly``: skor anomali mi (bool)
+    """
+    now = datetime.now(UTC)
+    rows: list[dict[str, Any]] = []
+    for inst in instances:
+        assert inst.id is not None
+        model_path = _ml_model_path(models_dir, inst.id)
+        has_model = model_path.exists()
+        model_size_kb: float | None = None
+        last_train_at: datetime | None = None
+        last_train_age_days: float | None = None
+        if has_model:
+            stat = model_path.stat()
+            model_size_kb = round(stat.st_size / 1024.0, 1)
+            last_train_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+            last_train_age_days = (now - last_train_at).total_seconds() / 86400.0
+
+        stale = (
+            last_train_age_days is not None
+            and last_train_age_days >= _ML_MODEL_STALE_DAYS
+        )
+
+        latest = await db.get_latest_anomaly_score(inst.id)
+        last_score: float | None = latest.score if latest is not None else None
+        last_is_anomaly: bool = bool(latest.is_anomaly) if latest is not None else False
+
+        rows.append(
+            {
+                "instance": inst,
+                "has_model": has_model,
+                "model_size_kb": model_size_kb,
+                "last_train_at": last_train_at,
+                "last_train_age_days": last_train_age_days,
+                "stale": stale,
+                "last_score": last_score,
+                "last_is_anomaly": last_is_anomaly,
+            }
+        )
+    return rows
+
+
+@router.get(
+    "/ml",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def ml_dashboard(request: Request) -> HTMLResponse:
+    """ML hub iskeleti — sistem durumu kartları + instance tablosu + Faz 3 placeholder.
+
+    R-04 ile eklendi (V11-301..V11-308 paketlerinin arayüz hub'ı).
+    R-05/R-06/R-07 placeholder bölümleri gerçek özelliklerle doldurur;
+    yeni nav öğesi açmaz, hep aynı sayfayı zenginleştirir.
+    """
+    db = _get_db(request)
+    instances = await db.list_asset_instances()
+    models_dir = _ml_models_dir_for(request)
+
+    summary = await _compute_ml_summary(db, instances, models_dir)
+    rows = await _compute_ml_instance_rows(db, instances, models_dir)
+
+    ctx = _base_context(
+        page_title="ML Hub",
+        active_nav="/dashboard/ml",
+        summary=summary,
+        rows=rows,
+        future_features=_ML_FUTURE_FEATURES,
+        success=request.query_params.get("ok"),
+        error=request.query_params.get("error"),
+    )
+    return templates.TemplateResponse(request, "pages/ml.html", ctx)
+
+
+@router.post(
+    "/ml/instances/{instance_id:int}/train",
+    dependencies=[_DEVELOPER_DEP],
+)
+async def ml_train_instance(
+    request: Request,
+    instance_id: int,
+) -> RedirectResponse:
+    """Bir instance için Isolation Forest modelini yeniden eğitir.
+
+    Eğitim CPU-bound ~5-30 sn. ``asyncio.to_thread`` ile yan thread'e
+    devredilir, ana event loop bloke olmaz. Timeout (60 sn) aşılırsa
+    timeout error redirect.
+    """
+    db = _get_db(request)
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    models_dir = _ml_models_dir_for(request)
+    output_path = _ml_model_path(models_dir, instance_id)
+
+    try:
+        trained = await asyncio.wait_for(
+            train_model_for_instance(
+                db=db,
+                instance_id=instance_id,
+                output_path=output_path,
+            ),
+            timeout=_ML_TRAIN_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        await db.insert_audit_log(
+            AuditLogEntry(
+                category="ml",
+                action="ml_train_timeout",
+                entity_type="asset_instance",
+                entity_id=str(instance_id),
+                detail=f"Eğitim {_ML_TRAIN_TIMEOUT_SECONDS:.0f} sn içinde tamamlanamadı",
+            )
+        )
+        return RedirectResponse(
+            url="/dashboard/ml?error=train_timeout", status_code=303,
+        )
+
+    if not trained:
+        await db.insert_audit_log(
+            AuditLogEntry(
+                category="ml",
+                action="ml_train_skipped",
+                entity_type="asset_instance",
+                entity_id=str(instance_id),
+                detail="Yetersiz eğitim verisi veya binding yok",
+            )
+        )
+        return RedirectResponse(
+            url="/dashboard/ml?error=train_insufficient_data", status_code=303,
+        )
+
+    # Eğitim başarılı — detector'ın in-memory model cache'ini güncelle
+    # (yeni modelin tick'te kullanılması için disk reload gerekir).
+    detector = getattr(request.app.state, "anomaly_detector", None)
+    if detector is not None:
+        detector._load_models()
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="ml",
+            action="ml_train",
+            entity_type="asset_instance",
+            entity_id=str(instance_id),
+            detail=f"Model eğitildi: {output_path.name}",
+        )
+    )
+    return RedirectResponse(url="/dashboard/ml?ok=trained", status_code=303)
+
+
+@router.post(
+    "/ml/instances/{instance_id:int}/reset",
+    dependencies=[_DEVELOPER_DEP],
+)
+async def ml_reset_instance(
+    request: Request,
+    instance_id: int,
+) -> RedirectResponse:
+    """Bir instance için model dosyasını siler (.joblib).
+
+    Detector tick'i tekrar yüklemediği sürece bellekte kalan model
+    çalışmaya devam eder; bu yüzden burada da reload tetiklenir.
+    """
+    db = _get_db(request)
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    models_dir = _ml_models_dir_for(request)
+    target = _ml_model_path(models_dir, instance_id)
+    if target.exists():
+        target.unlink()
+
+    detector = getattr(request.app.state, "anomaly_detector", None)
+    if detector is not None:
+        detector._load_models()
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="ml",
+            action="ml_reset",
+            entity_type="asset_instance",
+            entity_id=str(instance_id),
+            detail=f"Model dosyası silindi: {target.name}",
+        )
+    )
+    return RedirectResponse(url="/dashboard/ml?ok=reset", status_code=303)
+
+
+@router.post(
+    "/ml/instances/{instance_id:int}/toggle",
+    dependencies=[_DEVELOPER_DEP],
+)
+async def ml_toggle_instance(
+    request: Request,
+    instance_id: int,
+) -> RedirectResponse:
+    """Bir instance için ML inference açık/kapalı toggle.
+
+    ``asset_instances.ml_enabled`` kolonu (Migration 034). AnomalyDetector
+    tick'te bu flag'i okur, False ise instance'ı atlar.
+    """
+    db = _get_db(request)
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadı")
+
+    new_value = not instance.ml_enabled
+    await db.update_asset_instance(instance_id, {"ml_enabled": new_value})
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="ml",
+            action="ml_toggle_instance",
+            entity_type="asset_instance",
+            entity_id=str(instance_id),
+            detail=f"ml_enabled={'on' if new_value else 'off'}",
+        )
+    )
+    return RedirectResponse(url="/dashboard/ml?ok=toggled", status_code=303)
+
+
+@router.post(
+    "/ml/global-toggle",
+    dependencies=[_DEVELOPER_DEP],
+)
+async def ml_global_toggle(
+    request: Request,
+    session: Session = _DEVELOPER_DEP,
+) -> RedirectResponse:
+    """Sistem-geneli ML inference master switch'i toggle eder.
+
+    ``retention_config.ml_inference_enabled`` (Migration 034). False iken
+    AnomalyDetector tick erken döner; per-instance flag irrelevant olur.
+    Push master switch ile aynı desen.
+    """
+    db = _get_db(request)
+    config = await db.get_retention_config()
+    new_value = not config.ml_inference_enabled
+    await db.update_retention_config(
+        ml_inference_enabled=new_value,
+        updated_by=session.username,
+    )
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="ml",
+            action="ml_toggle_global",
+            entity_type="retention_config",
+            entity_id="1",
+            detail=f"ml_inference_enabled={'on' if new_value else 'off'}",
+        )
+    )
+    return RedirectResponse(url="/dashboard/ml?ok=global_toggled", status_code=303)

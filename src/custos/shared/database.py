@@ -166,6 +166,10 @@ class AssetInstance:
     maintenance_reason: str = ""
     maintenance_started_by_user_id: int | None = None
     maintenance_started_at: datetime | None = None
+    # R-04 (Migration 034): Per-instance ML inference toggle.
+    # AnomalyDetector tick'te False ise instance atlanir; UI'dan
+    # operator/dev manuel olarak kapatabilir (ML hub'tan).
+    ml_enabled: bool = True
 
 
 @dataclass
@@ -444,6 +448,10 @@ class RetentionConfig:
     # Default %90 — UI slider 70-95 aralik onerir, CHECK constraint 50-99.
     resource_cpu_warn_pct: int = 90
     resource_ram_warn_pct: int = 90
+    # R-04 (Migration 034): Sistem-geneli ML inference master switch.
+    # False iken AnomalyDetector tick erken doner; per-instance flag
+    # irrelevant olur (push_global_enabled ile ayni desen).
+    ml_inference_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -1249,6 +1257,7 @@ class DatabaseInterface(abc.ABC):
         push_global_enabled: bool | None = None,
         resource_cpu_warn_pct: int | None = None,
         resource_ram_warn_pct: int | None = None,
+        ml_inference_enabled: bool | None = None,
     ) -> RetentionConfig:
         """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
 
@@ -1262,6 +1271,8 @@ class DatabaseInterface(abc.ABC):
           yeni aralıkla tekrar eklenir.
         - ``resource_cpu_warn_pct`` / ``resource_ram_warn_pct`` (V11-111 / P-06):
           ResourceMonitor tick'te okur. CHECK constraint 50-99 (migration 033).
+        - ``ml_inference_enabled`` (R-04 / Migration 034): AnomalyDetector
+          sistem-geneli master switch; push master switch ile aynı desen.
 
         Global maintenance kolonları burada güncellenmez —
         ``update_global_maintenance`` ile yönetilir (concern ayrımı).
@@ -1487,6 +1498,8 @@ _ALLOWED_INSTANCE_UPDATE_FIELDS: frozenset[str] = frozenset(
         "maintenance_reason",
         "maintenance_started_by_user_id",
         "maintenance_started_at",
+        # R-04: ML hub'tan toggle ile guncellenir.
+        "ml_enabled",
     }
 )
 
@@ -1543,6 +1556,7 @@ def _row_to_asset_instance(row: asyncpg.Record) -> AssetInstance:
         maintenance_reason=row["maintenance_reason"],
         maintenance_started_by_user_id=row["maintenance_started_by_user_id"],
         maintenance_started_at=row["maintenance_started_at"],
+        ml_enabled=bool(row["ml_enabled"]),
     )
 
 
@@ -3949,7 +3963,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "       global_maintenance_until, global_maintenance_reason, "
                 "       global_maintenance_started_by_user_id, "
                 "       global_maintenance_started_at, "
-                "       resource_cpu_warn_pct, resource_ram_warn_pct "
+                "       resource_cpu_warn_pct, resource_ram_warn_pct, "
+                "       ml_inference_enabled "
                 "FROM retention_config WHERE id = 1",
             )
         # Migration 026 INSERT garantiler ki satır her zaman var; defansif
@@ -3972,6 +3987,7 @@ class TimescaleDBDatabase(DatabaseInterface):
             global_maintenance_started_at=row["global_maintenance_started_at"],
             resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
             resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
+            ml_inference_enabled=bool(row["ml_inference_enabled"]),
         )
 
     async def update_retention_config(
@@ -3982,6 +3998,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         push_global_enabled: bool | None = None,
         resource_cpu_warn_pct: int | None = None,
         resource_ram_warn_pct: int | None = None,
+        ml_inference_enabled: bool | None = None,
     ) -> RetentionConfig:
         """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
 
@@ -4003,6 +4020,10 @@ class TimescaleDBDatabase(DatabaseInterface):
         ResourceMonitor tarafından tick'te okunur; CHECK constraint 50-99
         aralık doğrulamasını DB tarafında yapar.
 
+        ``ml_inference_enabled`` (R-04 / Migration 034): Sistem-geneli ML
+        master switch. AnomalyDetector tick'te erken-dönüşle okur; push
+        master switch ile aynı desen.
+
         ``add_retention_policy`` transaction içinde çalışmaya uygun — background
         worker job kaydı oluşturur; TimescaleDB docs'ına göre güvenli.
         """
@@ -4022,6 +4043,7 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "    push_global_enabled = COALESCE($4, push_global_enabled), "
                 "    resource_cpu_warn_pct = COALESCE($5, resource_cpu_warn_pct), "
                 "    resource_ram_warn_pct = COALESCE($6, resource_ram_warn_pct), "
+                "    ml_inference_enabled = COALESCE($7, ml_inference_enabled), "
                 "    updated_by = $3, "
                 "    updated_at = NOW() "
                 "WHERE id = 1 "
@@ -4030,13 +4052,15 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "          global_maintenance_until, global_maintenance_reason, "
                 "          global_maintenance_started_by_user_id, "
                 "          global_maintenance_started_at, "
-                "          resource_cpu_warn_pct, resource_ram_warn_pct",
+                "          resource_cpu_warn_pct, resource_ram_warn_pct, "
+                "          ml_inference_enabled",
                 raw_retention_days,
                 auto_clean_enabled,
                 updated_by,
                 push_global_enabled,
                 resource_cpu_warn_pct,
                 resource_ram_warn_pct,
+                ml_inference_enabled,
             )
             assert row is not None, "retention_config satırı güncellenemedi"
             new_days = int(row["raw_retention_days"])
@@ -4078,6 +4102,7 @@ class TimescaleDBDatabase(DatabaseInterface):
             global_maintenance_started_at=row["global_maintenance_started_at"],
             resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
             resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
+            ml_inference_enabled=bool(row["ml_inference_enabled"]),
         )
 
     async def update_global_maintenance(
@@ -4106,7 +4131,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "          global_maintenance_until, global_maintenance_reason, "
                 "          global_maintenance_started_by_user_id, "
                 "          global_maintenance_started_at, "
-                "          resource_cpu_warn_pct, resource_ram_warn_pct",
+                "          resource_cpu_warn_pct, resource_ram_warn_pct, "
+                "          ml_inference_enabled",
                 until,
                 reason,
                 user_id,
@@ -4127,6 +4153,7 @@ class TimescaleDBDatabase(DatabaseInterface):
             global_maintenance_started_at=row["global_maintenance_started_at"],
             resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
             resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
+            ml_inference_enabled=bool(row["ml_inference_enabled"]),
         )
 
     # --- Auth: users + sessions (V11-101) ---

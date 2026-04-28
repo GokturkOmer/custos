@@ -125,6 +125,18 @@ class AnomalyDetector:
         # Yüklenmiş modeller: instance_id → model
         self._models: dict[int, object] = {}
 
+    @property
+    def models_dir(self) -> Path:
+        """Model dosyalarının disk üzerindeki dizini (R-04 — ML hub'tan eğitim/reset için)."""
+        return self._models_dir
+
+    @property
+    def loaded_models(self) -> dict[int, object]:
+        """Bellekteki yüklü modeller (instance_id → model). R-04 ML hub'ı bu sözlüğü
+        son skor + model varlığı için sorgular; doğrudan ``_models`` private
+        attr'ına dokunmak yerine read-only property üzerinden okur."""
+        return self._models
+
     async def start(self) -> None:
         """Detector'ı başlatır — arka plan task olarak çalışır."""
         self._running = True
@@ -185,12 +197,23 @@ class AnomalyDetector:
         if not self._models:
             return
 
+        # R-04: Sistem-geneli ML inference master switch. False iken
+        # tick erken döner, hiçbir instance için inference yapılmaz
+        # (push_global_enabled ile aynı desen — singleton retention_config
+        # satırında saklanır, kullanıcı ML hub'tan toggle eder).
+        config = await self._db.get_retention_config()
+        if not config.ml_inference_enabled:
+            return
+
         instances = await self._db.list_asset_instances(status="active")
         now = datetime.now(UTC)
         anomaly_count = 0
 
         for instance in instances:
             assert instance.id is not None
+            # R-04: Per-instance ML toggle — False ise instance atlanır.
+            if not instance.ml_enabled:
+                continue
             model = self._models.get(instance.id)
             if model is None:
                 continue
