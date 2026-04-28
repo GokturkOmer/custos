@@ -717,6 +717,52 @@ def _format_time_window_label(minutes: int) -> str:
     return f"Son {days // 365} yil"
 
 
+def _parse_epoch_range(
+    start_raw: str,
+    end_raw: str,
+    *,
+    now: datetime,
+) -> tuple[datetime, datetime]:
+    """Pan-fetch icin Unix epoch saniye query string'ini UTC datetime cifti olarak parse eder.
+
+    `_parse_custom_range`'in kardesi — ama datetime-local ISO yerine epoch
+    int alir. Frontend pan-fetch plugin'i tarayici timezone yorumu sorununu
+    bypass etmek icin epoch yollar (R-02 acik sorularina kapali cevap).
+
+    Validasyon `_parse_custom_range` ile birebir ayni:
+        - end > start
+        - end <= now (UTC)
+        - start >= now - 3650 gun (query guard ust limiti)
+    Aksi halde HTTPException 400.
+    """
+    try:
+        start_ts = int(start_raw)
+        end_ts = int(end_raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="start ve end Unix epoch saniye (tam sayi) olmali",
+        ) from exc
+    start_utc = datetime.fromtimestamp(start_ts, UTC)
+    end_utc = datetime.fromtimestamp(end_ts, UTC)
+    if end_utc <= start_utc:
+        raise HTTPException(
+            status_code=400,
+            detail="Bitis zamani baslangictan sonra olmali",
+        )
+    if end_utc > now:
+        raise HTTPException(
+            status_code=400,
+            detail="Bitis zamani gelecekte olamaz",
+        )
+    if start_utc < now - timedelta(days=3650):
+        raise HTTPException(
+            status_code=400,
+            detail="Baslangic zamani 10 yildan eski olamaz",
+        )
+    return start_utc, end_utc
+
+
 def _parse_custom_range(
     start_raw: str | None,
     end_raw: str | None,
@@ -852,6 +898,13 @@ async def overview_chart_detail(
         if readings and not timestamps:
             timestamps = [int(r.timestamp.timestamp()) for r in readings]
 
+    # Pan-fetch (R-03) — frontend chart sola kaydirinca eski veri arkaya
+    # yuklenir. min_allowed_ts: 3 yil cap (Parquet arsivinden okuma Faz 3'te,
+    # simdilik UI clamp + badge yeterli). Saniye epoch — tarayici timezone
+    # yorumu burada anlamsiz (R-02 acik sorularina kapali cevap).
+    pan_fetch_url = f"/dashboard/overview/charts/{chart.chart_key}/readings"
+    min_allowed_ts = int((now - timedelta(days=_LONG_WINDOW_DAYS)).timestamp())
+
     chart_data = {
         "timestamps": timestamps,
         "series": series,
@@ -861,6 +914,8 @@ async def overview_chart_detail(
         "window_end": int(chart_end.timestamp()),
         "resolution": resolution,
         "long_window_hint": long_window,
+        "pan_fetch_url": pan_fetch_url,
+        "min_allowed_ts": min_allowed_ts,
     }
 
     time_windows = [
@@ -901,6 +956,87 @@ async def overview_chart_detail(
         request,
         "pages/overview_chart_detail.html",
         ctx,
+    )
+
+
+@router.get(
+    "/overview/charts/{chart_key}/readings",
+    dependencies=[_OPERATOR_DEP],
+)
+async def overview_chart_readings_json(
+    request: Request,
+    chart_key: str,
+    start: str,
+    end: str,
+) -> JSONResponse:
+    """Pan-fetch icin JSON readings — chart'in bagli tag'lerinin verisini doner.
+
+    Frontend chart'i sola kaydirinca tetiklenir. Aralik Unix epoch saniye
+    olarak gelir (datetime-local timezone yorumu yok). Series sirasi
+    `list_overview_chart_tags` siralamasiyla ayni — frontend label'lari
+    init zamaninda biliyor, fetch sonucunu sira korunarak merge ediyor.
+
+    Format:
+        {
+          "timestamps": [int, ...],
+          "series": [[float | null, ...], ...],
+          "labels": ["T101 (C)", ...],
+          "resolution": "ham" | "dakika" | "saat",
+          "window_start": int,
+          "window_end": int
+        }
+    """
+    db = _get_db(request)
+    chart = await db.get_overview_chart(chart_key)
+    if chart is None:
+        raise HTTPException(status_code=404, detail="Chart bulunamadi")
+
+    now = datetime.now(UTC)
+    chart_start, chart_end = _parse_epoch_range(start, end, now=now)
+    window = chart_end - chart_start
+    resolution = _resolution_hint_for(window)
+
+    chart_tags = await db.list_overview_chart_tags(chart_key)
+    all_tags = await db.list_tags(status="active")
+    tag_map = {t.tag_id: t for t in all_tags}
+    chart_tag_count = len(chart_tags)
+
+    readings_tasks = [
+        db.query_readings_auto(
+            ct.tag_id,
+            chart_start,
+            chart_end,
+            target_points=_CHART_TARGET_POINTS,
+            tag_count=chart_tag_count,
+        )
+        for ct in chart_tags
+    ]
+    try:
+        all_readings = await asyncio.gather(*readings_tasks) if readings_tasks else []
+    except QueryGuardError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    series: list[list[float | None]] = []
+    labels: list[str] = []
+    timestamps: list[int] = []
+    for ct, readings in zip(chart_tags, all_readings, strict=True):
+        tag_rec = tag_map.get(ct.tag_id)
+        unit = tag_rec.unit if tag_rec else ""
+        unit_suffix = f" ({unit})" if unit else ""
+        labels.append(f"{ct.tag_id}{unit_suffix}")
+        series.append([r.value for r in readings] if readings else [])
+        if readings and not timestamps:
+            timestamps = [int(r.timestamp.timestamp()) for r in readings]
+
+    return JSONResponse(
+        {
+            "timestamps": timestamps,
+            "series": series,
+            "labels": labels,
+            "resolution": resolution,
+            "window_start": int(chart_start.timestamp()),
+            "window_end": int(chart_end.timestamp()),
+        }
     )
 
 

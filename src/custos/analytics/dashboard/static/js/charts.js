@@ -480,6 +480,152 @@ function scaleStatePersistPlugin(chartId) {
 }
 
 
+/**
+ * Pan-fetch plugin (R-03) — Chart sola kaydirilinca eski veri arkaya yuklenir.
+ *
+ * X ekseni min'i yuklu pencerenin sol kenarina yaklastiginda backend
+ * `/dashboard/overview/charts/{key}/readings?start=&end=` endpoint'ini
+ * cagirip donen veriyi mevcut serinin basina ekler. 3 yil onceye kadar
+ * gidilebilir (`minAllowedTs` clamp + `chart:cap-reached` event).
+ *
+ * Race protection:
+ *   - setScale 60 Hz tetiklenebilir → 150 ms debounce
+ *   - Yeni fetch onceki AbortController'i iptal eder
+ *   - Resolution degisirse (dakika → saat) tum chart yeniden yuklenir;
+ *     mixed bucket gorsel tutarsizligi yok
+ *
+ * Eventler (window'a dispatch):
+ *   - `chart:pan-fetch-loading` { detail: { chartId, loading: bool } }
+ *   - `chart:cap-reached`       { detail: chartId }
+ *   - `chart:pan-fetch-resolution-change` { detail: { chartId, resolution } }
+ *
+ * opts:
+ *   fetchUrl          : backend endpoint (chart_data.pan_fetch_url)
+ *   minAllowedTs      : sola pan'in gecemeyecegi alt sinir (epoch saniye)
+ *   initialRange      : ilk pencerenin [min, max] araligı
+ *   initialResolution : ilk pencerenin katman adı ('ham'|'dakika'|'saat')
+ *   threshold         : sol kenara span'in kacınca yüzdesinde fetch tetiklenir (default 0.15)
+ *   debounceMs        : setScale tetiklemelerini topla (default 150)
+ */
+function panFetchPlugin(chartId, opts) {
+  const threshold = opts.threshold != null ? opts.threshold : 0.15;
+  const debounceMs = opts.debounceMs != null ? opts.debounceMs : 150;
+  let pendingController = null;
+  let loadedRange = opts.initialRange ? [opts.initialRange[0], opts.initialRange[1]] : null;
+  let currentResolution = opts.initialResolution || null;
+  let debounceTimer = null;
+  let capReachedFired = false;
+
+  function dispatch(name, detail) {
+    window.dispatchEvent(new CustomEvent(name, { detail }));
+  }
+
+  function mergeIntoChart(u, fetched, isResolutionChange) {
+    if (isResolutionChange) {
+      // Mixed bucket'i onlemek icin tum chart'i yeniden yukle
+      const newTs = (fetched.timestamps || []).slice();
+      const newSeries = (fetched.series || []).map((arr) => (arr || []).slice());
+      if (newTs.length === 0) return;
+      u.setData([newTs, ...newSeries], false);
+      return;
+    }
+    const cur = u.data;
+    const fetchedTs = fetched.timestamps || [];
+    if (fetchedTs.length === 0) return;
+    const newTs = fetchedTs.concat(cur[0]);
+    const newSeries = cur.slice(1).map((arr, i) => {
+      const prepend = (fetched.series && fetched.series[i]) || [];
+      return prepend.concat(arr);
+    });
+    u.setData([newTs, ...newSeries], false);
+  }
+
+  function maybeFetch(u) {
+    const min = u.scales.x.min;
+    const max = u.scales.x.max;
+    if (min == null || max == null || loadedRange == null) return;
+
+    // 3 yil cap clamp — sola pan minAllowedTs'i gecemez
+    if (min < opts.minAllowedTs) {
+      if (Math.abs(min - opts.minAllowedTs) > 1) {
+        u.setScale('x', { min: opts.minAllowedTs, max });
+      }
+      if (!capReachedFired) {
+        dispatch('chart:cap-reached', chartId);
+        capReachedFired = true;
+      }
+      return;
+    }
+
+    // Yuklu veri 3 yil esigine ulastiysa daha eski fetch yok
+    if (loadedRange[0] <= opts.minAllowedTs + 1) return;
+
+    const span = max - min;
+    if (span <= 0) return;
+    const distanceToLeft = min - loadedRange[0];
+    if (distanceToLeft >= span * threshold) return;
+
+    triggerFetch(u, span);
+  }
+
+  async function triggerFetch(u, span) {
+    if (pendingController) pendingController.abort();
+    pendingController = new AbortController();
+    const fetchEnd = loadedRange[0];
+    const fetchStart = Math.max(opts.minAllowedTs, Math.floor(fetchEnd - span));
+    if (fetchStart >= fetchEnd) {
+      pendingController = null;
+      return;
+    }
+
+    dispatch('chart:pan-fetch-loading', { chartId, loading: true });
+    try {
+      const url = `${opts.fetchUrl}?start=${fetchStart}&end=${fetchEnd}`;
+      const resp = await fetch(url, { signal: pendingController.signal });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const isResolutionChange = currentResolution != null
+        && data.resolution
+        && data.resolution !== currentResolution;
+      mergeIntoChart(u, data, isResolutionChange);
+      if (isResolutionChange) {
+        loadedRange = [fetchStart, fetchEnd];
+        currentResolution = data.resolution;
+        dispatch('chart:pan-fetch-resolution-change', {
+          chartId, resolution: data.resolution,
+        });
+      } else {
+        loadedRange[0] = fetchStart;
+        if (data.resolution) currentResolution = data.resolution;
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      console.warn('pan-fetch failed', e);
+    } finally {
+      pendingController = null;
+      dispatch('chart:pan-fetch-loading', { chartId, loading: false });
+    }
+  }
+
+  return {
+    hooks: {
+      ready(u) {
+        if (loadedRange == null
+            && u.scales.x.min != null
+            && u.scales.x.max != null) {
+          loadedRange = [u.scales.x.min, u.scales.x.max];
+        }
+      },
+      setScale(u, scaleKey) {
+        if (scaleKey !== 'x') return;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => maybeFetch(u), debounceMs);
+      },
+    },
+  };
+}
+
+
 function chartPanel(chartId) {
   return {
     chart: null,
@@ -634,6 +780,27 @@ function chartPanel(chartId) {
 
       const chartHeight = parseInt(el.dataset.chartHeight) || 200;
 
+      // Pan-fetch (R-03) — sadece detay sayfasinda aktif (data-pan-fetch=true).
+      // chartData.pan_fetch_url + min_allowed_ts backend tarafindan saglanir.
+      const enablePanFetch = el.dataset.panFetch === 'true'
+        && !!chartData.pan_fetch_url
+        && chartData.min_allowed_ts != null;
+      const plugins = [
+        wheelZoomPlugin(),
+        xAxisInteractionPlugin(),
+        dblClickResetPlugin(windowRange),
+        perAxisZoomPanPlugin(),
+        scaleStatePersistPlugin(chartId),
+      ];
+      if (enablePanFetch) {
+        plugins.push(panFetchPlugin(chartId, {
+          fetchUrl: chartData.pan_fetch_url,
+          minAllowedTs: chartData.min_allowed_ts,
+          initialRange: [windowRange[0], windowRange[1]],
+          initialResolution: chartData.resolution || null,
+        }));
+      }
+
       const opts = {
         width: el.clientWidth,
         height: chartHeight,
@@ -653,13 +820,7 @@ function chartPanel(chartId) {
           },
         },
         legend: { show: true },
-        plugins: [
-          wheelZoomPlugin(),
-          xAxisInteractionPlugin(),
-          dblClickResetPlugin(windowRange),
-          perAxisZoomPanPlugin(),
-          scaleStatePersistPlugin(chartId),
-        ],
+        plugins: plugins,
       };
 
       this.chart = new uPlot(opts, uplotData, el);
