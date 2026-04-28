@@ -66,6 +66,8 @@ from custos.shared.database import (
     CROSS_SENSOR_OPERATOR_VALUES,
     LABEL_CLASS_VALUES,
     LABEL_CLASSES,
+    OPERATING_MODE_VALUES,
+    OPERATING_MODES,
     AlarmEvent,
     AlarmEventLabel,
     AssetInstance,
@@ -1468,6 +1470,7 @@ async def sensor_create(
     stuck_at_preset: str = Form("auto"),
     stuck_at_seconds: str = Form(""),
     rate_of_change_threshold: str = Form(""),
+    spc_enabled: str = Form(""),
 ) -> RedirectResponse:
     """Yeni tag kaydı oluşturur."""
     db = _get_db(request)
@@ -1497,6 +1500,8 @@ async def sensor_create(
     stuck_at_seconds_value = _parse_stuck_at_seconds(stuck_at_seconds)
     # R-06: rate-of-change eşiği — bos string -> None (devre disi).
     rate_of_change_value = _parse_rate_of_change_threshold(rate_of_change_threshold)
+    # R-07: SPC opt-in — checkbox value="true" gondermistir, bos string default kapali.
+    spc_enabled_value = spc_enabled.strip().lower() == "true"
 
     tag = TagRecord(
         tag_id=tag_id,
@@ -1515,6 +1520,7 @@ async def sensor_create(
         stuck_at_preset=stuck_at_preset,
         stuck_at_seconds=stuck_at_seconds_value,
         rate_of_change_threshold=rate_of_change_value,
+        spc_enabled=spc_enabled_value,
     )
 
     try:
@@ -1567,6 +1573,7 @@ async def sensor_update(
     stuck_at_preset: str = Form("auto"),
     stuck_at_seconds: str = Form(""),
     rate_of_change_threshold: str = Form(""),
+    spc_enabled: str = Form(""),
 ) -> RedirectResponse:
     """Tag kaydını günceller."""
     db = _get_db(request)
@@ -1597,6 +1604,8 @@ async def sensor_update(
     stuck_at_seconds_value = _parse_stuck_at_seconds(stuck_at_seconds)
     # R-06: rate-of-change eşiği parse — bos -> None.
     rate_of_change_value = _parse_rate_of_change_threshold(rate_of_change_threshold)
+    # R-07: SPC opt-in — checkbox value="true" gonderir, bos string False.
+    spc_enabled_value = spc_enabled.strip().lower() == "true"
 
     updates: dict[str, object] = {
         "name": name,
@@ -1615,6 +1624,7 @@ async def sensor_update(
         "stuck_at_preset": stuck_at_preset,
         "stuck_at_seconds": stuck_at_seconds_value,
         "rate_of_change_threshold": rate_of_change_value,
+        "spc_enabled": spc_enabled_value,
     }
 
     result = await db.update_tag(tag_id, updates)
@@ -2370,6 +2380,66 @@ async def process_maintenance_stop(
     )
 
 
+@router.post("/processes/{instance_id:int}/operating-mode")
+async def process_operating_mode_update(
+    request: Request,
+    instance_id: int,
+    session: Session = _OPERATOR_DEP,
+) -> RedirectResponse:
+    """Per-instance calisma modunu degistirir (R-07 / V11-307).
+
+    Operator + Developer yetkili (saha ihtiyaci icin Operator de toggle
+    edebilir). ``startup``/``shutdown`` modlarinda AnomalyDetector tick'te
+    alarm yazimi atlanir; ``running``/``idle`` modlarinda normal calisir.
+    """
+    db = _get_db(request)
+    form = await request.form()
+    new_mode = str(form.get("operating_mode", "")).strip()
+
+    if new_mode not in OPERATING_MODE_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Gecersiz mode (gecerli: {', '.join(OPERATING_MODES)})",
+        )
+
+    instance = await db.get_asset_instance(instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Asset bulunamadi")
+
+    # Ayni mode secilirse bos update — DB'yi yormamak icin erken don.
+    if instance.operating_mode == new_mode:
+        return RedirectResponse(
+            url=f"/dashboard/processes/{instance_id}", status_code=303,
+        )
+
+    now = datetime.now(UTC)
+    await db.update_asset_instance(
+        instance_id,
+        {
+            "operating_mode": new_mode,
+            "operating_mode_changed_at": now,
+            "operating_mode_changed_by_user_id": session.user_id,
+        },
+    )
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="mode",
+            action="changed",
+            entity_type="asset_instance",
+            entity_id=str(instance_id),
+            detail=(
+                f"Calisma modu '{instance.operating_mode}' -> '{new_mode}' "
+                f"(kullanici_id={session.user_id})"
+            ),
+        ),
+    )
+
+    return RedirectResponse(
+        url=f"/dashboard/processes/{instance_id}", status_code=303,
+    )
+
+
 @router.post("/maintenance/global/start")
 async def maintenance_global_start(
     request: Request,
@@ -2835,6 +2905,7 @@ async def alarms_page(request: Request) -> HTMLResponse:
             "watchdog",
             "rate_of_change",
             "cross_sensor",
+            "spc",
         )
         else ""
     )
@@ -5581,19 +5652,9 @@ _ML_MODEL_STALE_DAYS = 14
 # section-labeling listeden çıkarıldı; ml.html özel section ile doldurur.
 # R-06 ile section-layer1-rules listeden çıkarıldı; ml.html ayrı section
 # olarak rate/cross/escalation istatistiklerini gösterir.
+# R-07 ile section-mode-aware-spc listeden çıkarıldı; ml.html ayrı section
+# olarak mode dağılımı + SPC istatistiklerini gösterir.
 _ML_FUTURE_FEATURES: list[dict[str, str]] = [
-    {
-        "anchor": "section-mode-aware-spc",
-        "title": "Mode-aware Baseline + SPC",
-        "description": (
-            "Saat × gün baseline (weekday/weekend × morning/afternoon/night) "
-            "ve EWMA/CUSUM/MAD streaming SPC. Veri ile sessiz ısınır; "
-            "olgunlaşma 2-4 hafta."
-        ),
-        "badge": "v1.1 R-07",
-        "badge_status": "warn",
-        "v11_id": "V11-307/308",
-    },
     {
         "anchor": "section-stuck-at-l3",
         "title": "Stuck-at L3 — ML kişiselleştirilmiş",
@@ -5770,6 +5831,71 @@ async def _compute_layer1_summary(
     }
 
 
+async def _compute_mode_spc_summary(
+    db: DatabaseInterface,
+    instances: list[AssetInstance],
+    *,
+    since: datetime,
+) -> dict[str, Any]:
+    """ML hub Mode-aware + SPC bolumu icin sayim ozeti (R-07 / V11-307/308).
+
+    - ``running_count`` / ``startup_count`` / ``shutdown_count`` /
+      ``idle_count``: Mevcut instance'larin mode dagilimi.
+    - ``suppressed_24h``: Son 24h icinde mode degistirildi mi audit log
+      sayimi (``category='mode'`` action='changed').
+    - ``enabled_count``: ``spc_enabled=True`` aktif tag sayisi.
+    - ``learned_count``: spc_state.learning_complete=True kayit sayisi.
+    - ``alarms_24h``: Son 24h icinde source='spc' alarm sayisi.
+
+    ``since`` her zaman 24 saatlik pencere; helper imzasini test edilebilirlik
+    icin exposed birakiyoruz. R-06 _compute_layer1_summary deseni.
+    """
+    # Mode dagilimi — instance listesi parametre olarak alindigi icin
+    # ekstra DB round-trip yok (ml_dashboard zaten cektiyor).
+    mode_counts: dict[str, int] = {m: 0 for m in OPERATING_MODES}
+    for inst in instances:
+        mode_counts[inst.operating_mode] = mode_counts.get(inst.operating_mode, 0) + 1
+
+    # 24h icinde mode degistirme sayimi — audit log limit=200 yeterli
+    # (pilot olceginde 24h'da 200 mode-change beklenmedik degil, yine de
+    # ham sayim abartisiz tutalim).
+    audit_recent = await db.list_audit_log(category="mode", limit=200)
+    suppressed_24h = sum(
+        1 for entry in audit_recent
+        if entry.timestamp is not None and entry.timestamp >= since
+    )
+
+    # SPC istatistikleri — aktif tag listesinde spc_enabled True olanlar +
+    # spc_state'te learning_complete True olanlar.
+    active_tags = await db.list_tags(status="active")
+    enabled_count = sum(1 for t in active_tags if t.spc_enabled)
+    spc_states = await db.list_spc_states()
+    learned_count = sum(1 for s in spc_states if s.learning_complete)
+
+    # Source='spc' alarm sayimi — 3 state (triggered/acknowledged/cleared)
+    # icin in-memory tarama (R-06 layer1 deseni).
+    alarms_24h = 0
+    for state in ("triggered", "acknowledged", "cleared"):
+        alarm_list = await db.list_alarm_events(
+            state=state, source="spc", limit=200,
+        )
+        alarms_24h += sum(
+            1 for a in alarm_list
+            if a.triggered_at is not None and a.triggered_at >= since
+        )
+
+    return {
+        "running_count": mode_counts.get("running", 0),
+        "startup_count": mode_counts.get("startup", 0),
+        "shutdown_count": mode_counts.get("shutdown", 0),
+        "idle_count": mode_counts.get("idle", 0),
+        "suppressed_24h": suppressed_24h,
+        "enabled_count": enabled_count,
+        "learned_count": learned_count,
+        "alarms_24h": alarms_24h,
+    }
+
+
 async def _compute_label_summary(
     db: DatabaseInterface,
     *,
@@ -5876,6 +6002,10 @@ async def ml_dashboard(request: Request) -> HTMLResponse:
     # R-06: Layer 1 ek kural istatistikleri — son 24h penceresi.
     since_24h = datetime.now(UTC) - timedelta(hours=24)
     layer1_summary = await _compute_layer1_summary(db, since=since_24h)
+    # R-07: Mode-aware + SPC istatistikleri — ayni pencere.
+    mode_spc_summary = await _compute_mode_spc_summary(
+        db, instances, since=since_24h,
+    )
 
     ctx = _base_context(
         page_title="ML Hub",
@@ -5884,6 +6014,7 @@ async def ml_dashboard(request: Request) -> HTMLResponse:
         rows=rows,
         label_summary=label_summary,
         layer1_summary=layer1_summary,
+        mode_spc_summary=mode_spc_summary,
         future_features=_ML_FUTURE_FEATURES,
         success=request.query_params.get("ok"),
         error=request.query_params.get("error"),

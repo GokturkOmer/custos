@@ -81,6 +81,13 @@ class TagRecord:
       eşiği. NULL = kontrol kapalı (default). Threshold engine her tick'te
       mevcut + son okuma arasındaki delta'yı hesaplar; eşik aşılırsa
       ``source='rate_of_change'`` alarmı yazar (cooldown 5 dk).
+
+    R-07 (V11-308) ile SPC iskelet alanı:
+
+    - ``spc_enabled``: Per-tag opt-in. Default ``False`` — pilot operatörü
+      ihtiyaca göre açar. ``SPCEngine`` ilk 100 örnek (sessiz öğrenme)
+      sonrası EWMA + CUSUM + MAD-score sapmalarını ``source='spc'``,
+      severity='warn' alarm olarak yazar (cooldown 30 dk).
     """
 
     tag_id: str
@@ -100,6 +107,7 @@ class TagRecord:
     stuck_at_preset: str = "auto"
     stuck_at_seconds: int | None = None
     rate_of_change_threshold: float | None = None
+    spc_enabled: bool = False
     id: int | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -178,6 +186,14 @@ class AssetInstance:
     # AnomalyDetector tick'te False ise instance atlanir; UI'dan
     # operator/dev manuel olarak kapatabilir (ML hub'tan).
     ml_enabled: bool = True
+    # R-07 (Migration 037 / V11-307): Mode-aware iskelet. Operator manuel
+    # toggle eder; AnomalyDetector tick'te ``startup``/``shutdown`` modlarinda
+    # alarm yazimini atlar (false positive bombardimani engellenir),
+    # ``running``/``idle`` modlarinda normal calisir. Otomatik gecis Faz 3
+    # V11-303 ile gelecek.
+    operating_mode: str = "running"
+    operating_mode_changed_at: datetime | None = None
+    operating_mode_changed_by_user_id: int | None = None
 
 
 @dataclass
@@ -338,6 +354,51 @@ class CrossSensorRule:
     description: str = ""
     id: int | None = None
     created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+# R-07 / V11-307: Operator manuel toggle eden 4-tier mode enum.
+# Migration 037 CHECK constraint'i ile bire bir esler.
+OPERATING_MODES: tuple[str, ...] = ("running", "startup", "shutdown", "idle")
+OPERATING_MODE_VALUES: frozenset[str] = frozenset(OPERATING_MODES)
+
+# AnomalyDetector tick'te bu modlardayken alarm yazimi atlar (false positive
+# bombardimani engellenir). Operator startup/shutdown sirasinda manuel toggle
+# eder; normal calismaya donduğunde 'running' secer.
+ANOMALY_SUPPRESSED_MODES: frozenset[str] = frozenset({"startup", "shutdown"})
+
+
+@dataclass
+class SpcState:
+    """R-07 / V11-308: Per-tag SPC streaming state (EWMA + CUSUM + MAD).
+
+    ``SPCEngine`` 5 dk tick'te her ``spc_enabled`` tag icin son okumayi
+    alir, bu state'i guncelleyip diske yazar (server restart sonrasi
+    ogrenme korunur). Algoritmalar:
+
+    - **EWMA**: ``ewma_value`` exponentially weighted moving average,
+      ``ewma_variance`` ile birlikte 3 sigma sapma kontrolu.
+    - **CUSUM**: ``cusum_pos`` / ``cusum_neg`` kumulatif pozitif / negatif
+      sapma; |CUSUM| > H * stddev tetikler alarm.
+    - **MAD**: ``mad_median`` + ``mad_value`` (median absolute deviation);
+      robust z-score = |x - median| / (1.4826 * MAD), 3.5 esiği tetikler.
+
+    ``sample_count`` ilk 100 ornek = ogrenme penceresi (sessiz).
+    ``learning_complete=True`` olduktan sonra alarmlar yazilmaya baslar.
+    ``last_sample_at`` ayni timestamp'i bir daha islememek icin (idempotency).
+    """
+
+    tag_id: str
+    sample_count: int = 0
+    ewma_value: float | None = None
+    ewma_variance: float | None = None
+    cusum_pos: float = 0.0
+    cusum_neg: float = 0.0
+    mad_median: float | None = None
+    mad_value: float | None = None
+    last_sample_at: datetime | None = None
+    learning_complete: bool = False
+    id: int | None = None
     updated_at: datetime | None = None
 
 
@@ -1571,6 +1632,30 @@ class DatabaseInterface(abc.ABC):
     ) -> list[CrossSensorRule]:
         """Kural listesi. ``enabled=True`` engine cache'i için."""
 
+    # --- SPC State (R-07 / V11-308) ---
+
+    @abc.abstractmethod
+    async def get_spc_state(self, tag_id: str) -> SpcState | None:
+        """Tek tag icin SPC state kaydini getirir. Bulunamazsa None.
+
+        ``SPCEngine`` her tick'te aktif tag listesini gezer; ilk goruldugunde
+        ``upsert_spc_state`` ile yeni satir yazar.
+        """
+
+    @abc.abstractmethod
+    async def upsert_spc_state(self, state: SpcState) -> SpcState:
+        """SPC state'ini ekler ya da gunceller (tag_id UNIQUE).
+
+        Engine her tick sonu state'i diske yazar — server restart sonrasi
+        ogrenme penceresi korunsun. INSERT ON CONFLICT (tag_id) DO UPDATE
+        deseni; ``updated_at`` otomatik ``NOW()``.
+        """
+
+    @abc.abstractmethod
+    async def list_spc_states(self) -> list[SpcState]:
+        """Tum SPC state kayitlarini doner — ML hub istatistikleri ve engine
+        warm-up icin."""
+
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
 _ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset(
@@ -1648,6 +1733,10 @@ _ALLOWED_TAG_UPDATE_FIELDS: frozenset[str] = frozenset(
         # pozitif değer = mutlak |Δ/dk| esik. Threshold engine her tick'te
         # değerlendirir; cooldown 5 dakika.
         "rate_of_change_threshold",
+        # R-07 (Migration 037): Per-tag SPC opt-in. False (default) iken
+        # SPC engine bu tag'i isleminez; True'da ogrenme penceresi sonrasi
+        # sapma alarmlari yazar.
+        "spc_enabled",
     }
 )
 
@@ -1674,6 +1763,7 @@ def _row_to_tag_record(row: asyncpg.Record) -> TagRecord:
         stuck_at_preset=row["stuck_at_preset"],
         stuck_at_seconds=row["stuck_at_seconds"],
         rate_of_change_threshold=float(raw_rate) if raw_rate is not None else None,
+        spc_enabled=bool(row["spc_enabled"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -1694,6 +1784,11 @@ _ALLOWED_INSTANCE_UPDATE_FIELDS: frozenset[str] = frozenset(
         "maintenance_started_at",
         # R-04: ML hub'tan toggle ile guncellenir.
         "ml_enabled",
+        # R-07 (V11-307): Mode-aware iskelet — process_detail mode toggle
+        # endpoint'i bu uc alani tek update'te yazar.
+        "operating_mode",
+        "operating_mode_changed_at",
+        "operating_mode_changed_by_user_id",
     }
 )
 
@@ -1751,6 +1846,9 @@ def _row_to_asset_instance(row: asyncpg.Record) -> AssetInstance:
         maintenance_started_by_user_id=row["maintenance_started_by_user_id"],
         maintenance_started_at=row["maintenance_started_at"],
         ml_enabled=bool(row["ml_enabled"]),
+        operating_mode=row["operating_mode"],
+        operating_mode_changed_at=row["operating_mode_changed_at"],
+        operating_mode_changed_by_user_id=row["operating_mode_changed_by_user_id"],
     )
 
 
@@ -2420,9 +2518,9 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "register_address, register_type, byte_order, "
                 'gain, "offset", unit, polling_interval_ms, polling_preset, '
                 "status, stuck_at_preset, stuck_at_seconds, "
-                "rate_of_change_threshold) "
+                "rate_of_change_threshold, spc_enabled) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, "
-                "$12, $13, $14, $15, $16, $17) "
+                "$12, $13, $14, $15, $16, $17, $18) "
                 "RETURNING *",
                 tag.tag_id,
                 tag.name,
@@ -2441,6 +2539,7 @@ class TimescaleDBDatabase(DatabaseInterface):
                 tag.stuck_at_preset,
                 tag.stuck_at_seconds,
                 tag.rate_of_change_threshold,
+                tag.spc_enabled,
             )
         assert row is not None  # INSERT RETURNING her zaman satır döndürür
         return _row_to_tag_record(row)
@@ -4959,6 +5058,86 @@ class TimescaleDBDatabase(DatabaseInterface):
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
         return [_row_to_cross_sensor_rule(row) for row in rows]
+
+    # --- SPC State implementasyonlari (R-07 / V11-308) ---
+
+    async def get_spc_state(self, tag_id: str) -> SpcState | None:
+        """Tek tag icin SPC state kaydini getirir."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM spc_state WHERE tag_id = $1",
+                tag_id,
+            )
+        if row is None:
+            return None
+        return _row_to_spc_state(row)
+
+    async def upsert_spc_state(self, state: SpcState) -> SpcState:
+        """SPC state'ini ekler ya da gunceller. ``tag_id`` UNIQUE."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO spc_state "
+                "(tag_id, sample_count, ewma_value, ewma_variance, "
+                "cusum_pos, cusum_neg, mad_median, mad_value, "
+                "last_sample_at, learning_complete, updated_at) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) "
+                "ON CONFLICT (tag_id) DO UPDATE SET "
+                "sample_count = EXCLUDED.sample_count, "
+                "ewma_value = EXCLUDED.ewma_value, "
+                "ewma_variance = EXCLUDED.ewma_variance, "
+                "cusum_pos = EXCLUDED.cusum_pos, "
+                "cusum_neg = EXCLUDED.cusum_neg, "
+                "mad_median = EXCLUDED.mad_median, "
+                "mad_value = EXCLUDED.mad_value, "
+                "last_sample_at = EXCLUDED.last_sample_at, "
+                "learning_complete = EXCLUDED.learning_complete, "
+                "updated_at = EXCLUDED.updated_at "
+                "RETURNING *",
+                state.tag_id,
+                state.sample_count,
+                state.ewma_value,
+                state.ewma_variance,
+                state.cusum_pos,
+                state.cusum_neg,
+                state.mad_median,
+                state.mad_value,
+                state.last_sample_at,
+                state.learning_complete,
+                datetime.now(UTC),
+            )
+        assert row is not None  # INSERT/UPDATE RETURNING her zaman satir doner
+        return _row_to_spc_state(row)
+
+    async def list_spc_states(self) -> list[SpcState]:
+        """Tum SPC state kayitlarini doner."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM spc_state ORDER BY tag_id")
+        return [_row_to_spc_state(row) for row in rows]
+
+
+def _row_to_spc_state(row: asyncpg.Record) -> SpcState:
+    """asyncpg satirini SpcState'e donusturur (R-07 / V11-308)."""
+    raw_ewma = row["ewma_value"]
+    raw_variance = row["ewma_variance"]
+    raw_median = row["mad_median"]
+    raw_mad = row["mad_value"]
+    return SpcState(
+        id=row["id"],
+        tag_id=row["tag_id"],
+        sample_count=row["sample_count"],
+        ewma_value=float(raw_ewma) if raw_ewma is not None else None,
+        ewma_variance=float(raw_variance) if raw_variance is not None else None,
+        cusum_pos=float(row["cusum_pos"]),
+        cusum_neg=float(row["cusum_neg"]),
+        mad_median=float(raw_median) if raw_median is not None else None,
+        mad_value=float(raw_mad) if raw_mad is not None else None,
+        last_sample_at=row["last_sample_at"],
+        learning_complete=bool(row["learning_complete"]),
+        updated_at=row["updated_at"],
+    )
 
 
 def _row_to_overview_chart_tag(row: asyncpg.Record) -> OverviewChartTag:

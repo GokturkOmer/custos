@@ -34,6 +34,7 @@ from custos.analytics.liveness_engine import LivenessEngine
 from custos.analytics.maintenance_mode import expire_check_loop as maintenance_expire_loop
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
 from custos.analytics.resource_telemetry import ResourceMonitor
+from custos.analytics.spc_engine import SPCEngine
 from custos.analytics.templates import (
     TemplateLoadError,
     TemplateSchema,
@@ -156,6 +157,11 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     # otomatik crit'e yükseltir (V11-306).
     escalation: EscalationLoop | None = None
     escalation_task: asyncio.Task[None] | None = None
+    # R-07: SPC engine — per-tag EWMA + CUSUM + MAD-score (V11-308).
+    # 5 dk tick; aktif spc_enabled tag'ler icin streaming istatistikler
+    # ve sapma alarmlari yazar.
+    spc: SPCEngine | None = None
+    spc_task: asyncio.Task[None] | None = None
     try:
         await db.connect()
         application.state.db = db
@@ -245,6 +251,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         escalation = EscalationLoop(db=db)
         escalation_task = asyncio.create_task(escalation.start())
         application.state.escalation_loop = escalation
+
+        # R-07 SPC engine — per-tag EWMA + CUSUM + MAD-score iskelet
+        # (V11-308). 5 dk tick; aktif spc_enabled tag'ler ilk 100 ornek
+        # sessiz ogrenir, sonrasinda sapma alarmlari source='spc' yazar.
+        spc = SPCEngine(db=db)
+        spc_task = asyncio.create_task(spc.start())
+        application.state.spc_engine = spc
     except Exception:
         await logger.aerror("DB bağlantısı kurulamadı", exc_info=True)
         application.state.db = None
@@ -281,6 +294,15 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         escalation_task.cancel()
         try:
             await escalation_task
+        except asyncio.CancelledError:
+            pass
+    # R-07 SPC engine'i durdur
+    if spc is not None:
+        await spc.stop()
+    if spc_task is not None and not spc_task.done():
+        spc_task.cancel()
+        try:
+            await spc_task
         except asyncio.CancelledError:
             pass
     # Disk monitor'ı durdur

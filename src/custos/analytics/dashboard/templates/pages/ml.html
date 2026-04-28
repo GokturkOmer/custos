@@ -317,8 +317,68 @@
     </div>
   </section>
 
-  {# E) R-07/Faz 3 placeholder bölümleri — anchor'lar sabit;
-       sonraki R-paketleri buraya doğrudan içerik ekler #}
+  {# E) Mode-aware + SPC iskelet (R-07 / V11-307/308) — operatör startup/shutdown
+       sirasinda anomali bombardimanini engeller (mode-aware), pilot suresince
+       veri biriktikce yavas drift alarmlari yazar (SPC). Iskelet niteligindedir;
+       deger pilot suresince artar. #}
+  <section id="section-mode-aware-spc"
+           class="bg-bg-surface border border-border-weak rounded-lg p-4 space-y-3">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <h2 class="text-panel-title text-text-primary font-semibold">
+        Mode-aware + SPC
+      </h2>
+      <span class="text-small text-text-disabled">Son 24 saat</span>
+    </div>
+    <p class="text-small text-text-secondary">
+      Mode-aware: operator startup/shutdown sirasinda anomali yazimini gecici
+      kapatir. SPC: per-tag opt-in EWMA + CUSUM + MAD-score; ilk 100 ornek
+      sessiz ogrenir, sonra yavas drift alarmlari yazar.
+    </p>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {# Mode dagilimi karti #}
+      <div class="px-3 py-2 rounded-md border border-border-weak bg-bg-base space-y-1">
+        <div class="text-small text-text-secondary">Calisma Modu Dagilimi</div>
+        <div class="text-small">
+          <span class="text-text-primary font-medium">Running:</span>
+          <span class="text-text-primary">{{ mode_spc_summary.running_count }}</span>
+          <span class="ml-2 text-text-secondary">·</span>
+          <span class="ml-2 text-text-primary font-medium">Idle:</span>
+          <span class="text-text-primary">{{ mode_spc_summary.idle_count }}</span>
+        </div>
+        <div class="text-small">
+          <span class="text-status-warn font-medium">Startup:</span>
+          <span class="text-text-primary">{{ mode_spc_summary.startup_count }}</span>
+          <span class="ml-2 text-text-secondary">·</span>
+          <span class="ml-2 text-status-warn font-medium">Shutdown:</span>
+          <span class="text-text-primary">{{ mode_spc_summary.shutdown_count }}</span>
+        </div>
+        <div class="text-small text-text-tertiary mt-1">
+          Son 24h mode degisikligi: <span class="text-text-primary font-medium">{{ mode_spc_summary.suppressed_24h }}</span>
+        </div>
+      </div>
+
+      {# SPC karti #}
+      <div class="px-3 py-2 rounded-md border border-border-weak bg-bg-base space-y-1">
+        <div class="text-small text-text-secondary">SPC (EWMA + CUSUM + MAD)</div>
+        <div class="text-heading font-semibold mt-0.5 text-text-primary">
+          {{ mode_spc_summary.enabled_count }} tag aktif
+        </div>
+        <div class="text-small text-text-tertiary">
+          Ogrenme tamamlandi: <span class="text-text-primary font-medium">{{ mode_spc_summary.learned_count }}</span>
+        </div>
+        <div class="text-small text-text-tertiary">
+          Son 24h alarm: <span class="text-text-primary font-medium">{{ mode_spc_summary.alarms_24h }}</span>
+        </div>
+        <a href="/dashboard/sensors"
+           class="text-small text-accent-primary hover:underline mt-1 inline-block">
+          Tag formundan ac/kapat &rarr;
+        </a>
+      </div>
+    </div>
+  </section>
+
+  {# F) Faz 3 placeholder bölümleri — anchor'lar sabit;
+       sonraki paketler buraya doğrudan içerik ekler #}
   <section class="space-y-3">
     <h2 class="text-panel-title text-text-primary font-semibold">Olgunlaşma Yol Haritası</h2>
     <p class="text-small text-text-secondary">

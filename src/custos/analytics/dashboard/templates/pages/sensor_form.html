@@ -275,6 +275,24 @@
       </p>
     </fieldset>
 
+    {# SPC iskelet (R-07 / V11-308) — opsiyonel; default kapali #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">
+        SPC (Istatistiksel Surec Kontrolu)
+      </legend>
+      <label class="inline-flex items-center gap-2 text-body text-text-primary">
+        <input type="checkbox" name="spc_enabled" value="true"
+               {{ 'checked' if tag and tag.spc_enabled }}
+               class="accent-accent-primary">
+        SPC etkin
+      </label>
+      <p class="text-small text-text-tertiary">
+        EWMA + CUSUM + MAD-score ile yavas drift tespiti. Ilk 100 ornek
+        ogrenme periyodu (sessiz); sonrasinda sapma alarmi tetikler. Polling
+        araligina bagli olarak 100 ornek 30 dk - 17 saat arasi birikir.
+      </p>
+    </fieldset>
+
     {# Status (sadece edit modunda) #}
     {% if edit_mode %}
     <div>

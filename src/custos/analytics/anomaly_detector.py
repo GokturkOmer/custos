@@ -17,6 +17,7 @@ from pathlib import Path
 import structlog
 
 from custos.shared.database import (
+    ANOMALY_SUPPRESSED_MODES,
     AnomalyScore,
     AuditLogEntry,
     DatabaseInterface,
@@ -213,6 +214,19 @@ class AnomalyDetector:
             assert instance.id is not None
             # R-04: Per-instance ML toggle — False ise instance atlanır.
             if not instance.ml_enabled:
+                continue
+            # R-07 (V11-307): Mode-aware iskelet. startup/shutdown modlarinda
+            # operator setpoint degistirir/asset hizlanir-yavaslar; bu gecis
+            # surecinde anomali bombardimani false positive uretir. Bu modlarda
+            # alarm yazimini atliyoruz; running ve idle modlarinda normal devam.
+            # Tam mode-conditional model Faz 3 V11-303 ile gelecek; bu paket
+            # sadece manuel toggle + alarm yazimi atlamasi.
+            if instance.operating_mode in ANOMALY_SUPPRESSED_MODES:
+                await logger.adebug(
+                    "Mode-aware: alarm yazimi atlandi",
+                    instance_id=instance.id,
+                    operating_mode=instance.operating_mode,
+                )
                 continue
             model = self._models.get(instance.id)
             if model is None:

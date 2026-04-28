@@ -225,6 +225,11 @@ class _LabelMockDB:
     ) -> list[Any]:
         return []
 
+    # --- R-07: ML hub Mode-aware + SPC helper'i icin no-op ---
+
+    async def list_spc_states(self) -> list[Any]:
+        return []
+
 
 @pytest.fixture
 def label_db(monkeypatch: pytest.MonkeyPatch) -> _LabelMockDB:

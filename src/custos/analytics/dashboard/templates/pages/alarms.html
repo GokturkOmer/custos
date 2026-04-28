@@ -36,6 +36,7 @@
           <option value="watchdog" {{ 'selected' if source_filter == 'watchdog' }}>Watchdog</option>
           <option value="rate_of_change" {{ 'selected' if source_filter == 'rate_of_change' }}>Rate-of-change</option>
           <option value="cross_sensor" {{ 'selected' if source_filter == 'cross_sensor' }}>Cross-sensor</option>
+          <option value="spc" {{ 'selected' if source_filter == 'spc' }}>SPC</option>
         </select>
         <label class="inline-flex items-center gap-1 text-small text-text-secondary ml-2 cursor-pointer">
           <input type="checkbox" name="unlabeled" value="true"
@@ -119,7 +120,8 @@
                   'liveness': 'Liveness',
                   'watchdog': 'Watchdog',
                   'rate_of_change': 'Rate-of-change',
-                  'cross_sensor': 'Cross-sensor'
+                  'cross_sensor': 'Cross-sensor',
+                  'spc': 'SPC'
                 }.get(a.source, a.source) %}
                 <span class="px-2 py-0.5 rounded text-small bg-bg-elevated text-text-secondary border border-border-weak">{{ src_label }}</span>
               </td>
