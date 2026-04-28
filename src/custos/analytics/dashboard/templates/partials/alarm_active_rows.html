@@ -1,87 +1,14 @@
-{% from 'components/status_badge.html' import status_badge %}
-{% from 'components/icon.html' import icon_inline %}
-
+{# Aktif alarm satırları — wrapper. Tek satır render'ı ``alarm_row.html``
+   partial'ında; etiket POST endpoint'i de aynı dosyayı döner (R-05). #}
 {% if active_alarms %}
   {% for a in active_alarms %}
-  <tr class="hover:bg-bg-elevated transition-colors">
-    <td class="px-3 py-2 text-cell text-text-primary">{{ a.triggered_at.strftime('%d/%m %H:%M:%S') if a.triggered_at else '-' }}</td>
-    <td class="px-3 py-2 text-cell">
-      {% set src_label = {
-        'threshold': 'Threshold',
-        'anomaly': 'Anomaly',
-        'liveness': 'Liveness',
-        'watchdog': 'Watchdog'
-      }.get(a.source, a.source) %}
-      <span class="px-2 py-0.5 rounded text-small bg-bg-elevated text-text-secondary border border-border-weak">{{ src_label }}</span>
-    </td>
-    <td class="px-3 py-2 text-cell text-text-primary">{{ a.tag_id }}</td>
-    <td class="px-3 py-2 text-cell text-text-primary">
-      {% if a.threshold_id is not none %}
-        {{ threshold_names.get(a.threshold_id, '-') }}
-        {% set rcount = recent_alarm_count.get(a.threshold_id, 0) if recent_alarm_count else 0 %}
-        {% if rcount > 1 %}
-        <span class="ml-1 px-1.5 py-0.5 rounded bg-status-warn-bg text-status-warn text-small font-mono"
-              title="Son 7 gün içinde bu eşiğin tetiklenme sayısı">
-          ×{{ rcount }}
-        </span>
-        {% endif %}
-      {% else %}
-        {{ a.message or '-' }}
-      {% endif %}
-    </td>
-    <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(a.trigger_value) }}</td>
-    <td class="px-3 py-2 text-cell">
-      {% set sev = a.severity or threshold_severities.get(a.threshold_id, 'warn') %}
-      {% set sev_label = {
-        'info': 'Info',
-        'warn': 'Warning',
-        'crit': 'Critical',
-        'emergency': 'Emergency'
-      }.get(sev, sev) %}
-      {{ status_badge(sev_label, sev) }}
-    </td>
-    <td class="px-3 py-2 text-cell">
-      {% if a.state == 'triggered' %}
-        {{ status_badge('Triggered', 'crit') }}
-      {% else %}
-        {{ status_badge('Acknowledged', 'warn') }}
-      {% endif %}
-    </td>
-    <td class="px-3 py-2 text-cell">
-      <div class="inline-flex items-center gap-2">
-        {% if a.state == 'triggered' %}
-          <form method="post" action="/dashboard/alarms/{{ a.id }}/acknowledge" class="inline">
-            <button type="submit"
-                    class="inline-flex items-center gap-1 px-2 py-1 text-small font-medium
-                           bg-accent-primary/20 text-accent-primary rounded
-                           hover:bg-accent-primary/30 transition-colors"
-                    title="Acknowledge">
-              {{ icon_inline('check-circle', class='w-3.5 h-3.5') }}
-              Onayla
-            </button>
-          </form>
-        {% else %}
-          <span class="text-text-disabled text-small">Onaylandı</span>
-        {% endif %}
-        {% if a.threshold_id is not none and checklist_by_threshold and checklist_by_threshold.get(a.threshold_id) %}
-        <form method="post" action="/dashboard/alarms/{{ a.id }}/start-checklist" class="inline">
-          <button type="submit"
-                  class="inline-flex items-center gap-1 px-2 py-1 text-small font-medium
-                         bg-status-warn-bg text-status-warn rounded
-                         hover:opacity-90 transition-opacity"
-                  title="Kontrol listesi başlat">
-            {{ icon_inline('tool', class='w-3.5 h-3.5') }}
-            Kontrol Listesi
-          </button>
-        </form>
-        {% endif %}
-      </div>
-    </td>
-  </tr>
+    {% with alarm=a, label=labels_by_alarm_id.get(a.id) %}
+      {% include 'partials/alarm_row.html' %}
+    {% endwith %}
   {% endfor %}
 {% else %}
   <tr>
-    <td colspan="8" class="px-3 py-8 text-center text-text-disabled text-body">
+    <td colspan="9" class="px-3 py-8 text-center text-text-disabled text-body">
       Aktif alarm yok.
     </td>
   </tr>

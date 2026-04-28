@@ -12,7 +12,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 import structlog
@@ -240,6 +240,47 @@ class AlarmEvent:
     message: str = ""
     id: int | None = None
     created_at: datetime | None = None
+
+
+# R-05 / V11-301 etiketleme — Migration 035 CHECK constraint'i ile aynı liste.
+# Frontend (alarm satırı 4 buton) + endpoint validasyonu + helper sayım anahtarları
+# bu sıralamayı kullanır. ``LABEL_CLASSES`` operatöre gösterilen doğal sıralama
+# (en kritik → en az kritik); ``LABEL_CLASS_VALUES`` set lookup için.
+LabelClass = Literal[
+    "gercek_ariza",
+    "yanlis_alarm",
+    "bakim_sirasinda",
+    "bilinmiyor",
+]
+LABEL_CLASSES: tuple[str, ...] = (
+    "gercek_ariza",
+    "yanlis_alarm",
+    "bakim_sirasinda",
+    "bilinmiyor",
+)
+LABEL_CLASS_VALUES: frozenset[str] = frozenset(LABEL_CLASSES)
+
+
+@dataclass
+class AlarmEventLabel:
+    """Alarm event etiketi — R-05 / V11-301.
+
+    Operatörün bir alarm/anomaly olayına atadığı 4 sınıftan biri. Pilot
+    süresince etiketler birikir; pilot kabul sonrası V11-303 (Shadow mode +
+    Auto retraining) bu etiketleri shadow inference baseline + retraining
+    için kullanır.
+
+    UNIQUE (alarm_event_id) — her alarm için tek aktif etiket. Re-label
+    upsert ile mevcut satırı günceller; tarihsel re-label izi audit_log
+    üzerinden tutulur (ayrı history tablosu açılmıyor).
+    """
+
+    alarm_event_id: int
+    label_class: str
+    labeled_by_user_id: int
+    notes: str = ""
+    id: int | None = None
+    labeled_at: datetime | None = None
 
 
 @dataclass
@@ -914,6 +955,52 @@ class DatabaseInterface(abc.ABC):
         threshold_id: int,
     ) -> AlarmEvent | None:
         """Threshold için aktif (cleared olmayan) alarm döndürür."""
+
+    # --- Alarm Event Labels (R-05 / V11-301) ---
+
+    @abc.abstractmethod
+    async def upsert_alarm_label(
+        self,
+        alarm_event_id: int,
+        label_class: LabelClass,
+        labeled_by_user_id: int,
+        notes: str = "",
+    ) -> AlarmEventLabel:
+        """Alarmı etiketler veya mevcut etiketi günceller (alarm_event_id PK).
+
+        ``label_class`` Migration 035 CHECK constraint ile sınırlı; ``LabelClass``
+        Literal'ı dışında değer geçilirse DB ``CheckViolationError`` fırlatır.
+        Re-label durumunda ``labeled_at`` NOW() ile tazelenir; eski label
+        kaydının izi audit_log üzerinden tutulur.
+        """
+
+    @abc.abstractmethod
+    async def get_alarm_label(self, alarm_event_id: int) -> AlarmEventLabel | None:
+        """Alarmın etiketini döndürür; etiket yoksa None."""
+
+    @abc.abstractmethod
+    async def list_unlabeled_alarms(
+        self,
+        limit: int = 100,
+    ) -> list[AlarmEvent]:
+        """Etiketlenmemiş alarmları döndürür (review queue için).
+
+        ``alarm_events LEFT JOIN alarm_event_labels`` üzerinden label_id IS NULL
+        olan satırlar; ``is_test=False`` zorunlu (bakım modunda üretilen test
+        alarm'larını eğitim setinden zaten çıkarıyoruz, etiketlemeye değmez).
+        """
+
+    @abc.abstractmethod
+    async def count_labels_by_class(
+        self,
+        since: datetime | None = None,
+    ) -> dict[str, int]:
+        """4 sınıf için etiket sayımlarını döndürür.
+
+        Sözlük her zaman 4 anahtara sahip; sınıf hiç kullanılmadıysa 0 döner.
+        ``since`` verilirse ``labeled_at >= since`` filtresi uygulanır (ML
+        hub'da "son 30 gün" kartı için).
+        """
 
     # --- Audit Log ---
 
@@ -1631,6 +1718,18 @@ def _row_to_alarm_event(row: asyncpg.Record) -> AlarmEvent:
         severity=row["severity"],
         message=row["message"],
         created_at=row["created_at"],
+    )
+
+
+def _row_to_alarm_event_label(row: asyncpg.Record) -> AlarmEventLabel:
+    """asyncpg satırını AlarmEventLabel'a dönüştürür."""
+    return AlarmEventLabel(
+        id=row["id"],
+        alarm_event_id=row["alarm_event_id"],
+        label_class=row["label_class"],
+        labeled_by_user_id=row["labeled_by_user_id"],
+        labeled_at=row["labeled_at"],
+        notes=row["notes"],
     )
 
 
@@ -2985,6 +3084,92 @@ class TimescaleDBDatabase(DatabaseInterface):
         if row is None:
             return None
         return _row_to_alarm_event(row)
+
+    # --- Alarm Event Label implementasyonları (R-05 / V11-301) ---
+
+    async def upsert_alarm_label(
+        self,
+        alarm_event_id: int,
+        label_class: LabelClass,
+        labeled_by_user_id: int,
+        notes: str = "",
+    ) -> AlarmEventLabel:
+        """Alarmı etiketler; alarm_event_id çakışırsa mevcut satırı günceller."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO alarm_event_labels "
+                "(alarm_event_id, label_class, labeled_by_user_id, notes) "
+                "VALUES ($1, $2, $3, $4) "
+                "ON CONFLICT (alarm_event_id) DO UPDATE SET "
+                "  label_class = EXCLUDED.label_class, "
+                "  labeled_by_user_id = EXCLUDED.labeled_by_user_id, "
+                "  labeled_at = NOW(), "
+                "  notes = EXCLUDED.notes "
+                "RETURNING *",
+                alarm_event_id,
+                label_class,
+                labeled_by_user_id,
+                notes,
+            )
+        assert row is not None
+        return _row_to_alarm_event_label(row)
+
+    async def get_alarm_label(self, alarm_event_id: int) -> AlarmEventLabel | None:
+        """Alarmın etiketini döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM alarm_event_labels WHERE alarm_event_id = $1",
+                alarm_event_id,
+            )
+        if row is None:
+            return None
+        return _row_to_alarm_event_label(row)
+
+    async def list_unlabeled_alarms(
+        self,
+        limit: int = 100,
+    ) -> list[AlarmEvent]:
+        """Etiketlenmemiş alarmları döndürür (review queue için)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT a.* FROM alarm_events a "
+                "LEFT JOIN alarm_event_labels l ON l.alarm_event_id = a.id "
+                "WHERE l.id IS NULL AND a.is_test = FALSE "
+                "ORDER BY a.triggered_at DESC LIMIT $1",
+                limit,
+            )
+        return [_row_to_alarm_event(row) for row in rows]
+
+    async def count_labels_by_class(
+        self,
+        since: datetime | None = None,
+    ) -> dict[str, int]:
+        """4 sınıf için etiket sayımlarını döndürür (eksik sınıfa 0)."""
+        pool = self._get_pool()
+        if since is None:
+            sql = (
+                "SELECT label_class, COUNT(*) AS cnt "
+                "FROM alarm_event_labels GROUP BY label_class"
+            )
+            params: tuple[object, ...] = ()
+        else:
+            sql = (
+                "SELECT label_class, COUNT(*) AS cnt "
+                "FROM alarm_event_labels WHERE labeled_at >= $1 "
+                "GROUP BY label_class"
+            )
+            params = (since,)
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        counts: dict[str, int] = dict.fromkeys(LABEL_CLASS_VALUES, 0)
+        for row in rows:
+            counts[row["label_class"]] = int(row["cnt"])
+        return counts
 
     # --- Audit Log implementasyonları ---
 

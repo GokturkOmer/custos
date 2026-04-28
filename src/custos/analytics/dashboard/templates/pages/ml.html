@@ -218,12 +218,47 @@
     </div>
   </section>
 
-  {# C) Faz 3 / R-05/R-06/R-07 placeholder bölümleri — anchor'lar sabit;
+  {# C) Etiketleme & Review Queue (R-05 / V11-301) — son 30 gün etiket aktivitesi.
+       Sayım kartları + review queue link. P-12 (Faz 3) tüketicisi olarak referans. #}
+  <section id="section-labeling"
+           class="bg-bg-surface border border-border-weak rounded-lg p-4 space-y-3">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <h2 class="text-panel-title text-text-primary font-semibold">Etiketleme & Review Queue</h2>
+      <span class="text-small text-text-disabled">Son 30 gün</span>
+    </div>
+    {% set _label_card = {
+      'gercek_ariza': {'emoji': '🔴', 'text': 'Gerçek arıza', 'class': 'border-status-crit/40 text-status-crit'},
+      'yanlis_alarm': {'emoji': '🟡', 'text': 'Yanlış alarm', 'class': 'border-status-warn/40 text-status-warn'},
+      'bakim_sirasinda': {'emoji': '🔧', 'text': 'Bakım sırasında', 'class': 'border-border-weak text-text-secondary'},
+      'bilinmiyor': {'emoji': '❓', 'text': 'Bilinmiyor', 'class': 'border-border-weak text-text-disabled'},
+    } %}
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {% for cls, cnt in label_summary.counts.items() %}
+        {% set cfg = _label_card.get(cls, {'emoji': '', 'text': cls, 'class': 'border-border-weak text-text-secondary'}) %}
+        <div class="px-3 py-2 rounded-md border {{ cfg.class }} bg-bg-base">
+          <div class="text-small">{{ cfg.emoji }} {{ cfg.text }}</div>
+          <div class="text-heading font-semibold mt-0.5">{{ cnt }}</div>
+        </div>
+      {% endfor %}
+    </div>
+    <p class="text-small text-text-secondary">
+      Etiketlenmemiş:
+      <span class="font-semibold text-text-primary">{{ label_summary.unlabeled_count }}{{ '+' if label_summary.unlabeled_truncated else '' }}</span>
+      alarm.
+      <a href="/dashboard/alarms?unlabeled=true"
+         class="text-accent-primary hover:underline ml-1">Review Queue'ya git →</a>
+    </p>
+    <p class="text-small text-text-disabled">
+      P-12 (Faz 3) bu etiketleri shadow mode + retraining için kullanacak.
+    </p>
+  </section>
+
+  {# D) Faz 3 / R-06/R-07 placeholder bölümleri — anchor'lar sabit;
        sonraki R-paketleri buraya doğrudan içerik ekler #}
   <section class="space-y-3">
     <h2 class="text-panel-title text-text-primary font-semibold">Olgunlaşma Yol Haritası</h2>
     <p class="text-small text-text-secondary">
-      Aşağıdaki bölümler R-05/R-06/R-07 paketleriyle yerine gerçek özelliklerle
+      Aşağıdaki bölümler R-06/R-07 paketleriyle yerine gerçek özelliklerle
       doldurulur. V11-302/303 (Stuck-at L3 + Shadow Mode) pilot kabul sonrasına
       ertelendi (K9 — manuel onay, K11 — 2-4 hafta veri zorunlu).
     </p>

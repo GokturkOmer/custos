@@ -32,6 +32,7 @@ from custos.analytics.dashboard.auth_dependencies import (
     require_operator,
 )
 from custos.shared.database import (
+    LABEL_CLASS_VALUES,
     AnomalyScore,
     AssetInstance,
     RetentionConfig,
@@ -226,6 +227,11 @@ def _ml_db(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         return_value=_retention(ml_inference_enabled=False)
     )
     mock.insert_audit_log = AsyncMock()
+    # R-05: ML hub etiketleme bölümü _compute_label_summary çağırıyor.
+    mock.count_labels_by_class = AsyncMock(
+        return_value=dict.fromkeys(LABEL_CLASS_VALUES, 0),
+    )
+    mock.list_unlabeled_alarms = AsyncMock(return_value=[])
     monkeypatch.setattr(app.state, "db", mock, raising=False)
     return mock
 
@@ -254,14 +260,15 @@ def test_ml_dashboard_developer_returns_200(
     # Instance tablosu — her iki instance de listelenmeli
     assert "chiller-1" in text
     assert "ahu-2" in text
-    # Faz 3 placeholder bölümleri (R-05/R-06/R-07 + V11-302/303)
-    assert 'id="section-labeling"' in text
+    # Faz 3 placeholder + R-05 ile dolan section'lar
+    assert 'id="section-labeling"' in text  # R-05 doldurdu
     assert 'id="section-layer1-rules"' in text
     assert 'id="section-mode-aware-spc"' in text
     assert 'id="section-stuck-at-l3"' in text
     assert 'id="section-shadow-mode"' in text
-    # Faz 3 / R-05 badge metinleri
-    assert "v1.1 R-05" in text
+    # R-06/R-07 ve Faz 3 badge'leri hâlâ placeholder
+    assert "v1.1 R-06" in text
+    assert "v1.1 R-07" in text
     assert "v1.1 Faz 3" in text
 
 

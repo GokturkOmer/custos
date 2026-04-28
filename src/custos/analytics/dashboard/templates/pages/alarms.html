@@ -10,7 +10,8 @@
   <div class="flex items-center justify-between">
     <h1 class="text-heading text-text-primary font-semibold">Alarms</h1>
     <div class="flex items-center gap-2">
-      {# Severity + Tip filtreleri (V11-107 / V11-108). GET param'lar birlikte uygulanır. #}
+      {# Severity + Tip + Etiketlenmemiş filtreleri (V11-107 / V11-108 / R-05).
+         GET param'lar birlikte uygulanır. #}
       <form method="get" action="/dashboard/alarms" class="inline-flex items-center gap-2">
         <label for="severity-filter" class="text-small text-text-secondary">Severity:</label>
         <select id="severity-filter" name="severity" onchange="this.form.submit()"
@@ -34,6 +35,13 @@
           <option value="liveness" {{ 'selected' if source_filter == 'liveness' }}>Liveness</option>
           <option value="watchdog" {{ 'selected' if source_filter == 'watchdog' }}>Watchdog</option>
         </select>
+        <label class="inline-flex items-center gap-1 text-small text-text-secondary ml-2 cursor-pointer">
+          <input type="checkbox" name="unlabeled" value="true"
+                 {{ 'checked' if unlabeled_filter }}
+                 onchange="this.form.submit()"
+                 class="accent-accent-primary">
+          Sadece etiketlenmemiş
+        </label>
       </form>
       <a href="/dashboard/thresholds"
          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
@@ -61,6 +69,7 @@
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tetik Değer</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Severity</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Etiket</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aksiyonlar</th>
           </tr>
         </thead>
@@ -93,6 +102,7 @@
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Tetik Değer</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Temiz Değer</th>
             <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Severity</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Etiket</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-border-weak">
@@ -131,11 +141,28 @@
                 }.get(sev, sev) %}
                 {{ status_badge(sev_label, sev) }}
               </td>
+              <td class="px-3 py-2 text-cell">
+                {% set hist_label = labels_by_alarm_id.get(a.id) %}
+                {% if hist_label %}
+                  {% set _hist_cfg = {
+                    'gercek_ariza': {'emoji': '🔴', 'text': 'Gerçek', 'class': 'bg-status-crit/10 text-status-crit'},
+                    'yanlis_alarm': {'emoji': '🟡', 'text': 'Yanlış', 'class': 'bg-status-warn/10 text-status-warn'},
+                    'bakim_sirasinda': {'emoji': '🔧', 'text': 'Bakım', 'class': 'bg-bg-elevated text-text-secondary'},
+                    'bilinmiyor': {'emoji': '❓', 'text': '?', 'class': 'bg-bg-elevated text-text-disabled'},
+                  }.get(hist_label.label_class, {'emoji': '', 'text': hist_label.label_class, 'class': 'bg-bg-elevated text-text-secondary'}) %}
+                  <span class="px-2 py-0.5 rounded text-small {{ _hist_cfg.class }}"
+                        title="Etiketlendi: {{ hist_label.labeled_at.strftime('%d/%m %H:%M') if hist_label.labeled_at else '' }}">
+                    {{ _hist_cfg.emoji }} {{ _hist_cfg.text }}
+                  </span>
+                {% else %}
+                  <span class="text-text-disabled text-small">—</span>
+                {% endif %}
+              </td>
             </tr>
             {% endfor %}
           {% else %}
             <tr>
-              <td colspan="9" class="px-3 py-8 text-center text-text-disabled text-body">
+              <td colspan="10" class="px-3 py-8 text-center text-text-disabled text-body">
                 Alarm geçmişi boş.
               </td>
             </tr>

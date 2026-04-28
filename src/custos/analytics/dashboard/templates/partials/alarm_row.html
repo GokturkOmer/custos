@@ -1,0 +1,141 @@
+{# R-05 / V11-301: Tek aktif alarm satırı.
+
+    İki yerden çağrılır:
+    1. ``alarm_active_rows.html`` döngüsü içinden — polling 5 sn (HTMX innerHTML).
+    2. ``POST /alarms/{id}/label`` partial yanıtı — etiket sonrası yerinde
+       update (HTMX outerHTML, target=#alarm-row-<id>).
+
+    Beklenen context:
+    - ``alarm``                  : AlarmEvent
+    - ``label``                  : AlarmEventLabel | None (varsa mevcut etiket)
+    - ``threshold_names``        : dict[int, str]
+    - ``threshold_severities``   : dict[int, str]
+    - ``checklist_by_threshold`` : dict[int, int] (opsiyonel; yoksa boş gibi davran)
+    - ``recent_alarm_count``     : dict[int, int] (opsiyonel)
+    - ``label_class_values``     : list[str] (4 sınıf, doğal sıra)
+#}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{# Etiket sınıfı → buton config eşleştirmesi (renk + emoji + kısa metin). #}
+{% set _label_config = {
+  'gercek_ariza': {
+    'emoji': '🔴',
+    'text': 'Gerçek',
+    'class': 'bg-status-crit/10 text-status-crit hover:bg-status-crit/20',
+    'title': 'Gerçek arıza (Layer 1 doğru tetikledi)',
+  },
+  'yanlis_alarm': {
+    'emoji': '🟡',
+    'text': 'Yanlış',
+    'class': 'bg-status-warn/10 text-status-warn hover:bg-status-warn/20',
+    'title': 'Yanlış alarm (false positive)',
+  },
+  'bakim_sirasinda': {
+    'emoji': '🔧',
+    'text': 'Bakım',
+    'class': 'bg-bg-elevated text-text-secondary hover:text-text-primary',
+    'title': 'Bakım sırasında oluştu',
+  },
+  'bilinmiyor': {
+    'emoji': '❓',
+    'text': '?',
+    'class': 'bg-bg-elevated text-text-disabled hover:text-text-secondary',
+    'title': 'Operatör emin değil',
+  },
+} %}
+
+<tr id="alarm-row-{{ alarm.id }}" class="hover:bg-bg-elevated transition-colors">
+  <td class="px-3 py-2 text-cell text-text-primary">
+    {{ alarm.triggered_at.strftime('%d/%m %H:%M:%S') if alarm.triggered_at else '-' }}
+  </td>
+  <td class="px-3 py-2 text-cell">
+    {% set src_label = {
+      'threshold': 'Threshold',
+      'anomaly': 'Anomaly',
+      'liveness': 'Liveness',
+      'watchdog': 'Watchdog'
+    }.get(alarm.source, alarm.source) %}
+    <span class="px-2 py-0.5 rounded text-small bg-bg-elevated text-text-secondary border border-border-weak">{{ src_label }}</span>
+  </td>
+  <td class="px-3 py-2 text-cell text-text-primary">{{ alarm.tag_id }}</td>
+  <td class="px-3 py-2 text-cell text-text-primary">
+    {% if alarm.threshold_id is not none %}
+      {{ threshold_names.get(alarm.threshold_id, '-') }}
+      {% set rcount = (recent_alarm_count.get(alarm.threshold_id, 0) if recent_alarm_count else 0) %}
+      {% if rcount > 1 %}
+      <span class="ml-1 px-1.5 py-0.5 rounded bg-status-warn-bg text-status-warn text-small font-mono"
+            title="Son 7 gün içinde bu eşiğin tetiklenme sayısı">
+        ×{{ rcount }}
+      </span>
+      {% endif %}
+    {% else %}
+      {{ alarm.message or '-' }}
+    {% endif %}
+  </td>
+  <td class="px-3 py-2 text-cell text-text-primary font-mono">{{ '%.2f' | format(alarm.trigger_value) }}</td>
+  <td class="px-3 py-2 text-cell">
+    {% set sev = alarm.severity or threshold_severities.get(alarm.threshold_id, 'warn') %}
+    {% set sev_label = {
+      'info': 'Info',
+      'warn': 'Warning',
+      'crit': 'Critical',
+      'emergency': 'Emergency'
+    }.get(sev, sev) %}
+    {{ status_badge(sev_label, sev) }}
+  </td>
+  <td class="px-3 py-2 text-cell">
+    {% if alarm.state == 'triggered' %}
+      {{ status_badge('Triggered', 'crit') }}
+    {% else %}
+      {{ status_badge('Acknowledged', 'warn') }}
+    {% endif %}
+  </td>
+  {# Etiket sütunu (R-05) — 4 buton; etiketli sınıf ring ile vurgulanır. #}
+  <td class="px-3 py-2 text-cell">
+    {% set current_class = label.label_class if label else '' %}
+    <div class="flex flex-wrap gap-1"
+         hx-target="#alarm-row-{{ alarm.id }}"
+         hx-swap="outerHTML">
+      {% for cls in label_class_values %}
+        {% set cfg = _label_config.get(cls) %}
+        <button type="button"
+                hx-post="/dashboard/alarms/{{ alarm.id }}/label?cls={{ cls }}"
+                class="px-2 py-0.5 rounded text-small transition-colors {{ cfg.class }} {{ 'ring-1 ring-inset ring-current font-semibold' if cls == current_class else '' }}"
+                title="{{ cfg.title }}{{ ' (mevcut etiket)' if cls == current_class else '' }}">
+          {{ cfg.emoji }} {{ cfg.text }}
+        </button>
+      {% endfor %}
+    </div>
+  </td>
+  <td class="px-3 py-2 text-cell">
+    <div class="inline-flex items-center gap-2">
+      {% if alarm.state == 'triggered' %}
+        <form method="post" action="/dashboard/alarms/{{ alarm.id }}/acknowledge" class="inline">
+          <button type="submit"
+                  class="inline-flex items-center gap-1 px-2 py-1 text-small font-medium
+                         bg-accent-primary/20 text-accent-primary rounded
+                         hover:bg-accent-primary/30 transition-colors"
+                  title="Acknowledge">
+            {{ icon_inline('check-circle', class='w-3.5 h-3.5') }}
+            Onayla
+          </button>
+        </form>
+      {% else %}
+        <span class="text-text-disabled text-small">Onaylandı</span>
+      {% endif %}
+      {% if alarm.threshold_id is not none and checklist_by_threshold and checklist_by_threshold.get(alarm.threshold_id) %}
+      <form method="post" action="/dashboard/alarms/{{ alarm.id }}/start-checklist" class="inline">
+        <button type="submit"
+                class="inline-flex items-center gap-1 px-2 py-1 text-small font-medium
+                       bg-status-warn-bg text-status-warn rounded
+                       hover:opacity-90 transition-opacity"
+                title="Kontrol listesi başlat">
+          {{ icon_inline('tool', class='w-3.5 h-3.5') }}
+          Kontrol Listesi
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </td>
+</tr>

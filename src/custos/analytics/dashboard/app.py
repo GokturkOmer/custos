@@ -63,7 +63,10 @@ from custos.analytics.templates import (
 from custos.shared.auth import hash_password
 from custos.shared.config import settings
 from custos.shared.database import (
+    LABEL_CLASS_VALUES,
+    LABEL_CLASSES,
     AlarmEvent,
+    AlarmEventLabel,
     AssetInstance,
     AuditLogEntry,
     ConnectionProfile,
@@ -2749,13 +2752,33 @@ async def threshold_toggle(
 # --- Alarms ---
 
 
+async def _labels_by_alarm_id(
+    db: DatabaseInterface,
+    alarms: list[AlarmEvent],
+) -> dict[int, AlarmEventLabel]:
+    """Verilen alarm listesi için etiket dict'i (alarm_id → label).
+
+    Etiketsiz alarm'lar dict'te yer almaz. Sayfa render'ında "etiketli mi?"
+    kontrolü ``alarm.id in labels_by_alarm_id`` ile yapılır.
+    """
+    out: dict[int, AlarmEventLabel] = {}
+    for a in alarms:
+        if a.id is None:
+            continue
+        label = await db.get_alarm_label(a.id)
+        if label is not None:
+            out[a.id] = label
+    return out
+
+
 @router.get("/alarms", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
 async def alarms_page(request: Request) -> HTMLResponse:
     """Alarm sayfası — aktif alarmlar ve geçmiş.
 
     ``severity`` query param: info / warn / crit / emergency (V11-107).
     ``source`` query param: threshold / anomaly / liveness / watchdog (P-05).
-    İki filtre AND ile uygulanır.
+    ``unlabeled=true`` (R-05): yalnızca etiketlenmemiş alarmları gösterir
+    (review queue). İki filtre AND ile uygulanır.
     """
     db = _get_db(request)
 
@@ -2775,6 +2798,9 @@ async def alarms_page(request: Request) -> HTMLResponse:
         else ""
     )
     source_arg: str | None = source_filter or None
+
+    # R-05: Review queue filtresi. Aktif değilken sayfa eski davranışta kalır.
+    unlabeled_filter = request.query_params.get("unlabeled") == "true"
 
     # Aktif alarmlar (triggered + acknowledged) — source filtresi DB'de uygulanır
     triggered = await db.list_alarm_events(
@@ -2826,6 +2852,20 @@ async def alarms_page(request: Request) -> HTMLResponse:
         active_alarms = [a for a in active_alarms if _matches_severity(a)]
         cleared_alarms = [a for a in cleared_alarms if _matches_severity(a)]
 
+    # R-05: Etiketleme bilgisi her satırda gerekli (buton vs badge kararı).
+    labels_by_alarm_id = await _labels_by_alarm_id(
+        db, active_alarms + cleared_alarms,
+    )
+
+    # Review queue filtresi — etiketsiz alarm'lar (aktif + geçmiş).
+    if unlabeled_filter:
+        active_alarms = [
+            a for a in active_alarms if a.id not in labels_by_alarm_id
+        ]
+        cleared_alarms = [
+            a for a in cleared_alarms if a.id not in labels_by_alarm_id
+        ]
+
     # "Son 7 günde N kez" rozeti — yalnızca threshold kaynaklı alarm'lar
     # için anlamlı (threshold_id None'ları atla).
     seven_days_ago = datetime.now(UTC) - timedelta(days=7)
@@ -2849,6 +2889,9 @@ async def alarms_page(request: Request) -> HTMLResponse:
         recent_alarm_count=recent_alarm_count,
         severity_filter=severity_filter,
         source_filter=source_filter,
+        labels_by_alarm_id=labels_by_alarm_id,
+        label_class_values=list(LABEL_CLASSES),
+        unlabeled_filter=unlabeled_filter,
     )
     return templates.TemplateResponse(request, "pages/alarms.html", ctx)
 
@@ -2877,10 +2920,14 @@ async def alarms_active_partial(request: Request) -> HTMLResponse:
             threshold_names[tid] = t.name
             threshold_severities[tid] = t.severity
 
+    labels_by_alarm_id = await _labels_by_alarm_id(db, active_alarms)
+
     ctx = {
         "active_alarms": active_alarms,
         "threshold_names": threshold_names,
         "threshold_severities": threshold_severities,
+        "labels_by_alarm_id": labels_by_alarm_id,
+        "label_class_values": list(LABEL_CLASSES),
     }
     return templates.TemplateResponse(
         request,
@@ -2926,6 +2973,73 @@ async def alarm_acknowledge(
     )
 
     return RedirectResponse(url="/dashboard/alarms", status_code=303)
+
+
+# --- Alarm Labeling (R-05 / V11-301) ---
+
+
+@router.post(
+    "/alarms/{alarm_id:int}/label",
+    response_class=HTMLResponse,
+)
+async def alarm_label(
+    request: Request,
+    alarm_id: int,
+    cls: str,
+    session: Session = _OPERATOR_DEP,
+) -> HTMLResponse:
+    """Bir alarmı 4 sınıftan biriyle etiketler.
+
+    HTMX ile çağrıldığında ``partials/alarm_row.html`` döner; çağıran satır
+    yerinde değiştirilir (``hx-target="closest tr" hx-swap="outerHTML"``).
+    Audit log: ``category="ml"``, ``action="alarm_labeled"`` (R-04 ile aynı
+    kategoride; ML hub'da operatörün yaptığı etkinlik bu kategoride toplanır).
+    """
+    if cls not in LABEL_CLASS_VALUES:
+        raise HTTPException(status_code=400, detail=f"Geçersiz sınıf: {cls}")
+
+    db = _get_db(request)
+    alarm = await db.get_alarm_event(alarm_id)
+    if alarm is None:
+        raise HTTPException(status_code=404, detail="Alarm bulunamadı")
+
+    label = await db.upsert_alarm_label(
+        alarm_event_id=alarm_id,
+        label_class=cls,  # type: ignore[arg-type]
+        labeled_by_user_id=session.user_id,
+    )
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="ml",
+            action="alarm_labeled",
+            entity_type="alarm_event",
+            entity_id=str(alarm_id),
+            detail=f"label_class={cls}, tag={alarm.tag_id}",
+        ),
+    )
+
+    # Threshold isimleri/severity — partial render için.
+    threshold_names: dict[int, str] = {}
+    threshold_severities: dict[int, str] = {}
+    if alarm.threshold_id is not None:
+        t = await db.get_threshold(alarm.threshold_id)
+        if t is not None:
+            threshold_names[alarm.threshold_id] = t.name
+            threshold_severities[alarm.threshold_id] = t.severity
+
+    ctx = {
+        "alarm": alarm,
+        "label": label,
+        "threshold_names": threshold_names,
+        "threshold_severities": threshold_severities,
+        "label_class_values": list(LABEL_CLASSES),
+    }
+    return templates.TemplateResponse(
+        request,
+        "partials/alarm_row.html",
+        ctx,
+    )
 
 
 # --- Logs ---
@@ -5088,23 +5202,12 @@ _ML_TRAIN_TIMEOUT_SECONDS = 60.0
 # UI tarafında uyarı rozeti (warn renk) için.
 _ML_MODEL_STALE_DAYS = 14
 
-# Faz 3'e ertelenen veya R-05/R-06/R-07 ile dolacak placeholder bölümler.
+# Faz 3'e ertelenen veya R-06/R-07 ile dolacak placeholder bölümler.
 # UI'da başlık + açıklama + "v1.1 R-XX'te" / "v1.1 Faz 3" badge ile
 # render edilir. Anchor'lar (#section-...) sonraki paketlerin doğrudan
-# hedef alabileceği sabit ID'lerdir; yeni nav öğesi yok.
+# hedef alabileceği sabit ID'lerdir; yeni nav öğesi yok. R-05 ile
+# section-labeling listeden çıkarıldı; ml.html özel section ile doldurur.
 _ML_FUTURE_FEATURES: list[dict[str, str]] = [
-    {
-        "anchor": "section-labeling",
-        "title": "Etiketleme + Review Queue",
-        "description": (
-            "Operatör alarm'ları 4 sınıfta etiketler (Gerçek arıza / Yanlış "
-            "alarm / Bakım sırasında / Bilinmiyor); etiket verisi sonraki "
-            "model eğitimlerinde baseline olarak kullanılır."
-        ),
-        "badge": "v1.1 R-05",
-        "badge_status": "warn",
-        "v11_id": "V11-301",
-    },
     {
         "anchor": "section-layer1-rules",
         "title": "Layer 1 Ek Kurallar",
@@ -5232,6 +5335,32 @@ async def _compute_ml_summary(
     }
 
 
+async def _compute_label_summary(
+    db: DatabaseInterface,
+    *,
+    since: datetime | None = None,
+    unlabeled_probe_limit: int = 1000,
+) -> dict[str, Any]:
+    """ML hub etiketleme bölümü için sayım özeti (R-05).
+
+    - ``counts``: 4 sınıf etiket sayım dict (her zaman 4 anahtar; sınıf
+      kullanılmadıysa 0).
+    - ``unlabeled_count``: etiketsiz alarm sayısı (review queue link için).
+    - ``since``: ``count_labels_by_class`` filtresi (None → tüm zaman).
+
+    ``unlabeled_probe_limit`` etiketsiz alarm listesi için tavan; pilot
+    ölçeğinde 1000 yeterli, aşılırsa "1000+" gösterimi UI'da yapılır.
+    """
+    counts = await db.count_labels_by_class(since=since)
+    unlabeled = await db.list_unlabeled_alarms(limit=unlabeled_probe_limit)
+    truncated = len(unlabeled) >= unlabeled_probe_limit
+    return {
+        "counts": counts,
+        "unlabeled_count": len(unlabeled),
+        "unlabeled_truncated": truncated,
+    }
+
+
 async def _compute_ml_instance_rows(
     db: DatabaseInterface,
     instances: list[AssetInstance],
@@ -5306,12 +5435,16 @@ async def ml_dashboard(request: Request) -> HTMLResponse:
 
     summary = await _compute_ml_summary(db, instances, models_dir)
     rows = await _compute_ml_instance_rows(db, instances, models_dir)
+    # R-05: Son 30 gün penceresi — kart "30 gün etiket aktivitesi" gösterir.
+    since_30d = datetime.now(UTC) - timedelta(days=30)
+    label_summary = await _compute_label_summary(db, since=since_30d)
 
     ctx = _base_context(
         page_title="ML Hub",
         active_nav="/dashboard/ml",
         summary=summary,
         rows=rows,
+        label_summary=label_summary,
         future_features=_ML_FUTURE_FEATURES,
         success=request.query_params.get("ok"),
         error=request.query_params.get("error"),
