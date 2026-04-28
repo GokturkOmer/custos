@@ -18,6 +18,10 @@
       <div class="mb-4 p-3 bg-status-crit/10 border border-status-crit rounded text-small text-status-crit">
         Kullanıcı adı veya parola hatalı.
       </div>
+      {% elif error == 'rate_limited' %}
+      <div class="mb-4 p-3 bg-status-crit/10 border border-status-crit rounded text-small text-status-crit">
+        Çok fazla başarısız deneme. 15 dakika sonra tekrar deneyin.
+      </div>
       {% endif %}
 
       <form method="POST" action="/login" class="space-y-4">

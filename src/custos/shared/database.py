@@ -1582,6 +1582,19 @@ class DatabaseInterface(abc.ABC):
     async def cleanup_expired_sessions(self) -> int:
         """Süresi dolmuş session'ları siler. Dönüş: silinen kayıt sayısı."""
 
+    @abc.abstractmethod
+    async def count_recent_failed_logins(
+        self,
+        ip_address: str,
+        since: datetime,
+    ) -> int:
+        """Belirtilen IP'den ``since`` tarihinden bu yana yapılan başarısız
+        login sayısı (PP-06 — login rate limiting).
+
+        ``audit_log`` tablosunda ``category='auth' AND action='login_failed'``
+        kayıtlarını sayar. Detail formatı: ``ip=<addr> user=<name> reason=<r>``.
+        """
+
     # --- Service Heartbeats (V11-105/K13) ---
 
     @abc.abstractmethod
@@ -4882,6 +4895,33 @@ class TimescaleDBDatabase(DatabaseInterface):
             return int(result.split()[-1])
         except (ValueError, IndexError):
             return 0
+
+    async def count_recent_failed_logins(
+        self,
+        ip_address: str,
+        since: datetime,
+    ) -> int:
+        """PP-06 — IP başına başarısız login sayımı (rate limiting için).
+
+        ``audit_log.detail`` formatı ``ip=<addr> user=<name> reason=<r>`` ile
+        prefix-match yapar. Boş IP ('' istemci yoksa) hiçbir kaydı eşleştirmez
+        — saldırgan IP gizleyemez (proxy varsa X-Forwarded-For ileride
+        eklenebilir; pilot LAN'ında doğrudan istemci yeterli).
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            count: int | None = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM audit_log
+                WHERE category = 'auth'
+                  AND action = 'login_failed'
+                  AND timestamp >= $1
+                  AND detail LIKE 'ip=' || $2 || ' %'
+                """,
+                since,
+                ip_address,
+            )
+        return count or 0
 
     # --- Service Heartbeats (V11-105/K13) ---
 

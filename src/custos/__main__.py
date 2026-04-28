@@ -117,6 +117,34 @@ async def _heartbeat_cross_check(db: DatabaseInterface) -> None:
         except asyncio.CancelledError:
             break
 
+
+# PP-06 (29 Nis 2026): Session GC — süresi dolmuş session'lar saatte bir
+# silinir. Pilot uzun süre çalışırsa sessions tablosunda stale kayıtların
+# birikmesini önler. cleanup_expired_sessions zaten DELETE WHERE expires_at
+# < NOW() yapıyor, sadece çağıran tarafı eksikti.
+SESSION_CLEANUP_INTERVAL: float = 3600.0  # 1 saat
+
+
+async def _session_cleanup_task(db: DatabaseInterface) -> None:
+    """Saatlik süresi dolmuş session temizliği."""
+    while True:
+        try:
+            removed = await db.cleanup_expired_sessions()
+            if removed > 0:
+                await logger.ainfo(
+                    "Süresi dolmuş session'lar silindi",
+                    removed=removed,
+                )
+        except Exception:
+            await logger.aerror(
+                "Session cleanup hatası", exc_info=True,
+            )
+        try:
+            await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
+        except asyncio.CancelledError:
+            break
+
+
 # Anomali model dizini
 _MODELS_DIR = Path("data/models")
 
@@ -148,6 +176,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     sd_task: asyncio.Task[None] | None = None
     hb_writer_task: asyncio.Task[None] | None = None
     hb_check_task: asyncio.Task[None] | None = None
+    # PP-06 Session GC — saatlik süresi dolmuş session temizliği.
+    session_cleanup_task: asyncio.Task[None] | None = None
     # P-04: Bakım modu süre-doldu otomatik kapama loop'u
     maint_expire_task: asyncio.Task[None] | None = None
     # P-05: Stuck-at + counter mode liveness engine
@@ -235,6 +265,9 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         hb_check_task = asyncio.create_task(_heartbeat_cross_check(db))
         application.state.watchdog = watchdog
 
+        # PP-06 Session GC — saatte bir cleanup_expired_sessions çağrısı.
+        session_cleanup_task = asyncio.create_task(_session_cleanup_task(db))
+
         # P-04 Bakım modu expire check loop — süresi dolan per-instance ve
         # global bakımları her 60 sn otomatik kapatır.
         maint_expire_task = asyncio.create_task(maintenance_expire_loop(db))
@@ -264,7 +297,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     yield
     # Watchdog STOPPING + task'ları temizle
     watchdog.notify_stopping()
-    for task in (sd_task, hb_writer_task, hb_check_task):
+    for task in (sd_task, hb_writer_task, hb_check_task, session_cleanup_task):
         if task is not None and not task.done():
             task.cancel()
             try:

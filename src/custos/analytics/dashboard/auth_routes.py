@@ -54,6 +54,12 @@ auth_router = APIRouter(tags=["auth"])
 # Login sonrası varsayılan iniş sayfası
 _POST_LOGIN_TARGET = "/dashboard/overview"
 
+# PP-06 (29 Nis 2026): IP-bazlı login rate limit. Pencere boyunca yapılan
+# başarısız denemeler audit_log'tan sayılır; eşiği geçen IP 'rate_limited'
+# error ile reddedilir. Pencere TTL geçince sayım sıfırlanır (sliding window).
+LOGIN_RATE_LIMIT_WINDOW_MINUTES = 15
+LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 5
+
 
 def _set_session_cookie(response: RedirectResponse, token: str) -> None:
     """Session cookie'yi response'a ekler.
@@ -112,8 +118,39 @@ async def login_submit(
 ) -> RedirectResponse:
     """Kimlik doğrulama: bcrypt karşılaştırma + session oluştur + cookie set."""
     db = _get_db(request)
+    ip = request.client.host if request.client else ""
+
+    # PP-06: IP-bazlı brute-force koruması. audit_log'taki son
+    # LOGIN_RATE_LIMIT_WINDOW_MINUTES içindeki başarısız deneme sayısı
+    # eşiği aşmışsa giriş hesaplaması bile yapılmaz.
+    since = datetime.now(UTC) - timedelta(minutes=LOGIN_RATE_LIMIT_WINDOW_MINUTES)
+    failed_count = await db.count_recent_failed_logins(ip, since)
+    if failed_count >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
+        await logger.awarning(
+            "Login rate limit aşıldı",
+            ip=ip,
+            failed_count=failed_count,
+            window_minutes=LOGIN_RATE_LIMIT_WINDOW_MINUTES,
+        )
+        return RedirectResponse(
+            url="/login?error=rate_limited",
+            status_code=303,
+        )
+
     user = await db.get_user_by_username(username.strip())
     pw_hash = await db.get_user_password_hash(username.strip())
+
+    async def _audit_failed(reason: str, user_id: str = "") -> None:
+        """Başarısız login'i audit_log'a yazar (rate limit sayımı için)."""
+        await db.insert_audit_log(
+            AuditLogEntry(
+                category="auth",
+                action="login_failed",
+                entity_type="user",
+                entity_id=user_id,
+                detail=f"ip={ip} user={username} reason={reason}",
+            )
+        )
 
     # Sabit-zaman karşılaştırma için kullanıcı yoksa da bir bcrypt karşılaştırması
     # yapıyormuş gibi davranabilirdik; pilot ihtiyacında basit tutuyoruz.
@@ -122,12 +159,17 @@ async def login_submit(
             "Login başarısız: kullanıcı bulunamadı veya devre dışı",
             username=username,
         )
+        await _audit_failed(
+            reason="invalid_user" if user is None or pw_hash is None else "disabled",
+            user_id=str(user.id) if user is not None else "",
+        )
         return RedirectResponse(
             url="/login?error=invalid",
             status_code=303,
         )
     if not verify_password(password, pw_hash):
         await logger.awarning("Login başarısız: hatalı parola", username=username)
+        await _audit_failed(reason="invalid_password", user_id=str(user.id))
         return RedirectResponse(
             url="/login?error=invalid",
             status_code=303,
