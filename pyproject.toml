@@ -29,7 +29,7 @@ dependencies = [
     "pywebpush",
     "pyarrow>=15.0,<20.0",
     "sentence-transformers>=3.0,<4.0",
-    "faiss-cpu>=1.8,<2.0",
+    "faiss-cpu>=1.13.2,<2.0",
     "pyyaml>=6.0.3,<7.0",
     "lxml>=6.1.0",  # Transitive guard — CVE-2026-41066 XXE fix (6.0.4 HIGH)
     "bcrypt>=5.0.0,<6.0",  # Parola hash (auth — V11-101)
