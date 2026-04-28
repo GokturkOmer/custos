@@ -63,6 +63,7 @@ from custos.analytics.templates import (
 from custos.shared.auth import hash_password
 from custos.shared.config import settings
 from custos.shared.database import (
+    CROSS_SENSOR_OPERATOR_VALUES,
     LABEL_CLASS_VALUES,
     LABEL_CLASSES,
     AlarmEvent,
@@ -70,6 +71,7 @@ from custos.shared.database import (
     AssetInstance,
     AuditLogEntry,
     ConnectionProfile,
+    CrossSensorRule,
     DatabaseInterface,
     MaintenanceChecklist,
     MaintenanceChecklistStep,
@@ -187,6 +189,31 @@ def _parse_stuck_at_seconds(raw: str) -> int | None:
         raise HTTPException(
             status_code=400,
             detail="stuck_at_seconds 0'dan büyük olmalı",
+        )
+    return value
+
+
+def _parse_rate_of_change_threshold(raw: str) -> float | None:
+    """Form'daki rate-of-change eşiğini parse eder (R-06 / V11-304).
+
+    Boş string → ``None`` (kontrol kapalı). 0 ve negatif değerler kabul
+    edilmez — eşik kavramı pozitif olmak zorunda (mutlak |Δ/dk|
+    karşılaştırması). Sayısal olmayan değer 400 döner.
+    """
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    try:
+        value = float(cleaned)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="rate_of_change_threshold sayısal olmalı",
+        ) from exc
+    if value <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="rate_of_change_threshold 0'dan büyük olmalı",
         )
     return value
 
@@ -1440,6 +1467,7 @@ async def sensor_create(
     polling_interval_ms: int = Form(10000),
     stuck_at_preset: str = Form("auto"),
     stuck_at_seconds: str = Form(""),
+    rate_of_change_threshold: str = Form(""),
 ) -> RedirectResponse:
     """Yeni tag kaydı oluşturur."""
     db = _get_db(request)
@@ -1467,6 +1495,8 @@ async def sensor_create(
     # P-05: stuck_at preset doğrulaması + boş string → None saniye override
     stuck_at_preset = _validate_stuck_at_preset(stuck_at_preset)
     stuck_at_seconds_value = _parse_stuck_at_seconds(stuck_at_seconds)
+    # R-06: rate-of-change eşiği — bos string -> None (devre disi).
+    rate_of_change_value = _parse_rate_of_change_threshold(rate_of_change_threshold)
 
     tag = TagRecord(
         tag_id=tag_id,
@@ -1484,6 +1514,7 @@ async def sensor_create(
         polling_preset=polling_preset,
         stuck_at_preset=stuck_at_preset,
         stuck_at_seconds=stuck_at_seconds_value,
+        rate_of_change_threshold=rate_of_change_value,
     )
 
     try:
@@ -1535,6 +1566,7 @@ async def sensor_update(
     status: str = Form("active"),
     stuck_at_preset: str = Form("auto"),
     stuck_at_seconds: str = Form(""),
+    rate_of_change_threshold: str = Form(""),
 ) -> RedirectResponse:
     """Tag kaydını günceller."""
     db = _get_db(request)
@@ -1563,6 +1595,8 @@ async def sensor_update(
     # P-05: stuck_at preset doğrulaması + boş string → None saniye override
     stuck_at_preset = _validate_stuck_at_preset(stuck_at_preset)
     stuck_at_seconds_value = _parse_stuck_at_seconds(stuck_at_seconds)
+    # R-06: rate-of-change eşiği parse — bos -> None.
+    rate_of_change_value = _parse_rate_of_change_threshold(rate_of_change_threshold)
 
     updates: dict[str, object] = {
         "name": name,
@@ -1580,6 +1614,7 @@ async def sensor_update(
         "status": status,
         "stuck_at_preset": stuck_at_preset,
         "stuck_at_seconds": stuck_at_seconds_value,
+        "rate_of_change_threshold": rate_of_change_value,
     }
 
     result = await db.update_tag(tag_id, updates)
@@ -2788,11 +2823,19 @@ async def alarms_page(request: Request) -> HTMLResponse:
         else ""
     )
 
-    # P-05: Tip (source) filtresi. Bilinmeyen değer → filtre yok.
+    # P-05 + R-06: Tip (source) filtresi. Bilinmeyen değer → filtre yok.
+    # R-06 ile rate_of_change ve cross_sensor source'ları eklendi.
     source_filter_raw = request.query_params.get("source") or ""
     source_filter = (
         source_filter_raw
-        if source_filter_raw in ("threshold", "anomaly", "liveness", "watchdog")
+        if source_filter_raw in (
+            "threshold",
+            "anomaly",
+            "liveness",
+            "watchdog",
+            "rate_of_change",
+            "cross_sensor",
+        )
         else ""
     )
     source_arg: str | None = source_filter or None
@@ -3208,6 +3251,7 @@ async def settings_page(request: Request) -> HTMLResponse:
         backup_status=backup_status,
         resource_cpu_warn_pct=retention.resource_cpu_warn_pct,
         resource_ram_warn_pct=retention.resource_ram_warn_pct,
+        escalation_warn_to_crit_minutes=retention.escalation_warn_to_crit_minutes,
     )
     return templates.TemplateResponse(request, "pages/settings.html", ctx)
 
@@ -3489,6 +3533,49 @@ async def update_resource_thresholds(
     )
     return RedirectResponse(
         url="/dashboard/settings?resource_ok=1#resource",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/settings/escalation",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def update_escalation_settings(
+    request: Request,
+    escalation_warn_to_crit_minutes: int = Form(...),
+) -> RedirectResponse:
+    """Severity escalation süresini günceller (R-06 / V11-306).
+
+    Range 5-240 dk — DB CHECK constraint server-side doğrular; UI 5-240
+    önerir. Yeni değer bir sonraki escalation_loop tick'inde (60 sn)
+    etkili olur.
+    """
+    db = _get_db(request)
+    if not (5 <= escalation_warn_to_crit_minutes <= 240):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Escalation süresi 5-240 dk aralığında olmalı, "
+                f"alınan: {escalation_warn_to_crit_minutes}"
+            ),
+        )
+    await db.update_retention_config(
+        escalation_warn_to_crit_minutes=escalation_warn_to_crit_minutes,
+        updated_by="user",
+    )
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="settings",
+            action="escalation_updated",
+            entity_type="retention_config",
+            entity_id="1",
+            detail=f"warn→crit={escalation_warn_to_crit_minutes}dk",
+        ),
+    )
+    return RedirectResponse(
+        url="/dashboard/settings?escalation_ok=1#escalation",
         status_code=303,
     )
 
@@ -5178,6 +5265,293 @@ async def knowledge_rebuild_index(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/dashboard/knowledge?ok=reindexed", status_code=303)
 
 
+# --- Cross-Sensor Rules (R-06 / V11-305) ------------------------------------
+#
+# Developer-only CRUD. Listeleme + ayrı form sayfası (sensor_form.html ile
+# aynı patern). Threshold engine her tick sonunda aktif kuralları cache'ler
+# ve ihlali alarmlar (cooldown 10 dk).
+
+# UI dropdown ↔ DB CHECK constraint uyum sağlayan operatör etiketleri.
+# Liste sayfasında "Tag A {operator} Tag B" gösterimi için.
+_CROSS_SENSOR_OPERATOR_LABELS: dict[str, str] = {
+    "lt": "<",
+    "lte": "≤",
+    "gt": ">",
+    "gte": "≥",
+    "eq": "=",
+    "neq": "≠",
+}
+
+
+def _validate_cross_sensor_operator(operator: str) -> str:
+    """Form'dan gelen operatörü doğrular (DB CHECK ile aynı liste)."""
+    if operator not in CROSS_SENSOR_OPERATOR_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz operator: {operator}",
+        )
+    return operator
+
+
+def _validate_cross_sensor_severity(severity: str) -> str:
+    """Severity 4-tier whitelist (V11-107 ile uyumlu)."""
+    if severity not in ("info", "warn", "crit", "emergency"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz severity: {severity}",
+        )
+    return severity
+
+
+@router.get(
+    "/cross-sensor-rules",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def cross_sensor_rules_page(request: Request) -> HTMLResponse:
+    """Cross-sensor kural listesi (developer-only)."""
+    db = _get_db(request)
+    rules = await db.list_cross_sensor_rules()
+    tags = await db.list_tags()
+    # Tag id (int) → TagRecord; sayfa "Tag A op Tag B" gösterimi için.
+    tags_by_id: dict[int, TagRecord] = {t.id: t for t in tags if t.id is not None}
+
+    ctx = _base_context(
+        page_title="Cross-Sensor Kuralları",
+        active_nav="/dashboard/ml",
+        rules=rules,
+        tags_by_id=tags_by_id,
+        operator_labels=_CROSS_SENSOR_OPERATOR_LABELS,
+        success=request.query_params.get("ok"),
+        error=request.query_params.get("error"),
+    )
+    return templates.TemplateResponse(
+        request, "pages/cross_sensor_rules.html", ctx,
+    )
+
+
+@router.get(
+    "/cross-sensor-rules/new",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def cross_sensor_rule_new_form(request: Request) -> HTMLResponse:
+    """Yeni cross-sensor kural formu."""
+    db = _get_db(request)
+    tags = await db.list_tags(status="active")
+    ctx = _base_context(
+        page_title="Yeni Cross-Sensor Kural",
+        active_nav="/dashboard/ml",
+        tags=tags,
+        rule=None,
+        edit_mode=False,
+    )
+    return templates.TemplateResponse(
+        request, "pages/cross_sensor_rule_form.html", ctx,
+    )
+
+
+@router.post(
+    "/cross-sensor-rules",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def cross_sensor_rule_create(
+    request: Request,
+    name: str = Form(...),
+    tag_a_id: int = Form(...),
+    tag_b_id: int = Form(...),
+    operator: str = Form(...),
+    severity: str = Form("warn"),
+    description: str = Form(""),
+    enabled: str = Form(""),
+) -> RedirectResponse:
+    """Yeni cross-sensor kural kaydeder.
+
+    ``enabled`` checkbox'tan gelir — string "true" varsa True, yoksa False.
+    Tag A ve B aynıysa DB CHECK reddeder (ek kontrol burada da var, kullanıcı
+    deneyimi için 400 erken döner).
+    """
+    if tag_a_id == tag_b_id:
+        return RedirectResponse(
+            url="/dashboard/cross-sensor-rules?error=Tag+A+ve+B+ayn%C4%B1+olamaz",
+            status_code=303,
+        )
+    operator = _validate_cross_sensor_operator(operator)
+    severity = _validate_cross_sensor_severity(severity)
+
+    db = _get_db(request)
+    rule = CrossSensorRule(
+        name=name.strip(),
+        tag_a_id=tag_a_id,
+        tag_b_id=tag_b_id,
+        operator=operator,
+        severity=severity,
+        enabled=bool(enabled),
+        description=description.strip(),
+    )
+    try:
+        created = await db.insert_cross_sensor_rule(rule)
+    except Exception:
+        await logger.aerror("Cross-sensor kural oluşturma hatası", exc_info=True)
+        return RedirectResponse(
+            url="/dashboard/cross-sensor-rules?error=Kural+olu%C5%9Fturulamad%C4%B1",
+            status_code=303,
+        )
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="cross_sensor",
+            action="created",
+            entity_type="cross_sensor_rule",
+            entity_id=str(created.id),
+            detail=(
+                f"Yeni kural: {created.name} (a={tag_a_id} {operator} "
+                f"b={tag_b_id}, severity={severity})"
+            ),
+        ),
+    )
+    return RedirectResponse(
+        url="/dashboard/cross-sensor-rules?ok=created",
+        status_code=303,
+    )
+
+
+@router.get(
+    "/cross-sensor-rules/{rule_id:int}/edit",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def cross_sensor_rule_edit_form(
+    request: Request,
+    rule_id: int,
+) -> HTMLResponse:
+    """Cross-sensor kural düzenleme formu."""
+    db = _get_db(request)
+    rule = await db.get_cross_sensor_rule(rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Kural bulunamadı")
+    tags = await db.list_tags()
+    ctx = _base_context(
+        page_title=f"Düzenle: {rule.name}",
+        active_nav="/dashboard/ml",
+        rule=rule,
+        tags=tags,
+        edit_mode=True,
+    )
+    return templates.TemplateResponse(
+        request, "pages/cross_sensor_rule_form.html", ctx,
+    )
+
+
+@router.post(
+    "/cross-sensor-rules/{rule_id:int}/edit",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def cross_sensor_rule_update(
+    request: Request,
+    rule_id: int,
+    name: str = Form(...),
+    operator: str = Form(...),
+    severity: str = Form("warn"),
+    description: str = Form(""),
+    enabled: str = Form(""),
+) -> RedirectResponse:
+    """Cross-sensor kural günceller (tag_a/tag_b değiştirilemez — yeni kural aç)."""
+    operator = _validate_cross_sensor_operator(operator)
+    severity = _validate_cross_sensor_severity(severity)
+
+    db = _get_db(request)
+    updates: dict[str, object] = {
+        "name": name.strip(),
+        "operator": operator,
+        "severity": severity,
+        "description": description.strip(),
+        "enabled": bool(enabled),
+    }
+    result = await db.update_cross_sensor_rule(rule_id, updates)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Kural bulunamadı")
+
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="cross_sensor",
+            action="updated",
+            entity_type="cross_sensor_rule",
+            entity_id=str(rule_id),
+            detail=(
+                f"Kural güncellendi: {result.name} ({operator}, "
+                f"severity={severity}, enabled={result.enabled})"
+            ),
+        ),
+    )
+    return RedirectResponse(
+        url="/dashboard/cross-sensor-rules?ok=updated",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/cross-sensor-rules/{rule_id:int}/toggle",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def cross_sensor_rule_toggle(
+    request: Request,
+    rule_id: int,
+) -> RedirectResponse:
+    """Kuralı aktif/pasif yapar."""
+    db = _get_db(request)
+    rule = await db.get_cross_sensor_rule(rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Kural bulunamadı")
+    new_state = not rule.enabled
+    await db.update_cross_sensor_rule(rule_id, {"enabled": new_state})
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="cross_sensor",
+            action="toggled",
+            entity_type="cross_sensor_rule",
+            entity_id=str(rule_id),
+            detail=f"Kural durumu: {new_state}",
+        ),
+    )
+    return RedirectResponse(
+        url="/dashboard/cross-sensor-rules?ok=toggled",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/cross-sensor-rules/{rule_id:int}/delete",
+    response_class=HTMLResponse,
+    dependencies=[_DEVELOPER_DEP],
+)
+async def cross_sensor_rule_delete(
+    request: Request,
+    rule_id: int,
+) -> RedirectResponse:
+    """Kuralı siler."""
+    db = _get_db(request)
+    deleted = await db.delete_cross_sensor_rule(rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Kural bulunamadı")
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="cross_sensor",
+            action="deleted",
+            entity_type="cross_sensor_rule",
+            entity_id=str(rule_id),
+            detail=f"Kural {rule_id} silindi",
+        ),
+    )
+    return RedirectResponse(
+        url="/dashboard/cross-sensor-rules?ok=deleted",
+        status_code=303,
+    )
+
+
 # --- ML Hub (R-04) -----------------------------------------------------------
 #
 # Tek developer-only sayfa /dashboard/ml — sistem geneli durum kartları,
@@ -5200,24 +5574,14 @@ _ML_TRAIN_TIMEOUT_SECONDS = 60.0
 # UI tarafında uyarı rozeti (warn renk) için.
 _ML_MODEL_STALE_DAYS = 14
 
-# Faz 3'e ertelenen veya R-06/R-07 ile dolacak placeholder bölümler.
+# Faz 3'e ertelenen veya R-07 ile dolacak placeholder bölümler.
 # UI'da başlık + açıklama + "v1.1 R-XX'te" / "v1.1 Faz 3" badge ile
 # render edilir. Anchor'lar (#section-...) sonraki paketlerin doğrudan
 # hedef alabileceği sabit ID'lerdir; yeni nav öğesi yok. R-05 ile
 # section-labeling listeden çıkarıldı; ml.html özel section ile doldurur.
+# R-06 ile section-layer1-rules listeden çıkarıldı; ml.html ayrı section
+# olarak rate/cross/escalation istatistiklerini gösterir.
 _ML_FUTURE_FEATURES: list[dict[str, str]] = [
-    {
-        "anchor": "section-layer1-rules",
-        "title": "Layer 1 Ek Kurallar",
-        "description": (
-            "Rate-of-change + range, cross-sensor consistency, severity "
-            "escalation (warn 30 dk → crit + push). Kural-bazlı, veri akar "
-            "akmaz çalışır — pilot ilk gün aktif."
-        ),
-        "badge": "v1.1 R-06",
-        "badge_status": "warn",
-        "v11_id": "V11-304/305/306",
-    },
     {
         "anchor": "section-mode-aware-spc",
         "title": "Mode-aware Baseline + SPC",
@@ -5333,6 +5697,79 @@ async def _compute_ml_summary(
     }
 
 
+async def _compute_layer1_summary(
+    db: DatabaseInterface,
+    *,
+    since: datetime,
+) -> dict[str, Any]:
+    """ML hub Layer 1 bölümü için 3 kuralın istatistikleri (R-06).
+
+    - ``rate_count``: ``rate_of_change_threshold`` doldurulmuş aktif tag sayısı
+    - ``rate_alarms_24h``: son 24h içinde source=rate_of_change alarm sayısı
+    - ``cross_rule_count``: aktif (enabled=True) cross-sensor kural sayısı
+    - ``cross_alarms_24h``: son 24h içinde source=cross_sensor alarm sayısı
+    - ``escalation_minutes``: retention_config.escalation_warn_to_crit_minutes
+    - ``escalation_count_24h``: son 24h içinde category=alarm_escalation
+      audit_log kaydı sayısı (warn→crit yükseltme adedi)
+
+    ``since`` her zaman 24 saatlik pencere; helper imzasını test edilebilirlik
+    için exposed bırakıyoruz. Sayımlar hafif — alarm listesini "limit=200"
+    ile çekiyoruz; pilot ölçeğinde 24 saatlik alarm <50 tipik.
+    """
+    active_tags = await db.list_tags(status="active")
+    rate_count = sum(
+        1
+        for t in active_tags
+        if t.rate_of_change_threshold is not None
+        and t.rate_of_change_threshold > 0
+    )
+    cross_rules = await db.list_cross_sensor_rules(enabled=True)
+
+    # Source-based alarm sayım — list_alarm_events helper'ı state filtresi
+    # alıyor; aktif + acknowledged + cleared olası tüm durumları toplamak
+    # için tek bir source-only çağrı yetmediği için 3 state'i topluyoruz.
+    rate_alarms_24h = 0
+    cross_alarms_24h = 0
+    for state in ("triggered", "acknowledged", "cleared"):
+        rate_list = await db.list_alarm_events(
+            state=state, source="rate_of_change", limit=200,
+        )
+        rate_alarms_24h += sum(
+            1 for a in rate_list
+            if a.triggered_at is not None and a.triggered_at >= since
+        )
+        cross_list = await db.list_alarm_events(
+            state=state, source="cross_sensor", limit=200,
+        )
+        cross_alarms_24h += sum(
+            1 for a in cross_list
+            if a.triggered_at is not None and a.triggered_at >= since
+        )
+
+    # Escalation süresi + son 24h yükseltme sayısı
+    cfg = await db.get_retention_config()
+    escalation_minutes = cfg.escalation_warn_to_crit_minutes
+
+    # alarm_escalation audit log kayıtlarını say — list_audit_log limit=200
+    # ile son 200 kaydı çek, since filtresini in-memory uygula.
+    audit_recent = await db.list_audit_log(
+        category="alarm_escalation", limit=200,
+    )
+    escalation_count_24h = sum(
+        1 for entry in audit_recent
+        if entry.timestamp is not None and entry.timestamp >= since
+    )
+
+    return {
+        "rate_count": rate_count,
+        "rate_alarms_24h": rate_alarms_24h,
+        "cross_rule_count": len(cross_rules),
+        "cross_alarms_24h": cross_alarms_24h,
+        "escalation_minutes": escalation_minutes,
+        "escalation_count_24h": escalation_count_24h,
+    }
+
+
 async def _compute_label_summary(
     db: DatabaseInterface,
     *,
@@ -5436,6 +5873,9 @@ async def ml_dashboard(request: Request) -> HTMLResponse:
     # R-05: Son 30 gün penceresi — kart "30 gün etiket aktivitesi" gösterir.
     since_30d = datetime.now(UTC) - timedelta(days=30)
     label_summary = await _compute_label_summary(db, since=since_30d)
+    # R-06: Layer 1 ek kural istatistikleri — son 24h penceresi.
+    since_24h = datetime.now(UTC) - timedelta(hours=24)
+    layer1_summary = await _compute_layer1_summary(db, since=since_24h)
 
     ctx = _base_context(
         page_title="ML Hub",
@@ -5443,6 +5883,7 @@ async def ml_dashboard(request: Request) -> HTMLResponse:
         summary=summary,
         rows=rows,
         label_summary=label_summary,
+        layer1_summary=layer1_summary,
         future_features=_ML_FUTURE_FEATURES,
         success=request.query_params.get("ok"),
         error=request.query_params.get("error"),

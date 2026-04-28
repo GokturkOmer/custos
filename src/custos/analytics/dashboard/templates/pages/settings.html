@@ -152,6 +152,48 @@
     </div>
   </div>
 
+  {# Severity Escalation — yalnızca Geliştirici (R-06 / V11-306) #}
+  <div id="escalation" class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="px-4 py-3 border-b border-border-weak">
+      <h2 class="text-panel-title text-text-primary font-semibold">
+        Severity Escalation
+      </h2>
+    </div>
+    <div class="p-4 space-y-3">
+      {% if request.query_params.get('escalation_ok') %}
+      <div class="px-3 py-2 bg-status-ok/10 border border-status-ok/40 rounded text-small text-status-ok">
+        Escalation süresi güncellendi — bir sonraki tick'te (60 sn) etkili olur.
+      </div>
+      {% endif %}
+      <p class="text-small text-text-secondary">
+        ``warn`` severity ile tetiklenen alarm bu süre kadar açık kalırsa
+        otomatik olarak ``crit``'e yükseltilir + push gönderilir. Range
+        5-240 dk; default 30. Bakım modu (is_test) alarmları yükseltilmez.
+      </p>
+      <form action="/dashboard/settings/escalation" method="post"
+            class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+        <div>
+          <label for="escalation_warn_to_crit_minutes"
+                 class="block text-small text-text-secondary mb-1">
+            Süre (dakika)
+          </label>
+          <input type="number" id="escalation_warn_to_crit_minutes"
+                 name="escalation_warn_to_crit_minutes"
+                 min="5" max="240" required
+                 value="{{ escalation_warn_to_crit_minutes }}"
+                 class="w-full px-3 py-1.5 bg-bg-base border border-border-weak rounded
+                        text-body text-text-primary focus:outline-none
+                        focus:border-accent-primary">
+        </div>
+        <button type="submit"
+                class="px-3 py-1.5 bg-accent-primary text-white text-small font-medium rounded
+                       hover:bg-accent-primary/90 transition-colors">
+          Süreyi kaydet
+        </button>
+      </form>
+    </div>
+  </div>
+
   {# Knowledge Base — yalnızca Geliştirici (V11-110 / P-07) #}
   <div id="knowledge" class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
     <div class="px-4 py-3 border-b border-border-weak">

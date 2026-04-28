@@ -249,6 +249,32 @@
       </p>
     </fieldset>
 
+    {# Rate-of-change (R-06 / V11-304) — opsiyonel; bos = devre disi #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">
+        Rate-of-change (Değişim hızı)
+      </legend>
+      <div>
+        <label for="rate_of_change_threshold"
+               class="block text-small font-medium text-text-secondary mb-1">
+          Eşik (dakika başına)
+        </label>
+        <input type="number" id="rate_of_change_threshold"
+               name="rate_of_change_threshold"
+               step="any" min="0"
+               value="{{ tag.rate_of_change_threshold if tag and tag.rate_of_change_threshold is not none else '' }}"
+               placeholder="boş = devre dışı"
+               class="w-full max-w-xs px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                      text-text-primary placeholder-text-disabled
+                      focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+      </div>
+      <p class="text-small text-text-tertiary">
+        Pozitif değer girilirse, dakikada bu kadar mutlak değişim aşıldığında
+        "rate-of-change" alarmı tetiklenir (cooldown 5 dk). Örn: 5.0 → dakikada
+        5+ birim değişim alarm üretir. Boş bırakılırsa kontrol kapalı.
+      </p>
+    </fieldset>
+
     {# Status (sadece edit modunda) #}
     {% if edit_mode %}
     <div>

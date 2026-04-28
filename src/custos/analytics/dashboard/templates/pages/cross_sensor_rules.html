@@ -1,0 +1,134 @@
+{% extends 'base.html' %}
+{% from 'components/status_badge.html' import status_badge %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}Cross-Sensor Kuralları — Custos{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  {# Başlık + Yeni butonu #}
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <a href="/dashboard/ml#section-layer1-rules"
+         class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+         title="ML Hub'a Dön">
+        {{ icon_inline('arrow-left', class='w-5 h-5') }}
+      </a>
+      <h1 class="text-heading text-text-primary font-semibold">Cross-Sensor Kuralları</h1>
+    </div>
+    <a href="/dashboard/cross-sensor-rules/new"
+       class="inline-flex items-center gap-1.5 px-3 py-1.5 text-small font-medium
+              bg-accent-primary text-white rounded-md
+              hover:bg-accent-primary/90 transition-colors">
+      {{ icon_inline('plus', class='w-4 h-4') }}
+      Yeni Kural
+    </a>
+  </div>
+
+  {# Açıklama paneli #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg p-4 text-small text-text-secondary">
+    Cross-sensor kuralları iki tag arasındaki mantıksal ilişkiyi izler. Örn:
+    <span class="font-mono text-text-primary">supply_temp</span> &lt;
+    <span class="font-mono text-text-primary">return_temp</span> olmalı (chiller normalde).
+    Her tick (5 sn) sonunda değerlendirilir; kural ihlali alarmı tetikler. Cooldown 10 dk.
+  </div>
+
+  {# Başarı/hata mesajları #}
+  {% if success %}
+  <div class="px-3 py-2 bg-status-ok/10 border border-status-ok/40 rounded text-small text-status-ok">
+    {% if success == 'created' %}Yeni kural oluşturuldu.
+    {% elif success == 'updated' %}Kural güncellendi.
+    {% elif success == 'deleted' %}Kural silindi.
+    {% elif success == 'toggled' %}Kural durumu değiştirildi.
+    {% else %}{{ success }}{% endif %}
+  </div>
+  {% endif %}
+  {% if error %}
+  <div class="px-3 py-2 bg-status-crit/10 border border-status-crit/40 rounded text-small text-status-crit">
+    {{ error }}
+  </div>
+  {% endif %}
+
+  {# Kural tablosu #}
+  <div class="bg-bg-surface border border-border-weak rounded-lg overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-bg-elevated">
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">İsim</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Kural</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Severity</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Açıklama</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Durum</th>
+            <th class="px-3 py-2 text-left text-small font-semibold text-text-secondary uppercase tracking-wide">Aksiyonlar</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border-weak">
+          {% if rules %}
+            {% for r in rules %}
+            {% set tag_a = tags_by_id.get(r.tag_a_id) %}
+            {% set tag_b = tags_by_id.get(r.tag_b_id) %}
+            <tr class="hover:bg-bg-elevated transition-colors">
+              <td class="px-3 py-2 text-cell text-text-primary font-medium">{{ r.name }}</td>
+              <td class="px-3 py-2 text-cell text-text-primary font-mono text-small">
+                {{ tag_a.name if tag_a else '(silinmiş)' }}
+                <span class="text-text-tertiary mx-1">{{ operator_labels.get(r.operator, r.operator) }}</span>
+                {{ tag_b.name if tag_b else '(silinmiş)' }}
+              </td>
+              <td class="px-3 py-2 text-cell">
+                {% set sev_label = {
+                  'info': 'Info',
+                  'warn': 'Warning',
+                  'crit': 'Critical',
+                  'emergency': 'Emergency'
+                }.get(r.severity, r.severity) %}
+                {{ status_badge(sev_label, r.severity) }}
+              </td>
+              <td class="px-3 py-2 text-cell text-text-secondary text-small">
+                {{ r.description if r.description else '—' }}
+              </td>
+              <td class="px-3 py-2 text-cell">
+                <form method="post" action="/dashboard/cross-sensor-rules/{{ r.id }}/toggle" class="inline">
+                  <button type="submit"
+                          class="text-small font-medium px-2 py-0.5 rounded
+                                 {{ 'bg-status-ok/20 text-status-ok' if r.enabled else 'bg-bg-elevated text-text-disabled' }}
+                                 hover:opacity-80 transition-opacity">
+                    {{ 'Aktif' if r.enabled else 'Pasif' }}
+                  </button>
+                </form>
+              </td>
+              <td class="px-3 py-2 text-cell">
+                <div class="flex items-center gap-2">
+                  <a href="/dashboard/cross-sensor-rules/{{ r.id }}/edit"
+                     class="text-text-secondary hover:text-accent-primary transition-colors"
+                     title="Düzenle">
+                    {{ icon_inline('edit', class='w-4 h-4') }}
+                  </a>
+                  <form method="post" action="/dashboard/cross-sensor-rules/{{ r.id }}/delete"
+                        class="inline"
+                        onsubmit="return confirm('Bu kural silinecek. Emin misiniz?')">
+                    <button type="submit"
+                            class="text-text-secondary hover:text-status-crit transition-colors"
+                            title="Sil">
+                      {{ icon_inline('trash-2', class='w-4 h-4') }}
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="6" class="px-3 py-8 text-center text-text-disabled text-body">
+                Henüz tanımlı cross-sensor kuralı yok.
+                <a href="/dashboard/cross-sensor-rules/new"
+                   class="text-accent-primary hover:underline ml-1">Yeni kural ekle →</a>
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

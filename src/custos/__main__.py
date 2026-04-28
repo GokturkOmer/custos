@@ -27,6 +27,7 @@ from custos.analytics.archiver import ParquetArchiver
 from custos.analytics.dashboard.app import _archive_lock, get_static_files_app, router
 from custos.analytics.dashboard.auth_routes import auth_router
 from custos.analytics.disk_telemetry import DiskMonitor
+from custos.analytics.escalation import EscalationLoop
 from custos.analytics.heartbeat import check_heartbeats, write_heartbeat
 from custos.analytics.kpi_engine import KpiEngine
 from custos.analytics.liveness_engine import LivenessEngine
@@ -151,6 +152,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     # P-05: Stuck-at + counter mode liveness engine
     liveness: LivenessEngine | None = None
     liveness_task: asyncio.Task[None] | None = None
+    # R-06: Severity escalation loop — warn alarmı X dk açık kalırsa
+    # otomatik crit'e yükseltir (V11-306).
+    escalation: EscalationLoop | None = None
+    escalation_task: asyncio.Task[None] | None = None
     try:
         await db.connect()
         application.state.db = db
@@ -233,6 +238,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         liveness = LivenessEngine(db=db)
         liveness_task = asyncio.create_task(liveness.start())
         application.state.liveness_engine = liveness
+
+        # R-06 Escalation loop — warn alarmları belirli süre açık kalırsa
+        # otomatik crit'e yükseltir + push gönderir (V11-306). 60 sn tick;
+        # eşik retention_config'ten okunur (default 30 dk, range 5-240).
+        escalation = EscalationLoop(db=db)
+        escalation_task = asyncio.create_task(escalation.start())
+        application.state.escalation_loop = escalation
     except Exception:
         await logger.aerror("DB bağlantısı kurulamadı", exc_info=True)
         application.state.db = None
@@ -260,6 +272,15 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         liveness_task.cancel()
         try:
             await liveness_task
+        except asyncio.CancelledError:
+            pass
+    # R-06 Escalation loop'u durdur
+    if escalation is not None:
+        await escalation.stop()
+    if escalation_task is not None and not escalation_task.done():
+        escalation_task.cancel()
+        try:
+            await escalation_task
         except asyncio.CancelledError:
             pass
     # Disk monitor'ı durdur

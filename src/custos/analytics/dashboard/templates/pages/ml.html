@@ -253,12 +253,76 @@
     </p>
   </section>
 
-  {# D) Faz 3 / R-06/R-07 placeholder bölümleri — anchor'lar sabit;
+  {# D) Layer 1 Ek Kurallar (R-06 / V11-304/305/306) — 3 deterministic
+       kural: rate-of-change + cross-sensor + severity escalation. Pilot
+       gün 1 aktif; veri biriktirmeye gerek yok. #}
+  <section id="section-layer1-rules"
+           class="bg-bg-surface border border-border-weak rounded-lg p-4 space-y-3">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <h2 class="text-panel-title text-text-primary font-semibold">
+        Layer 1 Ek Kurallar
+      </h2>
+      <span class="text-small text-text-disabled">Son 24 saat</span>
+    </div>
+    <p class="text-small text-text-secondary">
+      Threshold + stuck-at üstüne 3 deterministic kural daha: ani değişim
+      (rate-of-change), iki tag arası tutarlılık (cross-sensor) ve
+      severity yükseltme (warn → crit). Veri akar akmaz çalışır.
+    </p>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {# Rate-of-change kartı #}
+      <div class="px-3 py-2 rounded-md border border-border-weak bg-bg-base">
+        <div class="text-small text-text-secondary">Rate-of-change</div>
+        <div class="text-heading font-semibold mt-0.5 text-text-primary">
+          {{ layer1_summary.rate_count }} tag aktif
+        </div>
+        <div class="text-small text-text-tertiary mt-1">
+          Son 24h alarm: <span class="text-text-primary font-medium">{{ layer1_summary.rate_alarms_24h }}</span>
+        </div>
+        <a href="/dashboard/sensors"
+           class="text-small text-accent-primary hover:underline mt-1 inline-block">
+          Tag formundan ayarla →
+        </a>
+      </div>
+
+      {# Cross-sensor kartı #}
+      <div class="px-3 py-2 rounded-md border border-border-weak bg-bg-base">
+        <div class="text-small text-text-secondary">Cross-sensor</div>
+        <div class="text-heading font-semibold mt-0.5 text-text-primary">
+          {{ layer1_summary.cross_rule_count }} kural aktif
+        </div>
+        <div class="text-small text-text-tertiary mt-1">
+          Son 24h ihlal: <span class="text-text-primary font-medium">{{ layer1_summary.cross_alarms_24h }}</span>
+        </div>
+        <a href="/dashboard/cross-sensor-rules"
+           class="text-small text-accent-primary hover:underline mt-1 inline-block">
+          Kural yönet →
+        </a>
+      </div>
+
+      {# Severity escalation kartı #}
+      <div class="px-3 py-2 rounded-md border border-border-weak bg-bg-base">
+        <div class="text-small text-text-secondary">Severity Escalation</div>
+        <div class="text-heading font-semibold mt-0.5 text-text-primary">
+          {{ layer1_summary.escalation_minutes }} dk → crit
+        </div>
+        <div class="text-small text-text-tertiary mt-1">
+          Son 24h yükseltme: <span class="text-text-primary font-medium">{{ layer1_summary.escalation_count_24h }}</span>
+        </div>
+        <a href="/dashboard/settings#escalation"
+           class="text-small text-accent-primary hover:underline mt-1 inline-block">
+          Süreyi ayarla →
+        </a>
+      </div>
+    </div>
+  </section>
+
+  {# E) R-07/Faz 3 placeholder bölümleri — anchor'lar sabit;
        sonraki R-paketleri buraya doğrudan içerik ekler #}
   <section class="space-y-3">
     <h2 class="text-panel-title text-text-primary font-semibold">Olgunlaşma Yol Haritası</h2>
     <p class="text-small text-text-secondary">
-      Aşağıdaki bölümler R-06/R-07 paketleriyle yerine gerçek özelliklerle
+      Aşağıdaki bölümler R-07 paketiyle yerine gerçek özelliklerle
       doldurulur. V11-302/303 (Stuck-at L3 + Shadow Mode) pilot kabul sonrasına
       ertelendi (K9 — manuel onay, K11 — 2-4 hafta veri zorunlu).
     </p>

@@ -39,6 +39,9 @@ def _base_alarm_row(**overrides: Any) -> dict[str, Any]:
         "source": "threshold",
         "severity": "warn",
         "message": "",
+        # R-06 / Migration 036 kolonları (default NULL)
+        "escalated_from": None,
+        "escalated_at": None,
         "created_at": triggered,
         # LEFT JOIN kolonları (varsayılan: etiket yok)
         "label_id": None,

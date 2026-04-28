@@ -74,6 +74,13 @@ class TagRecord:
       saniye eşikleri), 'counter' (azalma + durağanlık mantığı).
     - ``stuck_at_seconds``: Manuel saniye override; doluysa preset'in
       saniyesinin yerine geçer (preset='counter' ise mantığı korur).
+
+    R-06 (V11-304) ile rate-of-change alanı:
+
+    - ``rate_of_change_threshold``: Pozitif değer = mutlak |Δ değer / dk|
+      eşiği. NULL = kontrol kapalı (default). Threshold engine her tick'te
+      mevcut + son okuma arasındaki delta'yı hesaplar; eşik aşılırsa
+      ``source='rate_of_change'`` alarmı yazar (cooldown 5 dk).
     """
 
     tag_id: str
@@ -92,6 +99,7 @@ class TagRecord:
     status: str = "active"
     stuck_at_preset: str = "auto"
     stuck_at_seconds: int | None = None
+    rate_of_change_threshold: float | None = None
     id: int | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -215,14 +223,24 @@ class AlarmEvent:
     - ``threshold_id`` artık nullable — liveness ve watchdog kaynaklı
       alarmların threshold'u yoktur.
     - ``source``: 'threshold' (default, geri uyumlu) / 'anomaly' /
-      'liveness' / 'watchdog'. Alarm sayfası "Tip" filtresi bu alanı
-      kullanır.
+      'liveness' / 'watchdog' / 'rate_of_change' / 'cross_sensor'.
+      Alarm sayfası "Tip" filtresi bu alanı kullanır.
     - ``severity``: Threshold'sız alarmlarda denormalize tutulur.
       Threshold kaynaklı alarmlarda ``threshold_engine`` insert
       sırasında threshold.severity'yi explicit set eder (filtreyi
       hızlandırır, threshold silinse bile alarmın severity'si kalır).
     - ``message``: Kullanıcıya gösterilecek açıklama (ör. liveness için
       "Sensör donuk: 1820s'dir değer değişmedi").
+
+    R-06 (V11-306) severity escalation alanları:
+
+    - ``escalated_from``: Yükseltildiyse orijinal severity (örn. 'warn').
+      NULL ise hiç yükseltilmemiş (varsayılan).
+    - ``escalated_at``: Yükseltme zamanı UTC. ``escalation_loop`` set eder.
+
+    Yükseltme ``update_alarm_event`` üzerinden yapılır — RETURNING'i
+    ``_row_to_alarm_event`` parse eder; label=None default davranışı
+    bozulmaz (active alarm SELECT'leri zaten LEFT JOIN ile etiketi getirir).
     """
 
     tag_id: str
@@ -238,6 +256,8 @@ class AlarmEvent:
     source: str = "threshold"
     severity: str = "warn"
     message: str = ""
+    escalated_from: str | None = None
+    escalated_at: datetime | None = None
     id: int | None = None
     created_at: datetime | None = None
     # R-05a: Alarm SELECT'leri LEFT JOIN ile etiketi getirir; insert/update
@@ -284,6 +304,41 @@ class AlarmEventLabel:
     notes: str = ""
     id: int | None = None
     labeled_at: datetime | None = None
+
+
+# R-06 / V11-305: Cross-sensor consistency operatörleri. Migration 036 CHECK
+# constraint'i ile aynı liste; UI dropdown ve helper validasyonu burayı kullanır.
+CROSS_SENSOR_OPERATORS: tuple[str, ...] = ("lt", "gt", "eq", "neq", "lte", "gte")
+CROSS_SENSOR_OPERATOR_VALUES: frozenset[str] = frozenset(CROSS_SENSOR_OPERATORS)
+
+
+@dataclass
+class CrossSensorRule:
+    """İki tag arasında mantıksal tutarlılık kuralı (R-06 / V11-305).
+
+    Threshold engine her tick sonunda aktif kuralları tarayıp ihlal varsa
+    ``source='cross_sensor'`` alarmı yazar. Kural: ``tag_a {operator} tag_b``
+    olmalı; aksi alarm. Örn. ``supply_temp lt return_temp`` (chiller normal
+    durumda supply < return, tersi → AC arıza belirtisi).
+
+    ``operator`` Migration 036 CHECK constraint'i ile sınırlı (lt/gt/eq/neq/
+    lte/gte). ``severity`` 4-tier (info/warn/crit/emergency); push_sender
+    aynı severity filtresine girer.
+
+    ``tag_a_id`` / ``tag_b_id`` ``tags(id)`` FK'sı (BIGINT) — tag silindiğinde
+    CASCADE ile kural otomatik kalkar. Eşit tag yasak (DB CHECK).
+    """
+
+    name: str
+    tag_a_id: int
+    tag_b_id: int
+    operator: str  # CROSS_SENSOR_OPERATORS arasından
+    severity: str = "warn"
+    enabled: bool = True
+    description: str = ""
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass
@@ -496,6 +551,10 @@ class RetentionConfig:
     # False iken AnomalyDetector tick erken doner; per-instance flag
     # irrelevant olur (push_global_enabled ile ayni desen).
     ml_inference_enabled: bool = True
+    # R-06 (Migration 036 / V11-306): Severity escalation süresi — warn
+    # alarmı bu kadar dakika açık kalırsa otomatik crit'e yükseltilir.
+    # Default 30 dk; CHECK constraint 5-240 (DB-side).
+    escalation_warn_to_crit_minutes: int = 30
 
 
 @dataclass(frozen=True)
@@ -1348,6 +1407,7 @@ class DatabaseInterface(abc.ABC):
         resource_cpu_warn_pct: int | None = None,
         resource_ram_warn_pct: int | None = None,
         ml_inference_enabled: bool | None = None,
+        escalation_warn_to_crit_minutes: int | None = None,
     ) -> RetentionConfig:
         """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
 
@@ -1363,6 +1423,9 @@ class DatabaseInterface(abc.ABC):
           ResourceMonitor tick'te okur. CHECK constraint 50-99 (migration 033).
         - ``ml_inference_enabled`` (R-04 / Migration 034): AnomalyDetector
           sistem-geneli master switch; push master switch ile aynı desen.
+        - ``escalation_warn_to_crit_minutes`` (R-06 / Migration 036):
+          ``escalation_loop`` warn alarm'ı bu kadar dakika sonra crit'e
+          yükseltir. CHECK constraint 5-240 (DB-side); UI 5-240 doğrular.
 
         Global maintenance kolonları burada güncellenmez —
         ``update_global_maintenance`` ile yönetilir (concern ayrımı).
@@ -1473,6 +1536,41 @@ class DatabaseInterface(abc.ABC):
     async def list_service_heartbeats(self) -> list[ServiceHeartbeat]:
         """Tüm servis heartbeat'lerini döner — cross-service watchdog kontrolü için."""
 
+    # --- Cross-Sensor Rules (R-06 / V11-305) ---
+
+    @abc.abstractmethod
+    async def insert_cross_sensor_rule(
+        self,
+        rule: CrossSensorRule,
+    ) -> CrossSensorRule:
+        """Yeni cross-sensor kuralı oluşturur ve döndürür."""
+
+    @abc.abstractmethod
+    async def update_cross_sensor_rule(
+        self,
+        rule_id: int,
+        updates: dict[str, object],
+    ) -> CrossSensorRule | None:
+        """Kuralı günceller. Bulunamazsa None."""
+
+    @abc.abstractmethod
+    async def delete_cross_sensor_rule(self, rule_id: int) -> bool:
+        """Kuralı siler. Başarılıysa True."""
+
+    @abc.abstractmethod
+    async def get_cross_sensor_rule(
+        self,
+        rule_id: int,
+    ) -> CrossSensorRule | None:
+        """Tek kuralı döndürür."""
+
+    @abc.abstractmethod
+    async def list_cross_sensor_rules(
+        self,
+        enabled: bool | None = None,
+    ) -> list[CrossSensorRule]:
+        """Kural listesi. ``enabled=True`` engine cache'i için."""
+
 
 # İzin verilen güncelleme alanları — Connection Profile (SQL injection önlemi)
 _ALLOWED_PROFILE_UPDATE_FIELDS: frozenset[str] = frozenset(
@@ -1546,12 +1644,17 @@ _ALLOWED_TAG_UPDATE_FIELDS: frozenset[str] = frozenset(
         "status",
         "stuck_at_preset",
         "stuck_at_seconds",
+        # R-06 (Migration 036): Rate-of-change esiği. NULL = devre dısı,
+        # pozitif değer = mutlak |Δ/dk| esik. Threshold engine her tick'te
+        # değerlendirir; cooldown 5 dakika.
+        "rate_of_change_threshold",
     }
 )
 
 
 def _row_to_tag_record(row: asyncpg.Record) -> TagRecord:
     """asyncpg satırını TagRecord'a dönüştürür."""
+    raw_rate = row["rate_of_change_threshold"]
     return TagRecord(
         id=row["id"],
         tag_id=row["tag_id"],
@@ -1570,6 +1673,7 @@ def _row_to_tag_record(row: asyncpg.Record) -> TagRecord:
         status=row["status"],
         stuck_at_preset=row["stuck_at_preset"],
         stuck_at_seconds=row["stuck_at_seconds"],
+        rate_of_change_threshold=float(raw_rate) if raw_rate is not None else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -1674,7 +1778,11 @@ _ALLOWED_THRESHOLD_UPDATE_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-# İzin verilen güncelleme alanları — Alarm Event (SQL injection önlemi)
+# İzin verilen güncelleme alanları — Alarm Event (SQL injection önlemi).
+# R-06 (Migration 036): Severity escalation için ``severity``, ``escalated_from``,
+# ``escalated_at`` eklendi. ``escalation_loop`` warn alarm'ı crit'e yükseltirken
+# bu üç alanı tek update'te yazar; whitelist'e eklenmezse engine ValueError
+# fırlatır.
 _ALLOWED_ALARM_EVENT_UPDATE_FIELDS: frozenset[str] = frozenset(
     {
         "state",
@@ -1682,6 +1790,9 @@ _ALLOWED_ALARM_EVENT_UPDATE_FIELDS: frozenset[str] = frozenset(
         "cleared_at",
         "clear_value",
         "notes",
+        "severity",
+        "escalated_from",
+        "escalated_at",
     }
 )
 
@@ -1720,7 +1831,12 @@ def _row_to_threshold(row: asyncpg.Record) -> Threshold:
 
 
 def _row_to_alarm_event(row: asyncpg.Record) -> AlarmEvent:
-    """asyncpg satırını AlarmEvent'e dönüştürür."""
+    """asyncpg satırını AlarmEvent'e dönüştürür.
+
+    R-06 (Migration 036): ``escalated_from`` / ``escalated_at`` kolonları
+    burada okunur — eklenmez ise escalation_loop update'i sonrası dönen
+    satırda kolonlar AlarmEvent'e aktarılmaz, UI rozet kaybolur.
+    """
     return AlarmEvent(
         id=row["id"],
         threshold_id=row["threshold_id"],
@@ -1736,6 +1852,8 @@ def _row_to_alarm_event(row: asyncpg.Record) -> AlarmEvent:
         source=row["source"],
         severity=row["severity"],
         message=row["message"],
+        escalated_from=row["escalated_from"],
+        escalated_at=row["escalated_at"],
         created_at=row["created_at"],
     )
 
@@ -1848,6 +1966,36 @@ def _row_to_push_subscription(row: asyncpg.Record) -> PushSubscription:
         label=row["label"],
         enabled=row["enabled"],
         created_by_user_id=row["created_by_user_id"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+# İzin verilen güncelleme alanları — Cross-Sensor Rule (R-06 / V11-305).
+# ``tag_a_id`` ve ``tag_b_id`` whitelist dışında — değiştirmek mantıksız;
+# yeni kural açmak daha güvenli.
+_ALLOWED_CROSS_SENSOR_UPDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "operator",
+        "severity",
+        "enabled",
+        "description",
+    }
+)
+
+
+def _row_to_cross_sensor_rule(row: asyncpg.Record) -> CrossSensorRule:
+    """asyncpg satırını CrossSensorRule'a dönüştürür."""
+    return CrossSensorRule(
+        id=row["id"],
+        name=row["name"],
+        tag_a_id=int(row["tag_a_id"]),
+        tag_b_id=int(row["tag_b_id"]),
+        operator=row["operator"],
+        severity=row["severity"],
+        enabled=bool(row["enabled"]),
+        description=row["description"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -2271,9 +2419,10 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "(tag_id, name, modbus_host, modbus_port, unit_id, "
                 "register_address, register_type, byte_order, "
                 'gain, "offset", unit, polling_interval_ms, polling_preset, '
-                "status, stuck_at_preset, stuck_at_seconds) "
+                "status, stuck_at_preset, stuck_at_seconds, "
+                "rate_of_change_threshold) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, "
-                "$12, $13, $14, $15, $16) "
+                "$12, $13, $14, $15, $16, $17) "
                 "RETURNING *",
                 tag.tag_id,
                 tag.name,
@@ -2291,6 +2440,7 @@ class TimescaleDBDatabase(DatabaseInterface):
                 tag.status,
                 tag.stuck_at_preset,
                 tag.stuck_at_seconds,
+                tag.rate_of_change_threshold,
             )
         assert row is not None  # INSERT RETURNING her zaman satır döndürür
         return _row_to_tag_record(row)
@@ -2995,7 +3145,12 @@ class TimescaleDBDatabase(DatabaseInterface):
     # --- Alarm Event CRUD implementasyonları ---
 
     async def insert_alarm_event(self, event: AlarmEvent) -> AlarmEvent:
-        """Yeni alarm event kaydı oluşturur ve döndürür."""
+        """Yeni alarm event kaydı oluşturur ve döndürür.
+
+        ``escalated_from`` / ``escalated_at`` kolonlarına insert sırasında
+        dokunulmaz — default NULL. Yükseltme ``escalation_loop`` tarafından
+        ``update_alarm_event`` üzerinden yapılır (R-06).
+        """
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -4195,7 +4350,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "       global_maintenance_started_by_user_id, "
                 "       global_maintenance_started_at, "
                 "       resource_cpu_warn_pct, resource_ram_warn_pct, "
-                "       ml_inference_enabled "
+                "       ml_inference_enabled, "
+                "       escalation_warn_to_crit_minutes "
                 "FROM retention_config WHERE id = 1",
             )
         # Migration 026 INSERT garantiler ki satır her zaman var; defansif
@@ -4219,6 +4375,9 @@ class TimescaleDBDatabase(DatabaseInterface):
             resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
             resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
             ml_inference_enabled=bool(row["ml_inference_enabled"]),
+            escalation_warn_to_crit_minutes=int(
+                row["escalation_warn_to_crit_minutes"],
+            ),
         )
 
     async def update_retention_config(
@@ -4230,6 +4389,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         resource_cpu_warn_pct: int | None = None,
         resource_ram_warn_pct: int | None = None,
         ml_inference_enabled: bool | None = None,
+        escalation_warn_to_crit_minutes: int | None = None,
     ) -> RetentionConfig:
         """retention_config satırını ve TimescaleDB policy'yi senkron günceller.
 
@@ -4255,11 +4415,23 @@ class TimescaleDBDatabase(DatabaseInterface):
         master switch. AnomalyDetector tick'te erken-dönüşle okur; push
         master switch ile aynı desen.
 
+        ``escalation_warn_to_crit_minutes`` (R-06 / Migration 036):
+        ``escalation_loop`` warn alarm'ı bu kadar dakika sonra crit'e
+        yükseltir. CHECK constraint 5-240 (DB-side).
+
         ``add_retention_policy`` transaction içinde çalışmaya uygun — background
         worker job kaydı oluşturur; TimescaleDB docs'ına göre güvenli.
         """
         if raw_retention_days is not None and raw_retention_days <= 0:
             msg = f"raw_retention_days pozitif olmalı, alınan: {raw_retention_days}"
+            raise ValueError(msg)
+        if escalation_warn_to_crit_minutes is not None and not (
+            5 <= escalation_warn_to_crit_minutes <= 240
+        ):
+            msg = (
+                "escalation_warn_to_crit_minutes 5-240 aralığında olmalı, "
+                f"alınan: {escalation_warn_to_crit_minutes}"
+            )
             raise ValueError(msg)
 
         pool = self._get_pool()
@@ -4275,6 +4447,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "    resource_cpu_warn_pct = COALESCE($5, resource_cpu_warn_pct), "
                 "    resource_ram_warn_pct = COALESCE($6, resource_ram_warn_pct), "
                 "    ml_inference_enabled = COALESCE($7, ml_inference_enabled), "
+                "    escalation_warn_to_crit_minutes = "
+                "        COALESCE($8, escalation_warn_to_crit_minutes), "
                 "    updated_by = $3, "
                 "    updated_at = NOW() "
                 "WHERE id = 1 "
@@ -4284,7 +4458,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "          global_maintenance_started_by_user_id, "
                 "          global_maintenance_started_at, "
                 "          resource_cpu_warn_pct, resource_ram_warn_pct, "
-                "          ml_inference_enabled",
+                "          ml_inference_enabled, "
+                "          escalation_warn_to_crit_minutes",
                 raw_retention_days,
                 auto_clean_enabled,
                 updated_by,
@@ -4292,6 +4467,7 @@ class TimescaleDBDatabase(DatabaseInterface):
                 resource_cpu_warn_pct,
                 resource_ram_warn_pct,
                 ml_inference_enabled,
+                escalation_warn_to_crit_minutes,
             )
             assert row is not None, "retention_config satırı güncellenemedi"
             new_days = int(row["raw_retention_days"])
@@ -4334,6 +4510,9 @@ class TimescaleDBDatabase(DatabaseInterface):
             resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
             resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
             ml_inference_enabled=bool(row["ml_inference_enabled"]),
+            escalation_warn_to_crit_minutes=int(
+                row["escalation_warn_to_crit_minutes"],
+            ),
         )
 
     async def update_global_maintenance(
@@ -4363,7 +4542,8 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "          global_maintenance_started_by_user_id, "
                 "          global_maintenance_started_at, "
                 "          resource_cpu_warn_pct, resource_ram_warn_pct, "
-                "          ml_inference_enabled",
+                "          ml_inference_enabled, "
+                "          escalation_warn_to_crit_minutes",
                 until,
                 reason,
                 user_id,
@@ -4385,6 +4565,9 @@ class TimescaleDBDatabase(DatabaseInterface):
             resource_cpu_warn_pct=int(row["resource_cpu_warn_pct"]),
             resource_ram_warn_pct=int(row["resource_ram_warn_pct"]),
             ml_inference_enabled=bool(row["ml_inference_enabled"]),
+            escalation_warn_to_crit_minutes=int(
+                row["escalation_warn_to_crit_minutes"],
+            ),
         )
 
     # --- Auth: users + sessions (V11-101) ---
@@ -4664,6 +4847,118 @@ class TimescaleDBDatabase(DatabaseInterface):
                 )
             )
         return result
+
+    # --- Cross-Sensor Rules implementasyonu (R-06 / V11-305) ---
+
+    async def insert_cross_sensor_rule(
+        self,
+        rule: CrossSensorRule,
+    ) -> CrossSensorRule:
+        """Yeni cross-sensor kuralı kaydeder.
+
+        ``operator`` ve ``severity`` Migration 036 CHECK constraint'leri ile
+        sınırlı; geçersiz değer asyncpg ``CheckViolationError`` fırlatır.
+        ``tag_a_id`` == ``tag_b_id`` ise DB CHECK constraint reddeder.
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO cross_sensor_rules "
+                "(name, tag_a_id, tag_b_id, operator, severity, "
+                "enabled, description) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7) "
+                "RETURNING *",
+                rule.name,
+                rule.tag_a_id,
+                rule.tag_b_id,
+                rule.operator,
+                rule.severity,
+                rule.enabled,
+                rule.description,
+            )
+        assert row is not None
+        return _row_to_cross_sensor_rule(row)
+
+    async def update_cross_sensor_rule(
+        self,
+        rule_id: int,
+        updates: dict[str, object],
+    ) -> CrossSensorRule | None:
+        """Kuralı günceller — whitelist dışı alan ValueError fırlatır."""
+        invalid = set(updates.keys()) - _ALLOWED_CROSS_SENSOR_UPDATE_FIELDS
+        if invalid:
+            msg = f"Güncellenemeyen alanlar: {invalid}"
+            raise ValueError(msg)
+
+        if not updates:
+            return await self.get_cross_sensor_rule(rule_id)
+
+        set_parts: list[str] = []
+        values: list[object] = []
+        for i, (col, val) in enumerate(updates.items(), start=1):
+            set_parts.append(f"{col} = ${i}")
+            values.append(val)
+
+        idx = len(values) + 1
+        set_parts.append(f"updated_at = ${idx}")
+        values.append(datetime.now(UTC))
+
+        idx_where = len(values) + 1
+        values.append(rule_id)
+
+        sql = (
+            f"UPDATE cross_sensor_rules SET {', '.join(set_parts)} "
+            f"WHERE id = ${idx_where} RETURNING *"
+        )
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(sql, *values)
+
+        if row is None:
+            return None
+        return _row_to_cross_sensor_rule(row)
+
+    async def delete_cross_sensor_rule(self, rule_id: int) -> bool:
+        """Kuralı siler."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM cross_sensor_rules WHERE id = $1",
+                rule_id,
+            )
+        return str(result) == "DELETE 1"
+
+    async def get_cross_sensor_rule(
+        self,
+        rule_id: int,
+    ) -> CrossSensorRule | None:
+        """Tek kuralı döndürür."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM cross_sensor_rules WHERE id = $1",
+                rule_id,
+            )
+        if row is None:
+            return None
+        return _row_to_cross_sensor_rule(row)
+
+    async def list_cross_sensor_rules(
+        self,
+        enabled: bool | None = None,
+    ) -> list[CrossSensorRule]:
+        """Kural listesi (id ASC). ``enabled=True`` engine cache'i için."""
+        pool = self._get_pool()
+        if enabled is None:
+            sql = "SELECT * FROM cross_sensor_rules ORDER BY id"
+            params: tuple[object, ...] = ()
+        else:
+            sql = "SELECT * FROM cross_sensor_rules WHERE enabled = $1 ORDER BY id"
+            params = (enabled,)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [_row_to_cross_sensor_rule(row) for row in rows]
 
 
 def _row_to_overview_chart_tag(row: asyncpg.Record) -> OverviewChartTag:

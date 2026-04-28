@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+{% from 'components/icon.html' import icon_inline %}
+
+{% block title %}{{ 'Düzenle: ' + rule.name if edit_mode else 'Yeni Cross-Sensor Kural' }} — Custos{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl space-y-4">
+  {# Başlık + Geri butonu #}
+  <div class="flex items-center gap-3">
+    <a href="/dashboard/cross-sensor-rules"
+       class="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+       title="Geri">
+      {{ icon_inline('arrow-left', class='w-5 h-5') }}
+    </a>
+    <h1 class="text-heading text-text-primary font-semibold">
+      {{ 'Düzenle: ' + rule.name if edit_mode else 'Yeni Cross-Sensor Kural' }}
+    </h1>
+  </div>
+
+  {# Form #}
+  <form method="post"
+        action="{{ '/dashboard/cross-sensor-rules/' + rule.id|string + '/edit' if edit_mode else '/dashboard/cross-sensor-rules' }}"
+        class="bg-bg-surface border border-border-weak rounded-lg p-5 space-y-5">
+
+    {# İsim #}
+    <div>
+      <label for="name" class="block text-small font-medium text-text-secondary mb-1">İsim</label>
+      <input type="text" id="name" name="name"
+             value="{{ rule.name if rule else '' }}"
+             placeholder="örn. Chiller supply &lt; return"
+             class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                    text-text-primary placeholder-text-disabled
+                    focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+             required maxlength="120">
+    </div>
+
+    {# Tag A - Operator - Tag B #}
+    <fieldset class="border border-border-weak rounded-md p-4 space-y-3">
+      <legend class="px-2 text-small font-semibold text-text-secondary">Kural</legend>
+      <div class="grid grid-cols-3 gap-3 items-end">
+        <div>
+          <label for="tag_a_id" class="block text-small font-medium text-text-secondary mb-1">Tag A</label>
+          <select id="tag_a_id" name="tag_a_id"
+                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                         text-text-primary
+                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                  required>
+            <option value="">— seç —</option>
+            {% for t in tags %}
+            <option value="{{ t.id }}"
+                    {{ 'selected' if rule and rule.tag_a_id == t.id }}>
+              {{ t.name }} ({{ t.tag_id }})
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="operator" class="block text-small font-medium text-text-secondary mb-1">Operator</label>
+          <select id="operator" name="operator"
+                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                         text-text-primary
+                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                  required>
+            {% set op = rule.operator if rule else 'lt' %}
+            <option value="lt"  {{ 'selected' if op == 'lt' }}>&lt; (küçük)</option>
+            <option value="lte" {{ 'selected' if op == 'lte' }}>≤ (küçük eşit)</option>
+            <option value="gt"  {{ 'selected' if op == 'gt' }}>&gt; (büyük)</option>
+            <option value="gte" {{ 'selected' if op == 'gte' }}>≥ (büyük eşit)</option>
+            <option value="eq"  {{ 'selected' if op == 'eq' }}>= (eşit)</option>
+            <option value="neq" {{ 'selected' if op == 'neq' }}>≠ (eşit değil)</option>
+          </select>
+        </div>
+        <div>
+          <label for="tag_b_id" class="block text-small font-medium text-text-secondary mb-1">Tag B</label>
+          <select id="tag_b_id" name="tag_b_id"
+                  class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                         text-text-primary
+                         focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                  required>
+            <option value="">— seç —</option>
+            {% for t in tags %}
+            <option value="{{ t.id }}"
+                    {{ 'selected' if rule and rule.tag_b_id == t.id }}>
+              {{ t.name }} ({{ t.tag_id }})
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <p class="text-small text-text-tertiary">
+        Kural: <span class="font-mono">Tag A {operator} Tag B</span> olmalı; aksi halde alarm.
+        İki tag aynı seçilemez.
+      </p>
+    </fieldset>
+
+    {# Severity + Açıklama + Durum #}
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label for="severity" class="block text-small font-medium text-text-secondary mb-1">Severity</label>
+        <select id="severity" name="severity"
+                class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                       text-text-primary
+                       focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                required>
+          {% set sev = rule.severity if rule else 'warn' %}
+          <option value="info"      {{ 'selected' if sev == 'info' }}>Info</option>
+          <option value="warn"      {{ 'selected' if sev == 'warn' }}>Warning</option>
+          <option value="crit"      {{ 'selected' if sev == 'crit' }}>Critical</option>
+          <option value="emergency" {{ 'selected' if sev == 'emergency' }}>Emergency</option>
+        </select>
+      </div>
+      <div class="flex items-end">
+        <label class="inline-flex items-center gap-2 text-small text-text-secondary cursor-pointer">
+          <input type="checkbox" name="enabled" value="true"
+                 {{ 'checked' if (rule and rule.enabled) or not edit_mode }}
+                 class="accent-accent-primary">
+          Etkin
+        </label>
+      </div>
+    </div>
+
+    <div>
+      <label for="description" class="block text-small font-medium text-text-secondary mb-1">
+        Açıklama (opsiyonel)
+      </label>
+      <textarea id="description" name="description"
+                rows="2" maxlength="500"
+                placeholder="Kural mantığı veya gerekçesi"
+                class="w-full px-3 py-1.5 text-body bg-bg-base border border-border-weak rounded-md
+                       text-text-primary placeholder-text-disabled
+                       focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">{{ rule.description if rule else '' }}</textarea>
+    </div>
+
+    {# Submit #}
+    <div class="flex items-center gap-3 pt-2">
+      <button type="submit"
+              class="px-4 py-2 text-body font-medium bg-accent-primary text-white rounded-md
+                     hover:bg-accent-primary/90 transition-colors">
+        {{ 'Güncelle' if edit_mode else 'Kaydet' }}
+      </button>
+      <a href="/dashboard/cross-sensor-rules"
+         class="px-4 py-2 text-body font-medium text-text-secondary
+                bg-bg-elevated border border-border-weak rounded-md
+                hover:text-text-primary hover:border-border-medium transition-colors">
+        İptal
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

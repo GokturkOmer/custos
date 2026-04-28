@@ -232,6 +232,11 @@ def _ml_db(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         return_value=dict.fromkeys(LABEL_CLASS_VALUES, 0),
     )
     mock.list_unlabeled_alarms = AsyncMock(return_value=[])
+    # R-06: ML hub Layer 1 ek kurallar bölümü _compute_layer1_summary çağırıyor.
+    mock.list_tags = AsyncMock(return_value=[])
+    mock.list_cross_sensor_rules = AsyncMock(return_value=[])
+    mock.list_alarm_events = AsyncMock(return_value=[])
+    mock.list_audit_log = AsyncMock(return_value=[])
     monkeypatch.setattr(app.state, "db", mock, raising=False)
     return mock
 
@@ -260,14 +265,17 @@ def test_ml_dashboard_developer_returns_200(
     # Instance tablosu — her iki instance de listelenmeli
     assert "chiller-1" in text
     assert "ahu-2" in text
-    # Faz 3 placeholder + R-05 ile dolan section'lar
+    # Faz 3 placeholder + R-05 + R-06 ile dolan section'lar
     assert 'id="section-labeling"' in text  # R-05 doldurdu
-    assert 'id="section-layer1-rules"' in text
+    assert 'id="section-layer1-rules"' in text  # R-06 doldurdu
     assert 'id="section-mode-aware-spc"' in text
     assert 'id="section-stuck-at-l3"' in text
     assert 'id="section-shadow-mode"' in text
-    # R-06/R-07 ve Faz 3 badge'leri hâlâ placeholder
-    assert "v1.1 R-06" in text
+    # R-06 ile gerçek Layer 1 istatistikleri görünür (kart başlıkları)
+    assert "Rate-of-change" in text
+    assert "Cross-sensor" in text
+    assert "Severity Escalation" in text
+    # R-07 ve Faz 3 badge'leri hâlâ placeholder
     assert "v1.1 R-07" in text
     assert "v1.1 Faz 3" in text
 

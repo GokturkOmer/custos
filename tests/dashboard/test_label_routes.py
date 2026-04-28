@@ -207,6 +207,24 @@ class _LabelMockDB:
     async def get_latest_anomaly_score(self, instance_id: int) -> Any:
         return None
 
+    # --- R-06: ML hub Layer 1 helper'ı için no-op'lar ---
+
+    async def list_tags(self, status: str | None = None) -> list[Any]:
+        return []
+
+    async def list_cross_sensor_rules(
+        self, enabled: bool | None = None,
+    ) -> list[Any]:
+        return []
+
+    async def list_audit_log(
+        self,
+        category: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Any]:
+        return []
+
 
 @pytest.fixture
 def label_db(monkeypatch: pytest.MonkeyPatch) -> _LabelMockDB:
