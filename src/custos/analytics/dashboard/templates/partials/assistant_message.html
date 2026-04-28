@@ -3,40 +3,52 @@
    Sohbet konteynerine beforeend ile eklenir. #}
 {% from 'components/icon.html' import icon_inline %}
 
-<div class="space-y-2">
-  {# Kullanıcı balonu — sağa yaslı #}
-  <div class="flex justify-end">
+{% set is_empty = answer.match_type == 'empty' %}
+
+<div class="space-y-3">
+  {# Kullanıcı balonu — sağa yaslı, avatar sağda #}
+  <div class="flex justify-end items-start gap-2">
     <div class="max-w-[80%] bg-accent-primary/10 border border-accent-primary/30
-                text-text-primary rounded px-3 py-2 text-body">
+                text-text-primary rounded-2xl rounded-tr-sm px-4 py-2 text-body">
       {{ question }}
+    </div>
+    <div class="w-8 h-8 rounded-full bg-accent-primary/15 text-accent-primary
+                flex items-center justify-center flex-shrink-0 mt-0.5">
+      {{ icon_inline('user', class='w-4 h-4') }}
     </div>
   </div>
 
-  {# Asistan balonu — sola yaslı #}
-  <div class="flex justify-start">
-    <div class="max-w-[90%] bg-bg-elevated border border-border-weak rounded
-                px-3 py-2 text-body text-text-primary whitespace-pre-wrap space-y-2">
-      <div>{{ answer.text }}</div>
-
-      {% if answer.match_type != 'empty' and answer.source_title %}
-      <div class="pt-2 border-t border-border-weak text-small text-text-secondary
-                  flex items-center gap-1">
-        {{ icon_inline('book-open', class='w-3.5 h-3.5 flex-shrink-0') }}
-        <span>
-          Kaynak:
-          <span class="text-text-primary">{{ answer.source_title }}</span>
-          {% if answer.source_path %}
-            <span class="text-text-disabled">({{ answer.source_path }})</span>
-          {% endif %}
-          {% if answer.score is not none %}
-            <span class="text-text-disabled ml-1">·
-              skor {{ '%.2f' % answer.score }}
-              {% if answer.match_type == 'exact' %}(exact){% endif %}
-            </span>
-          {% endif %}
-        </span>
-      </div>
-      {% endif %}
+  {# Asistan balonu — sola yaslı, avatar solda #}
+  <div class="flex justify-start items-start gap-2">
+    <div class="w-8 h-8 rounded-full bg-accent-primary/15 text-accent-primary
+                flex items-center justify-center flex-shrink-0 mt-0.5">
+      {{ icon_inline('sparkles', class='w-4 h-4') }}
     </div>
+    {% if is_empty %}
+      <div class="max-w-[85%] bg-bg-elevated/60 border border-border-weak/60 rounded-2xl rounded-tl-sm
+                  px-4 py-2 text-body text-text-secondary italic">
+        {{ answer.text }}
+      </div>
+    {% else %}
+      <div class="max-w-[85%] bg-bg-elevated border border-border-weak rounded-2xl rounded-tl-sm
+                  px-4 py-2 text-body text-text-primary whitespace-pre-wrap space-y-2">
+        <div>{{ answer.text }}</div>
+        {% if answer.source_title %}
+        <div class="pt-2 border-t border-border-weak/60 text-small text-text-secondary
+                    flex items-center gap-1.5">
+          {{ icon_inline('book-open', class='w-3.5 h-3.5 flex-shrink-0') }}
+          <span class="truncate">
+            <span class="text-text-primary">{{ answer.source_title }}</span>
+            {% if answer.source_path %}
+              <span class="text-text-disabled">· {{ answer.source_path }}</span>
+            {% endif %}
+            {% if answer.score is not none %}
+              <span class="text-text-disabled">· skor {{ '%.2f' % answer.score }}{% if answer.match_type == 'exact' %} (tam eşleşme){% endif %}</span>
+            {% endif %}
+          </span>
+        </div>
+        {% endif %}
+      </div>
+    {% endif %}
   </div>
 </div>

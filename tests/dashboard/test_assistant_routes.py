@@ -101,7 +101,7 @@ def test_assistant_ask_exact_match_renders_source_and_text() -> None:
     assert "ornek.yaml" in response.text
     # Skor etiketi
     assert "skor" in response.text
-    assert "(exact)" in response.text
+    assert "(tam eşleşme)" in response.text
 
 
 def test_assistant_ask_semantic_match_renders_without_exact_tag() -> None:
@@ -128,7 +128,7 @@ def test_assistant_ask_semantic_match_renders_without_exact_tag() -> None:
     assert "Chiller — Kondenser" in response.text
     assert "skor" in response.text
     assert "0.62" in response.text
-    assert "(exact)" not in response.text
+    assert "(tam eşleşme)" not in response.text
 
 
 def test_assistant_ask_empty_match_shows_empty_message_without_source() -> None:

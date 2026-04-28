@@ -35,3 +35,10 @@ body {
   width: 8px !important;
   height: 8px !important;
 }
+
+/* uPlot legend value cell'leri her zaman yer kaplasın — sadece içerik gizlensin.
+   Chart container'ı imleç hover'ında boyut değiştirmesin (layout shift fix). */
+.u-inline:not(.u-live) .u-value {
+  display: inline-block !important;
+  visibility: hidden;
+}

@@ -4,61 +4,77 @@
 {% block title %}Custos — Asistan{% endblock %}
 
 {% block content %}
-<div class="flex flex-col h-full max-w-3xl mx-auto space-y-4">
-  {# Başlık + açıklama #}
-  <div>
-    <h1 class="text-heading text-text-primary font-semibold flex items-center gap-2">
-      {{ icon_inline('message-circle', class='w-4 h-4') }}
+<div class="flex flex-col h-full max-w-3xl mx-auto">
+  {# Başlık #}
+  <div class="flex items-center gap-2 mb-4">
+    <div class="w-8 h-8 rounded-full bg-accent-primary/15 text-accent-primary
+                flex items-center justify-center">
+      {{ icon_inline('sparkles', class='w-4 h-4') }}
+    </div>
+    <h1 class="text-heading text-text-primary font-semibold">
       Teknik Asistan
     </h1>
-    <p class="text-small text-text-secondary mt-1">
-      Otomasyon ve bakım dokümanlarında arama yapar. Cevaplar yalnızca
-      bilgi tabanından gelir — LLM kullanılmaz, halüsinasyon riski yok.
-    </p>
   </div>
 
   {# Sohbet alanı — HTMX yeni mesajları buraya append eder.
      Sayfa yenilemeyi = sohbet geçmişi sıfırlanır (v1 kapsamı). #}
   <div id="assistant-messages"
-       class="flex-1 overflow-y-auto space-y-3 bg-bg-surface border border-border-weak rounded p-4 min-h-[320px]">
-    <div class="text-small text-text-disabled italic" id="assistant-placeholder">
-      Sormak istediğiniz bir teknik soruyu aşağıya yazın.
-      Örneğin: <span class="text-text-secondary">"Chiller alarm verirse ne yapmalıyım?"</span>
+       class="flex-1 overflow-y-auto space-y-4 bg-bg-surface border border-border-weak
+              rounded-xl p-4 min-h-[360px]">
+    <div id="assistant-placeholder" class="h-full flex flex-col items-center justify-center
+                                            text-center py-8 gap-4">
+      <div class="w-12 h-12 rounded-full bg-accent-primary/10 text-accent-primary
+                  flex items-center justify-center">
+        {{ icon_inline('message-circle', class='w-6 h-6') }}
+      </div>
+      <p class="text-small text-text-secondary max-w-sm">
+        Karşılaştığınız sorunu yazın veya örneklerden birine tıklayın.
+      </p>
+      <div class="flex flex-wrap gap-2 justify-center max-w-md">
+        {% for sample in [
+          'Chiller short-cycle yapıyor ne yapayım',
+          'AHU filtre basınç farkı yüksek',
+          'Cooling tower approach yüksek nedeni',
+          'Hidrofor basınç dalgalanması nasıl giderilir',
+          'Alarm geldi ne yapayım',
+        ] %}
+          <button type="button"
+                  class="text-small text-text-secondary bg-bg-elevated border border-border-weak
+                         hover:border-accent-primary hover:text-text-primary
+                         rounded-full px-3 py-1.5 transition-colors"
+                  onclick="document.getElementById('assistant-input').value=this.textContent.trim();
+                           document.getElementById('assistant-form').requestSubmit();">
+            {{ sample }}
+          </button>
+        {% endfor %}
+      </div>
     </div>
   </div>
 
   {# Soru formu — HTMX post → partial append #}
-  <form hx-post="/dashboard/assistant/ask"
+  <form id="assistant-form"
+        hx-post="/dashboard/assistant/ask"
         hx-target="#assistant-messages"
         hx-swap="beforeend"
         hx-on::after-request="this.reset(); document.getElementById('assistant-placeholder')?.remove(); document.getElementById('assistant-messages').scrollTop = document.getElementById('assistant-messages').scrollHeight;"
-        class="flex gap-2">
+        class="flex gap-2 mt-3">
     <input type="text"
+           id="assistant-input"
            name="query"
            required
            minlength="2"
            autocomplete="off"
-           placeholder="Bir teknik soru yazın…"
-           class="flex-1 bg-bg-surface border border-border-weak rounded px-3 py-2 text-body
+           placeholder="Karşılaştığınız sorunu yazın…"
+           class="flex-1 bg-bg-surface border border-border-weak rounded-lg px-4 py-2.5 text-body
                   text-text-primary placeholder-text-disabled
-                  focus:outline-none focus:border-accent-primary transition-colors">
+                  focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary/30
+                  transition-colors">
     <button type="submit"
-            class="px-4 py-2 bg-accent-primary text-white rounded text-small
-                   hover:opacity-90 transition-opacity inline-flex items-center gap-1">
+            class="px-4 py-2.5 bg-accent-primary text-white rounded-lg text-small font-medium
+                   hover:opacity-90 transition-opacity inline-flex items-center gap-1.5">
       {{ icon_inline('send', class='w-4 h-4') }}
       Sor
     </button>
   </form>
-
-  {# Açıklayıcı notlar — pilot operatörüne kibarca kuralı hatırlatır. #}
-  <div class="text-small text-text-disabled border-t border-border-weak pt-2">
-    <div class="flex items-start gap-2">
-      {{ icon_inline('book-open', class='w-3.5 h-3.5 flex-shrink-0 mt-0.5') }}
-      <span>
-        Her cevap bir kaynak dokümana dayanır. Emin değilseniz "Bu konuda
-        bilgi tabanında bir kayıt bulamadım" cevabı dönecektir.
-      </span>
-    </div>
-  </div>
 </div>
 {% endblock %}
