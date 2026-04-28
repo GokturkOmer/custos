@@ -2752,23 +2752,21 @@ async def threshold_toggle(
 # --- Alarms ---
 
 
-async def _labels_by_alarm_id(
-    db: DatabaseInterface,
+def _labels_by_alarm_id(
     alarms: list[AlarmEvent],
 ) -> dict[int, AlarmEventLabel]:
     """Verilen alarm listesi için etiket dict'i (alarm_id → label).
 
-    Etiketsiz alarm'lar dict'te yer almaz. Sayfa render'ında "etiketli mi?"
+    R-05a: Alarm SELECT'leri LEFT JOIN ile etiketi getirdiği için bu helper
+    saf bir dict comprehension'a indirildi (DB çağrısı yok). Etiketsiz
+    alarm'lar dict'te yer almaz; sayfa render'ında "etiketli mi?"
     kontrolü ``alarm.id in labels_by_alarm_id`` ile yapılır.
     """
-    out: dict[int, AlarmEventLabel] = {}
-    for a in alarms:
-        if a.id is None:
-            continue
-        label = await db.get_alarm_label(a.id)
-        if label is not None:
-            out[a.id] = label
-    return out
+    return {
+        a.id: a.label
+        for a in alarms
+        if a.id is not None and a.label is not None
+    }
 
 
 @router.get("/alarms", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP])
@@ -2852,10 +2850,10 @@ async def alarms_page(request: Request) -> HTMLResponse:
         active_alarms = [a for a in active_alarms if _matches_severity(a)]
         cleared_alarms = [a for a in cleared_alarms if _matches_severity(a)]
 
-    # R-05: Etiketleme bilgisi her satırda gerekli (buton vs badge kararı).
-    labels_by_alarm_id = await _labels_by_alarm_id(
-        db, active_alarms + cleared_alarms,
-    )
+    # R-05 / R-05a: Etiketleme bilgisi her satırda gerekli (buton vs badge
+    # kararı). list_alarm_events LEFT JOIN ile alarm.label'ı doldurduğu için
+    # helper saf — ekstra DB round-trip yok.
+    labels_by_alarm_id = _labels_by_alarm_id(active_alarms + cleared_alarms)
 
     # Review queue filtresi — etiketsiz alarm'lar (aktif + geçmiş).
     if unlabeled_filter:
@@ -2920,7 +2918,7 @@ async def alarms_active_partial(request: Request) -> HTMLResponse:
             threshold_names[tid] = t.name
             threshold_severities[tid] = t.severity
 
-    labels_by_alarm_id = await _labels_by_alarm_id(db, active_alarms)
+    labels_by_alarm_id = _labels_by_alarm_id(active_alarms)
 
     ctx = {
         "active_alarms": active_alarms,

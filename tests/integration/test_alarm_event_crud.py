@@ -6,6 +6,7 @@ TimescaleDB'nin ayakta olmasını gerektirir (docker compose up -d).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
 import pytest
@@ -40,7 +41,7 @@ def _check_db_available() -> None:
 
 
 @pytest.fixture
-async def db() -> TimescaleDBDatabase:
+async def db() -> AsyncGenerator[TimescaleDBDatabase, None]:
     """Test için DB bağlantısı oluşturur ve temizler."""
     s = Settings()
     database = TimescaleDBDatabase(s)
@@ -50,7 +51,7 @@ async def db() -> TimescaleDBDatabase:
         await conn.execute("DELETE FROM alarm_events WHERE tag_id LIKE 'TEST_%'")
         await conn.execute("DELETE FROM thresholds WHERE tag_id LIKE 'TEST_%'")
         await conn.execute("DELETE FROM tags WHERE tag_id LIKE 'TEST_%'")
-    yield database  # type: ignore[misc]
+    yield database
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM alarm_events WHERE tag_id LIKE 'TEST_%'")
         await conn.execute("DELETE FROM thresholds WHERE tag_id LIKE 'TEST_%'")
@@ -73,6 +74,20 @@ async def _setup_threshold(db: TimescaleDBDatabase) -> Threshold:
     return await db.insert_threshold(
         Threshold(tag_id="TEST_ALM", name="Test Alarm Threshold", set_point=80.0),
     )
+
+
+async def _setup_label_user(db: TimescaleDBDatabase) -> int:
+    """alarm_event_labels.labeled_by_user_id FK'i için test user."""
+    username = "test_label_user"
+    existing = await db.get_user_by_username(username)
+    if existing is not None:
+        return existing.id
+    user = await db.create_user(
+        username=username,
+        password_hash="x" * 60,  # FK ihtiyacı için dummy hash
+        role="operator",
+    )
+    return user.id
 
 
 @pytest.mark.usefixtures("_check_db_available")
@@ -221,3 +236,76 @@ async def test_list_alarm_events_filter_by_state(db: TimescaleDBDatabase) -> Non
     cleared = await db.list_alarm_events(state="cleared")
     test_cleared = [e for e in cleared if e.tag_id == "TEST_ALM"]
     assert len(test_cleared) >= 1
+
+
+@pytest.mark.usefixtures("_check_db_available")
+async def test_alarm_event_select_left_joins_label(
+    db: TimescaleDBDatabase,
+) -> None:
+    """R-05a: list_alarm_events / get_alarm_event tek sorguda label döner.
+
+    Etiketli alarm → ``AlarmEvent.label`` dolu (AlarmEventLabel).
+    Etiketsiz alarm → ``AlarmEvent.label`` None.
+    """
+    t = await _setup_threshold(db)
+    assert t.id is not None
+    user_id = await _setup_label_user(db)
+
+    now = datetime.now(UTC)
+    labeled_alarm = await db.insert_alarm_event(
+        AlarmEvent(
+            threshold_id=t.id,
+            tag_id="TEST_ALM",
+            state="triggered",
+            triggered_at=now,
+            trigger_value=85.0,
+        ),
+    )
+    assert labeled_alarm.id is not None
+    # Yeni alarm etiketsiz başlar (insert RETURNING'in label=None default'u)
+    assert labeled_alarm.label is None
+
+    unlabeled_alarm = await db.insert_alarm_event(
+        AlarmEvent(
+            threshold_id=t.id,
+            tag_id="TEST_ALM",
+            state="triggered",
+            triggered_at=now,
+            trigger_value=90.0,
+        ),
+    )
+    assert unlabeled_alarm.id is not None
+
+    # Sadece ilkini etiketle.
+    label = await db.upsert_alarm_label(
+        alarm_event_id=labeled_alarm.id,
+        label_class="gercek_ariza",
+        labeled_by_user_id=user_id,
+        notes="Entegrasyon testi",
+    )
+    assert label.id is not None
+
+    # get_alarm_event — etiketli
+    fetched_labeled = await db.get_alarm_event(labeled_alarm.id)
+    assert fetched_labeled is not None
+    assert fetched_labeled.label is not None
+    assert fetched_labeled.label.label_class == "gercek_ariza"
+    assert fetched_labeled.label.labeled_by_user_id == user_id
+    assert fetched_labeled.label.notes == "Entegrasyon testi"
+    assert fetched_labeled.label.alarm_event_id == labeled_alarm.id
+
+    # get_alarm_event — etiketsiz
+    fetched_unlabeled = await db.get_alarm_event(unlabeled_alarm.id)
+    assert fetched_unlabeled is not None
+    assert fetched_unlabeled.label is None
+
+    # list_alarm_events — iki alarm da bu tag için tek sorguda label ile döner
+    rows = await db.list_alarm_events(tag_id="TEST_ALM", state="triggered")
+    by_id = {a.id: a for a in rows if a.id is not None}
+    assert labeled_alarm.id in by_id
+    assert unlabeled_alarm.id in by_id
+    listed_labeled = by_id[labeled_alarm.id]
+    listed_unlabeled = by_id[unlabeled_alarm.id]
+    assert listed_labeled.label is not None
+    assert listed_labeled.label.label_class == "gercek_ariza"
+    assert listed_unlabeled.label is None

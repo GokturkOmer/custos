@@ -240,6 +240,9 @@ class AlarmEvent:
     message: str = ""
     id: int | None = None
     created_at: datetime | None = None
+    # R-05a: Alarm SELECT'leri LEFT JOIN ile etiketi getirir; insert/update
+    # path'i etiketsiz alarm üretir (label=None geri uyumlu).
+    label: AlarmEventLabel | None = None
 
 
 # R-05 / V11-301 etiketleme — Migration 035 CHECK constraint'i ile aynı liste.
@@ -1682,6 +1685,22 @@ _ALLOWED_ALARM_EVENT_UPDATE_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+# R-05a: Alarm sayfası SELECT'lerinin ortak projeksiyonu — alarm_events satırı +
+# (varsa) alarm_event_labels kolonları, çakışmayı önlemek için label_* alias'ı
+# ile. WHERE/ORDER BY/LIMIT çağrı yerinde eklenir; tüm filtreler ``a.``
+# qualifier'ı ile yazılır. UNIQUE (alarm_event_id) constraint'i btree indeksi
+# açtığı için JOIN sub-millisecond.
+_ALARM_EVENT_LABEL_JOIN_SELECT: str = (
+    "SELECT a.*, "
+    "l.id AS label_id, "
+    "l.label_class AS label_class, "
+    "l.labeled_by_user_id AS labeled_by_user_id, "
+    "l.labeled_at AS labeled_at, "
+    "l.notes AS label_notes "
+    "FROM alarm_events a "
+    "LEFT JOIN alarm_event_labels l ON l.alarm_event_id = a.id"
+)
+
 
 def _row_to_threshold(row: asyncpg.Record) -> Threshold:
     """asyncpg satırını Threshold'a dönüştürür."""
@@ -1731,6 +1750,29 @@ def _row_to_alarm_event_label(row: asyncpg.Record) -> AlarmEventLabel:
         labeled_at=row["labeled_at"],
         notes=row["notes"],
     )
+
+
+def _row_to_alarm_event_with_label(row: asyncpg.Record) -> AlarmEvent:
+    """LEFT JOIN sonucu — alarm_events kolonları + (varsa) label kolonları.
+
+    R-05a: alarm sayfası SELECT'leri ``alarm_events LEFT JOIN
+    alarm_event_labels`` ile tek round-trip'te hem alarmı hem etiketi
+    getirir. ``label_id`` NULL ise alarm etiketsizdir (``label=None``).
+    Etiket kolonları çakışma yaratmaması için ``label_*`` ön ekiyle
+    seçilir (``label_id``, ``label_class``, ``labeled_by_user_id``,
+    ``labeled_at``, ``label_notes``).
+    """
+    event = _row_to_alarm_event(row)
+    if row["label_id"] is not None:
+        event.label = AlarmEventLabel(
+            id=row["label_id"],
+            alarm_event_id=row["id"],
+            label_class=row["label_class"],
+            labeled_by_user_id=row["labeled_by_user_id"],
+            labeled_at=row["labeled_at"],
+            notes=row["label_notes"],
+        )
+    return event
 
 
 def _row_to_audit_log_entry(row: asyncpg.Record) -> AuditLogEntry:
@@ -3019,12 +3061,12 @@ class TimescaleDBDatabase(DatabaseInterface):
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM alarm_events WHERE id = $1",
+                f"{_ALARM_EVENT_LABEL_JOIN_SELECT} WHERE a.id = $1",
                 event_id,
             )
         if row is None:
             return None
-        return _row_to_alarm_event(row)
+        return _row_to_alarm_event_with_label(row)
 
     async def list_alarm_events(
         self,
@@ -3041,32 +3083,35 @@ class TimescaleDBDatabase(DatabaseInterface):
         idx = 1
 
         if state is not None:
-            conditions.append(f"state = ${idx}")
+            conditions.append(f"a.state = ${idx}")
             params.append(state)
             idx += 1
 
         if tag_id is not None:
-            conditions.append(f"tag_id = ${idx}")
+            conditions.append(f"a.tag_id = ${idx}")
             params.append(tag_id)
             idx += 1
 
         if is_test is not None:
-            conditions.append(f"is_test = ${idx}")
+            conditions.append(f"a.is_test = ${idx}")
             params.append(is_test)
             idx += 1
 
         if source is not None:
-            conditions.append(f"source = ${idx}")
+            conditions.append(f"a.source = ${idx}")
             params.append(source)
             idx += 1
 
         where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         params.append(limit)
-        sql = f"SELECT * FROM alarm_events{where_clause} ORDER BY triggered_at DESC LIMIT ${idx}"
+        sql = (
+            f"{_ALARM_EVENT_LABEL_JOIN_SELECT}{where_clause} "
+            f"ORDER BY a.triggered_at DESC LIMIT ${idx}"
+        )
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
-        return [_row_to_alarm_event(row) for row in rows]
+        return [_row_to_alarm_event_with_label(row) for row in rows]
 
     async def get_active_alarm_for_threshold(
         self,
@@ -3076,14 +3121,14 @@ class TimescaleDBDatabase(DatabaseInterface):
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM alarm_events "
-                "WHERE threshold_id = $1 AND state != 'cleared' "
-                "ORDER BY triggered_at DESC LIMIT 1",
+                f"{_ALARM_EVENT_LABEL_JOIN_SELECT} "
+                "WHERE a.threshold_id = $1 AND a.state != 'cleared' "
+                "ORDER BY a.triggered_at DESC LIMIT 1",
                 threshold_id,
             )
         if row is None:
             return None
-        return _row_to_alarm_event(row)
+        return _row_to_alarm_event_with_label(row)
 
     # --- Alarm Event Label implementasyonları (R-05 / V11-301) ---
 
@@ -3135,13 +3180,14 @@ class TimescaleDBDatabase(DatabaseInterface):
         pool = self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT a.* FROM alarm_events a "
-                "LEFT JOIN alarm_event_labels l ON l.alarm_event_id = a.id "
+                f"{_ALARM_EVENT_LABEL_JOIN_SELECT} "
                 "WHERE l.id IS NULL AND a.is_test = FALSE "
                 "ORDER BY a.triggered_at DESC LIMIT $1",
                 limit,
             )
-        return [_row_to_alarm_event(row) for row in rows]
+        # WHERE l.id IS NULL filtresi sayesinde label_id hep NULL → label hep None,
+        # ama tek SELECT projeksiyonunu ortak helper ile çözüyoruz (tutarlılık).
+        return [_row_to_alarm_event_with_label(row) for row in rows]
 
     async def count_labels_by_class(
         self,
