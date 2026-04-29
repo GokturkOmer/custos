@@ -85,7 +85,7 @@ src/custos/
 ```
 
 Diğer dizinler:
-- `tests/` — 713 test (286 unit + 244 integration + 183 dashboard)
+- `tests/` — 792 test (361 unit + 229 integration + 187 dashboard + 15 load)
 - `deploy/` — systemd service, setup script, pilot dokümanı
 - `scripts/` — VAPID key üretimi, model eğitimi, healthcheck
 - `alembic/` — Veritabanı migration'ları (001-037)
@@ -120,4 +120,4 @@ sudo bash deploy/setup.sh     # Otomatik kurulum
 
 ## Durum
 
-F1-F8a + F11 A-H + F8b + W6 regresyon tamamlandı. Pilot kurulum: 5 Haziran 2026.
+F1-F11 (tüm fazlar) + v1.1 sertleştirme paketleri (K-track + R-track + PP-track) + pilot öncesi denetim Grup A/B/C tamamlandı. Pilot kurulum: 5 Haziran 2026 (Torunlar GYO).
