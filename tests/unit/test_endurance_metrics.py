@@ -20,6 +20,7 @@ from scripts.endurance_metrics import (
     append_row,
     compute_tick_miss_ratio,
     count_batches_and_last_fallback,
+    extract_tick_summary_from_journal,
     parse_batch_fallback,
     parse_rss_from_status,
     rotate_if_oversized,
@@ -115,6 +116,49 @@ def test_compute_tick_miss_ratio_overshoot_clamped_to_zero() -> None:
 def test_compute_tick_miss_ratio_zero_expected_returns_zero() -> None:
     """Expected=0 → divide-by-zero yerine 0.0 (güvenli default)."""
     assert compute_tick_miss_ratio(50, 0) == 0.0
+
+
+# --- Tick özet eventi parse (V11-000-B) ---
+
+
+def test_extract_tick_summary_picks_last_event_json_format() -> None:
+    """Birden fazla "Tick özet" eventinde son satırın değerleri kanonik."""
+    log = (
+        '{"event": "Tick özet", "total_tick_count": 60, '
+        '"tick_miss_count": 1, "tick_miss_ratio": 0.0167}\n'
+        '{"event": "Tick özet", "total_tick_count": 120, '
+        '"tick_miss_count": 3, "tick_miss_ratio": 0.025}\n'
+    )
+    total, miss, ratio = extract_tick_summary_from_journal(log)
+    assert total == 120
+    assert miss == 3
+    assert ratio == pytest.approx(0.025)
+
+
+def test_extract_tick_summary_kv_format() -> None:
+    """ConsoleRenderer key=value satırından da çekilir."""
+    log = (
+        "2026-04-29 event=Tick özet total_tick_count=180 "
+        "tick_miss_count=5 tick_miss_ratio=0.0278"
+    )
+    total, miss, ratio = extract_tick_summary_from_journal(log)
+    assert total == 180
+    assert miss == 5
+    assert ratio == pytest.approx(0.0278)
+
+
+def test_extract_tick_summary_no_event_returns_all_none() -> None:
+    """Hiç "Tick özet" eventi yoksa hepsi None — çağıran fallback'e düşer."""
+    log = (
+        '{"event": "Batch yazıldı", "batch_fallback": 0}\n'
+        '{"event": "Tick yavaşladı", "süre_ms": 1100}\n'
+    )
+    assert extract_tick_summary_from_journal(log) == (None, None, None)
+
+
+def test_extract_tick_summary_empty_log_returns_all_none() -> None:
+    """Boş log için (None, None, None) — sessiz pencere fallback'i tetikler."""
+    assert extract_tick_summary_from_journal("") == (None, None, None)
 
 
 # --- CSV rotate ---

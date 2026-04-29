@@ -49,6 +49,11 @@ _FAST_POLLING_THRESHOLD_MS = 1000
 # Tag listesi yenileme aralığı (tick sayısı)
 _TAG_REFRESH_INTERVAL = 60
 
+# Tick özet structlog eventi yazma aralığı (tick sayısı). endurance_metrics.py
+# bu eventi journalctl'den parse ederek `tick_miss_count` / `tick_miss_ratio`
+# değerlerini doğrudan okur (V11-000-B — eski "Batch yazıldı" proxy yerine).
+_TICK_SUMMARY_INTERVAL = 60
+
 # Minimum base tick (ms) — çok küçük tick'ler CPU israfına yol açar
 _MIN_BASE_TICK_MS = 50
 
@@ -139,6 +144,21 @@ class ModbusCollector:
     def total_tick_count(self) -> int:
         """Toplam tick sayısı — yük testi metriği için."""
         return self._total_tick_count
+
+    @property
+    def tick_miss_count(self) -> int:
+        """Slow tick sayısının kanonik telemetri adı (V11-000-B).
+
+        endurance_metrics.py bu değeri "Tick özet" structlog eventi
+        üzerinden okur. `_slow_tick_count` ile aynı sayıyı döner; iç
+        adlandırma backward compat için korunur.
+        """
+        return self._slow_tick_count
+
+    @property
+    def tick_miss_ratio(self) -> float:
+        """`slow_tick_ratio` için kanonik telemetri alias'ı (V11-000-B)."""
+        return self.slow_tick_ratio
 
     def _count_fast_tags(self, tags: list[TagRecord] | None = None) -> int:
         """Fast polling (polling_interval_ms <= eşik) tag sayısını döndürür."""
@@ -580,6 +600,17 @@ class ModbusCollector:
                     "Tick yavaşladı",
                     süre_ms=round(elapsed * 1000, 1),
                     base_tick_ms=self._base_tick_ms,
+                )
+
+            # Periyodik tick özet eventi (V11-000-B): endurance_metrics
+            # journalctl'den `tick_miss_count` / `tick_miss_ratio` değerlerini
+            # doğrudan okur — eski "Batch yazıldı" proxy hesabı dolaylıydı.
+            if self._total_tick_count % _TICK_SUMMARY_INTERVAL == 0:
+                await logger.ainfo(
+                    "Tick özet",
+                    total_tick_count=self._total_tick_count,
+                    tick_miss_count=self._slow_tick_count,
+                    tick_miss_ratio=round(self.slow_tick_ratio, 4),
                 )
 
             # Shutdown event veya sleep — hangisi önce gelirse

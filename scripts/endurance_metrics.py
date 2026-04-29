@@ -71,6 +71,18 @@ _BATCH_LOG_MARKER = "Batch yaz"
 _BATCH_FALLBACK_JSON_RE = re.compile(r'"batch_fallback"\s*:\s*(\d+)')
 _BATCH_FALLBACK_KV_RE = re.compile(r"batch_fallback=(\d+)")
 
+# V11-000-B: Collector periyodik "Tick özet" eventi yazıyor; sadece bu
+# eventte `tick_miss_count` alanı görünür (marker). Üç değeri de JSON
+# veya key=value biçiminden çeken regex'ler — son eventin değeri kanonik
+# `tick_miss_ratio` kaynağı olur (eski "Batch yazıldı" proxy yerine).
+_TICK_SUMMARY_MARKER = "tick_miss_count"
+_TICK_TOTAL_JSON_RE = re.compile(r'"total_tick_count"\s*:\s*(\d+)')
+_TICK_TOTAL_KV_RE = re.compile(r"total_tick_count=(\d+)")
+_TICK_MISS_JSON_RE = re.compile(r'"tick_miss_count"\s*:\s*(\d+)')
+_TICK_MISS_KV_RE = re.compile(r"tick_miss_count=(\d+)")
+_TICK_RATIO_JSON_RE = re.compile(r'"tick_miss_ratio"\s*:\s*([\d.]+)')
+_TICK_RATIO_KV_RE = re.compile(r"tick_miss_ratio=([\d.]+)")
+
 # Systemd unit adları (default kurulum).
 _COLLECTOR_UNIT = "custos-critical.service"
 _DASHBOARD_UNIT = "custos.service"
@@ -288,6 +300,35 @@ def compute_tick_miss_ratio(batch_count: int, expected: int) -> float:
     return round(ratio, 4)
 
 
+def extract_tick_summary_from_journal(
+    log_text: str,
+) -> tuple[int | None, int | None, float | None]:
+    """Son "Tick özet" eventinden (total, miss, ratio) çıkarır.
+
+    V11-000-B: Collector kendi `tick_miss_count` ve `tick_miss_ratio`
+    değerlerini periyodik structlog eventiyle yazıyor. Birden fazla
+    eventte son satırın değerleri kanoniktir. Hiç event yoksa ya da
+    alanlar parse edilemezse ilgili dönüş öğesi None olur — çağıran
+    bu durumda eski "Batch yazıldı" proxy'sine düşer.
+    """
+    last_total: int | None = None
+    last_miss: int | None = None
+    last_ratio: float | None = None
+    for line in log_text.splitlines():
+        if _TICK_SUMMARY_MARKER not in line:
+            continue
+        total_match = _TICK_TOTAL_JSON_RE.search(line) or _TICK_TOTAL_KV_RE.search(line)
+        miss_match = _TICK_MISS_JSON_RE.search(line) or _TICK_MISS_KV_RE.search(line)
+        ratio_match = _TICK_RATIO_JSON_RE.search(line) or _TICK_RATIO_KV_RE.search(line)
+        if total_match is not None:
+            last_total = int(total_match.group(1))
+        if miss_match is not None:
+            last_miss = int(miss_match.group(1))
+        if ratio_match is not None:
+            last_ratio = float(ratio_match.group(1))
+    return (last_total, last_miss, last_ratio)
+
+
 # --- DB metrikleri (asyncpg) ---
 
 
@@ -415,7 +456,15 @@ def collect_snapshot(
     since_str = since_arg or _since_from_interval(interval_sec)
     log_text = fetch_recent_journal(_COLLECTOR_UNIT, since=since_str)
     batch_count, last_fallback = count_batches_and_last_fallback(log_text)
-    tick_miss = compute_tick_miss_ratio(batch_count, _EXPECTED_BATCH_PER_INTERVAL)
+
+    # V11-000-B: Önce collector'ın "Tick özet" eventinden gerçek `tick_miss_ratio`
+    # okumayı dene; yoksa eski "Batch yazıldı" proxy hesabına düş (eski sürüm
+    # collector veya henüz özet basılmamış pencereler için backward compat).
+    _, _, summary_ratio = extract_tick_summary_from_journal(log_text)
+    if summary_ratio is not None:
+        tick_miss = summary_ratio
+    else:
+        tick_miss = compute_tick_miss_ratio(batch_count, _EXPECTED_BATCH_PER_INTERVAL)
 
     # Disk
     used_gb, avail_gb = disk_usage_gb(disk_path)
