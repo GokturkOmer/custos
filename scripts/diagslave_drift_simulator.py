@@ -159,10 +159,28 @@ def main() -> int:
         "Layout: temp[1-50] pres[51-100] energy[101-150] rpm[151-180] status[181-200]"
     )
 
-    # Persistent state'ler
+    # Persistent state init — diagslave RAM'inden mevcut degerleri oku.
+    # Bu sayede mutator restart edildiginde enerji sayaci geri gitmez (Custos
+    # Liveness Counter pipeline'i geri-giden sayac alarmi tetikliyor).
     pressure_state = [500] * PRES_COUNT     # Init mid-range (5 bar)
-    energy_state = [random.randint(0, 1000) for _ in range(ENERGY_COUNT)]
+    energy_state = [0] * ENERGY_COUNT
     status_state = [0] * STATUS_COUNT
+    try:
+        existing_energy = client.read_holding_registers(
+            ENERGY_OFFSET, count=ENERGY_COUNT, device_id=SLAVE_UNIT_ID,
+        )
+        if not existing_energy.isError() and existing_energy.registers:
+            energy_state = list(existing_energy.registers)
+            logger.info(
+                "Energy state diagslave'den okundu (ilk: %d, son: %d, restart-safe)",
+                energy_state[0], energy_state[-1],
+            )
+        else:
+            energy_state = [random.randint(0, 1000) for _ in range(ENERGY_COUNT)]
+            logger.warning("Energy state diagslave'den okunamadi, random init")
+    except Exception as exc:  # noqa: BLE001
+        energy_state = [random.randint(0, 1000) for _ in range(ENERGY_COUNT)]
+        logger.warning("Energy state okuma istisnasi (%s), random init", exc)
 
     start_ts = time.time()
     tick_count = 0
