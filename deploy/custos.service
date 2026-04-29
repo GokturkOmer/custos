@@ -13,7 +13,10 @@ WatchdogSec=60
 User=custos
 WorkingDirectory=/opt/custos
 EnvironmentFile=/opt/custos/.env
-ExecStart=/opt/custos/.venv/bin/uvicorn custos.__main__:app --host 0.0.0.0 --port 8000
+# H-1 (29 Nis 2026 denetim): uvicorn loopback'e bağlanır, Caddy 127.0.0.1:8000'a
+# proxy yapar — TLS bypass riski kapanır. --proxy-headers + --forwarded-allow-ips
+# ile X-Forwarded-For okunur (rate limit IP-bazlı sayım gerçek istemci görür).
+ExecStart=/opt/custos/.venv/bin/uvicorn custos.__main__:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=always
 RestartSec=10
 StandardOutput=journal

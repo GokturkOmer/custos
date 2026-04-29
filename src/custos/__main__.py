@@ -12,6 +12,7 @@ Watchdog (V11-105/K13):
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from typing import Any
 
 import structlog
 from fastapi import FastAPI, Request, Response
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from custos.analytics.anomaly_detector import AnomalyDetector
 from custos.analytics.archive_scheduler import ArchiveScheduler
@@ -152,9 +154,31 @@ _MODELS_DIR = Path("data/models")
 _ARCHIVE_DIR = Path("/var/custos/archive")
 
 
+def _enforce_production_safety_guards() -> None:
+    """H-3 (29 Nis 2026 denetim) — production deploy safety guard.
+
+    ``CUSTOS_HOST_IP`` set edilmişse "production mode" kabul edilir. Bu modda
+    ``CUSTOS_DEV_INSECURE_COOKIE=1`` (Secure cookie kapama escape hatch'i)
+    set edilmiş olamaz — pilot saha makinesinde TLS bypass'a yol açar.
+
+    Lokal dev (CUSTOS_HOST_IP boş) ve testlerde guard tetiklenmez; dev
+    flag'i mevcut davranışıyla çalışır (auth_routes.py'de işleniyor).
+    """
+    in_production = bool(settings.custos_host_ip.strip())
+    insecure_cookie_flag = os.environ.get("CUSTOS_DEV_INSECURE_COOKIE", "").strip()
+    if in_production and insecure_cookie_flag == "1":
+        msg = (
+            "CUSTOS_DEV_INSECURE_COOKIE=1 production'da reddedildi: "
+            "CUSTOS_HOST_IP set edilmiş (production mode). Secure cookie "
+            "zorunlu — flag'i unset et veya CUSTOS_HOST_IP'yi temizle."
+        )
+        raise RuntimeError(msg)
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Uygulama yaşam döngüsü — DB, threshold engine, KPI engine ve anomaly detector yönetir."""
+    _enforce_production_safety_guards()
     db = create_database(settings)
     engine: ThresholdEngine | None = None
     engine_task: asyncio.Task[None] | None = None
@@ -415,6 +439,17 @@ app = FastAPI(
     redoc_url=None,
     lifespan=lifespan,
 )
+
+# H-1 (29 Nis 2026 denetim) — TrustedHostMiddleware: Host header injection
+# saldırılarına karşı whitelist. Boş liste = middleware eklenmez (lokal
+# dev/test). Production: setup.sh CUSTOS_HOST_IP'yi .env'e yazar; operator
+# CUSTOS_ALLOWED_HOSTS'u "192.168.1.10,custos.local" pattern'iyle set eder.
+_allowed_hosts = settings.allowed_hosts_list
+if _allowed_hosts:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=_allowed_hosts,
+    )
 
 
 @app.middleware("http")

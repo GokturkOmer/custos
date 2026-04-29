@@ -1595,6 +1595,20 @@ class DatabaseInterface(abc.ABC):
         kayıtlarını sayar. Detail formatı: ``ip=<addr> user=<name> reason=<r>``.
         """
 
+    @abc.abstractmethod
+    async def count_recent_failed_logins_by_username(
+        self,
+        username: str,
+        since: datetime,
+    ) -> int:
+        """H-2 (29 Nis 2026 denetim) — username başına başarısız login sayısı.
+
+        IP-bazlı sayımı tamamlar: tek hesaba dağıtık brute-force (her istek
+        farklı IP) bypass edemesin diye. ``audit_log.detail`` içinde
+        ``user=<username>`` token'ı LIKE pattern'iyle aranır; LIKE
+        wildcard'ları (``%``, ``_``, ``\\``) ``ESCAPE '\\'`` ile kaçırılır.
+        """
+
     # --- Service Heartbeats (V11-105/K13) ---
 
     @abc.abstractmethod
@@ -4920,6 +4934,40 @@ class TimescaleDBDatabase(DatabaseInterface):
                 """,
                 since,
                 ip_address,
+            )
+        return count or 0
+
+    async def count_recent_failed_logins_by_username(
+        self,
+        username: str,
+        since: datetime,
+    ) -> int:
+        """H-2 (29 Nis 2026 denetim) — username başına başarısız login sayımı.
+
+        IP-bazlı sayımı tamamlar (dağıtık brute-force koruması). LIKE
+        wildcard karakterlerini (``\\``, ``%``, ``_``) escape edip
+        ``user=<username> reason=`` token'ını arar.
+        """
+        # LIKE wildcard'larını username'den kaçır — \ önce gelmeli, çünkü
+        # sonraki replace'lerde eklenen \'ları çiftlememek için.
+        escaped_user = (
+            username.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"% user={escaped_user} reason=%"
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            count: int | None = await conn.fetchval(
+                r"""
+                SELECT COUNT(*) FROM audit_log
+                WHERE category = 'auth'
+                  AND action = 'login_failed'
+                  AND timestamp >= $1
+                  AND detail LIKE $2 ESCAPE '\'
+                """,
+                since,
+                pattern,
             )
         return count or 0
 

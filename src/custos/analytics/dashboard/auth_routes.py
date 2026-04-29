@@ -60,6 +60,14 @@ _POST_LOGIN_TARGET = "/dashboard/overview"
 LOGIN_RATE_LIMIT_WINDOW_MINUTES = 15
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 5
 
+# H-2 (29 Nis 2026 denetim): Username-bazlı rate limit — IP-bazlı sayımı
+# tamamlar. Dağıtık brute-force (her istek farklı IP) bu eşikle yakalanır.
+# Pencere daha geniş (30 dk) çünkü tek hesaba odaklı saldırılar düşük
+# tempolu olabilir. Eşik biraz yüksek (10) çünkü meşru kullanıcı
+# parolasını birkaç kez yanlış girebilir; saldırı imzası 10+ tek hesap.
+LOGIN_RATE_LIMIT_USERNAME_WINDOW_MINUTES = 30
+LOGIN_RATE_LIMIT_USERNAME_MAX_ATTEMPTS = 10
+
 
 def _set_session_cookie(response: RedirectResponse, token: str) -> None:
     """Session cookie'yi response'a ekler.
@@ -123,14 +131,35 @@ async def login_submit(
     # PP-06: IP-bazlı brute-force koruması. audit_log'taki son
     # LOGIN_RATE_LIMIT_WINDOW_MINUTES içindeki başarısız deneme sayısı
     # eşiği aşmışsa giriş hesaplaması bile yapılmaz.
-    since = datetime.now(UTC) - timedelta(minutes=LOGIN_RATE_LIMIT_WINDOW_MINUTES)
-    failed_count = await db.count_recent_failed_logins(ip, since)
+    now = datetime.now(UTC)
+    since_ip = now - timedelta(minutes=LOGIN_RATE_LIMIT_WINDOW_MINUTES)
+    failed_count = await db.count_recent_failed_logins(ip, since_ip)
     if failed_count >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
         await logger.awarning(
-            "Login rate limit aşıldı",
+            "Login rate limit aşıldı (IP)",
             ip=ip,
             failed_count=failed_count,
             window_minutes=LOGIN_RATE_LIMIT_WINDOW_MINUTES,
+        )
+        return RedirectResponse(
+            url="/login?error=rate_limited",
+            status_code=303,
+        )
+
+    # H-2 (29 Nis 2026 denetim): Username-bazlı rate limit. IP sayımı
+    # dağıtık saldırıyı yakalayamaz (her istek farklı kaynaktan), bu yüzden
+    # tek hesaba odaklı brute-force için ayrı bir pencere uygulanır.
+    since_user = now - timedelta(minutes=LOGIN_RATE_LIMIT_USERNAME_WINDOW_MINUTES)
+    user_failed_count = await db.count_recent_failed_logins_by_username(
+        username.strip(),
+        since_user,
+    )
+    if user_failed_count >= LOGIN_RATE_LIMIT_USERNAME_MAX_ATTEMPTS:
+        await logger.awarning(
+            "Login rate limit aşıldı (username)",
+            username=username,
+            failed_count=user_failed_count,
+            window_minutes=LOGIN_RATE_LIMIT_USERNAME_WINDOW_MINUTES,
         )
         return RedirectResponse(
             url="/login?error=rate_limited",

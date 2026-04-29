@@ -52,6 +52,19 @@ class Settings(BaseSettings):
     # Sessiz saat hesabı için yerel zaman dilimi (IANA formatı)
     custos_timezone: str = "Europe/Istanbul"
 
+    # H-1 (29 Nis 2026 denetim): TrustedHostMiddleware allow-list. Caddy
+    # ardındaki uvicorn Host header injection saldırılarını eler. CSV format:
+    #   CUSTOS_ALLOWED_HOSTS=192.168.1.10,custos.local
+    # Boş bırakılırsa middleware eklenmez (lokal dev/test). Production
+    # setup.sh setup'ta CUSTOS_HOST_IP'yi tahmin ediyor — pilot deploy'da
+    # operator bu değeri açıkça set etmeli.
+    custos_allowed_hosts: str = ""
+
+    # H-1 ek (29 Nis 2026 denetim): Production deploy IP'si (Caddy + TLS
+    # konfigürasyonu için). Set edilmişse "production mode" — Secure cookie
+    # zorlama + dev escape hatch reddi (__main__.py startup guard'ı).
+    custos_host_ip: str = ""
+
     # Collector per-host paralel okuma üst sınırı (Semaphore). Modbus slave'lerin
     # tipik max concurrent connection sınırı 8-32; 5 güvenli başlangıç.
     collector_per_host_concurrency: int = 5
@@ -125,6 +138,16 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}"
             f"/{self.postgres_db}"
         )
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        """``custos_allowed_hosts`` CSV'i listeye çevirir; boş elemanları atar.
+
+        Boş döndürürse __main__.py TrustedHostMiddleware eklemez — lokal
+        dev/testte Host header'ı kontrol edilmez (TestClient ``testserver``
+        gönderir). Pilot deploy'da bu değer set edilmelidir.
+        """
+        return [h.strip() for h in self.custos_allowed_hosts.split(",") if h.strip()]
 
     @property
     def database_admin_url(self) -> str:

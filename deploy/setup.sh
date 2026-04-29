@@ -513,14 +513,17 @@ CUSTOS_HOST_IP=$(grep -E '^CUSTOS_HOST_IP=' "$INSTALL_DIR/.env" 2>/dev/null \
 if [[ -z "$CUSTOS_HOST_IP" ]]; then
     CUSTOS_HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
     if [[ -z "$CUSTOS_HOST_IP" ]]; then
-        echo "  UYARI: CUSTOS_HOST_IP belirlenemedi. .env'e ekle ve generate_tls_cert.sh'i manuel calistir." >&2
-        # TLS adimini atla — sistem yine de HTTP'de calisir.
-        echo "  TLS adimi atlandi."
-    else
-        echo "  CUSTOS_HOST_IP .env'de yok, ${CUSTOS_HOST_IP} otomatik tahmin edildi."
-        echo "CUSTOS_HOST_IP=${CUSTOS_HOST_IP}" >> "$INSTALL_DIR/.env"
-        chmod 600 "$INSTALL_DIR/.env"
+        # H-3 (29 Nis 2026 denetim): silent HTTP fallback kaldirildi.
+        # TLS belirlenemezse kurulum HATAYLA terminate olur — operator
+        # IP'yi .env'e koymadan sistem plain HTTP'de production'a gecmesin
+        # (session cookie sniff riski).
+        echo "HATA: CUSTOS_HOST_IP belirlenemedi (hostname -I bos)." >&2
+        echo "  .env'e CUSTOS_HOST_IP=<lan-ip> ekle ve setup.sh'i tekrar calistir." >&2
+        exit 2
     fi
+    echo "  CUSTOS_HOST_IP .env'de yok, ${CUSTOS_HOST_IP} otomatik tahmin edildi."
+    echo "CUSTOS_HOST_IP=${CUSTOS_HOST_IP}" >> "$INSTALL_DIR/.env"
+    chmod 600 "$INSTALL_DIR/.env"
 fi
 
 if [[ -n "$CUSTOS_HOST_IP" ]]; then
@@ -548,6 +551,26 @@ if [[ -n "$CUSTOS_HOST_IP" ]]; then
     systemctl enable --now caddy >/dev/null
     systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy
     echo "  Caddy aktif: https://${CUSTOS_HOST_IP}/ — uvicorn 127.0.0.1:8000'a proxy."
+
+    # H-1 (29 Nis 2026 denetim): UFW host firewall — uvicorn 8000'i LAN'a
+    # kapat, Caddy 80/443'u acik tut, SSH 22'yi koru. uvicorn zaten
+    # --host 127.0.0.1'a baglandigi icin (custos.service ExecStart) defansif
+    # ikinci katman; rule listesinde 8000 deny saldirgan yanlis konfigden
+    # acilirsa bile LAN trafik dusurur.
+    if command -v ufw >/dev/null 2>&1; then
+        ufw --force reset >/dev/null
+        ufw default deny incoming >/dev/null
+        ufw default allow outgoing >/dev/null
+        ufw allow 22/tcp comment 'SSH' >/dev/null
+        ufw allow 80/tcp comment 'Caddy HTTP redirect' >/dev/null
+        ufw allow 443/tcp comment 'Caddy HTTPS' >/dev/null
+        ufw allow 5353/udp comment 'mDNS avahi' >/dev/null
+        ufw deny 8000/tcp comment 'uvicorn LAN block (Caddy bypass)' >/dev/null
+        ufw --force enable >/dev/null
+        echo "  UFW aktif: 22/80/443/tcp + 5353/udp izinli, 8000/tcp LAN'da reddedildi."
+    else
+        echo "  UYARI: ufw bulunamadi — host firewall kurulmadi. apt install ufw onerilir."
+    fi
 fi
 
 # --- 13. PostgreSQL localhost-only sertlestirme (V11-112 / P-06) ---
