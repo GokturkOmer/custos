@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         count = asyncio.run(seed(template_dir=args.dir))
     except TemplateLoadError as exc:
-        print(f"YAML hatası: {exc}", file=sys.stderr)
+        print(f"YAML hatası: {exc}", file=sys.stderr)  # noqa: T201
         return 2
     return 0 if count >= 0 else 1
 

@@ -106,9 +106,9 @@ def test_assistant_smoke_passes_eight_of_ten() -> None:
 
     # Detaylı tanı için pytest çıktısına başarısız soruları yaz.
     if failures:
-        print("\n=== Smoke test başarısızlıkları ===")
+        print("\n=== Smoke test başarısızlıkları ===")  # noqa: T201
         for f in failures:
-            print(f" - {f}")
+            print(f" - {f}")  # noqa: T201
 
     assert passed >= 8, (
         f"En az 8/10 başarı bekleniyor; sonuç {passed}/10. "
