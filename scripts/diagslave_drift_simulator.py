@@ -59,13 +59,132 @@ logger = logging.getLogger("drift_simulator")
 
 
 def _temp_raw(reg_idx: int, t: float) -> int:
-    """Sıcaklık raw: sinüs 200-250 (gain 0.1 → 20-25 °C), 30 dk periyot."""
-    base_celsius = 20.0 + 5.0 * math.sin(2 * math.pi * t / 1800 + reg_idx * 0.1)
-    return int(base_celsius * 10)  # gain=0.1 ters çevirme
+    """Sıcaklık raw (gain 0.1 → 0.1 × raw = °C). Ekipman-bağıntılı.
+
+    Layout:
+      0-19: AHU01-04 (her biri 5 sensor: SUPPLY, RETURN, OUTSIDE, MIXED, HEATING_COIL)
+      20-29: CHILLER01-02 (her biri 5: EVAP_IN, EVAP_OUT, COND_IN, COND_OUT, OIL)
+      30-45: FCU01-08 (her biri 2: SUPPLY, RETURN)
+      46-49: ZONE01-04 (mahal sıcaklığı)
+
+    Bağıntı kuralları:
+      AHU: RETURN = SUPPLY + 4 °C (klima soğutma modu, mahal hava daha sıcak döner)
+      Chiller: EVAP_IN > EVAP_OUT (5 °C delta, evap'ta su soğur)
+      Chiller: COND_OUT > COND_IN (kondenserde su ısınır)
+      FCU: RETURN = SUPPLY + 3 °C
+    """
+    if reg_idx < 20:
+        # AHU01-04
+        ahu_local = reg_idx // 5
+        kind = reg_idx % 5
+        ahu_phase = ahu_local * 0.5
+        ahu_temp = 22.0 + 2.5 * math.sin(2 * math.pi * t / 1800 + ahu_phase)
+        if kind == 0:        # SUPPLY (soğutulmuş)
+            return int(ahu_temp * 10)
+        if kind == 1:        # RETURN = SUPPLY + 4 °C
+            return int((ahu_temp + 4.0) * 10)
+        if kind == 2:        # OUTSIDE (dış hava, 2 saatlik gün-gece)
+            outside = 15.0 + 10.0 * math.sin(2 * math.pi * t / 7200 + ahu_local * 0.2)
+            return int(outside * 10)
+        if kind == 3:        # MIXED ((return + outside) / 2)
+            mixed = (ahu_temp + 4.0 + 15.0 + 10.0 * math.sin(2 * math.pi * t / 7200)) / 2
+            return int(mixed * 10)
+        # HEATING_COIL (mahal sezonunda ısıtma kapalı, supply ile aynı)
+        return int(ahu_temp * 10)
+
+    if reg_idx < 30:
+        # CHILLER01-02 (5 sensor)
+        ch_local = (reg_idx - 20) // 5
+        kind = (reg_idx - 20) % 5
+        ch_phase = ch_local * 1.0
+        if kind == 0:        # EVAP_IN (sıcak su giriş)
+            return int((12.0 + 1.5 * math.sin(2 * math.pi * t / 1800 + ch_phase)) * 10)
+        if kind == 1:        # EVAP_OUT (soğuk su çıkış, EVAP_IN - 5)
+            return int((7.0 + 1.0 * math.sin(2 * math.pi * t / 1800 + ch_phase)) * 10)
+        if kind == 2:        # COND_IN (kondenser su giriş)
+            return int((30.0 + 2.0 * math.sin(2 * math.pi * t / 1800 + ch_phase)) * 10)
+        if kind == 3:        # COND_OUT (kondenser su çıkış, COND_IN + 6)
+            return int((36.0 + 2.0 * math.sin(2 * math.pi * t / 1800 + ch_phase)) * 10)
+        # OIL (35 °C civarı, neredeyse sabit)
+        return int((35.0 + 1.0 * math.sin(2 * math.pi * t / 1800)) * 10)
+
+    if reg_idx < 46:
+        # FCU01-08
+        fcu_local = (reg_idx - 30) // 2
+        kind = (reg_idx - 30) % 2
+        fcu_phase = fcu_local * 0.3
+        fcu_temp = 22.0 + 2.0 * math.sin(2 * math.pi * t / 1800 + fcu_phase)
+        if kind == 0:        # SUPPLY
+            return int(fcu_temp * 10)
+        return int((fcu_temp + 3.0) * 10)  # RETURN
+
+    # ZONE01-04 (mahal sıcaklığı)
+    zone_idx = reg_idx - 46
+    zone_temp = 23.0 + 1.5 * math.sin(2 * math.pi * t / 1800 + zone_idx * 0.7)
+    return int(zone_temp * 10)
 
 
-def _pressure_step(prev: int) -> int:
-    """Basınç raw: random walk 100-1000 (gain 0.01 → 1-10 bar)."""
+def _pressure_raw(reg_idx: int, t: float, prev: int) -> int:
+    """Basınç raw (gain 0.01 → 0.01 × raw = bar). Ekipman-bağıntılı.
+
+    Layout (reg 50-99, abs_offset = reg_idx - 50, 0-49 arası):
+      0-7:   AHU01-04 (her biri 2: FILTER_DP, FAN_DP)
+      8-13:  CHILLER01-02 (her biri 3: EVAP, COND, OIL)
+      14-37: PUMP01-12 (her biri 2: SUCTION, DISCHARGE)
+      38-40: HEADER (HOT, COLD, RETURN)
+      41-42: BOOSTER01-02 (OUT_PRES)
+      43-44: PRESS_SWITCH (LOW, HIGH)
+      45-49: MISC (EXP_TANK, AIR_SEP, GLYCOL, CONDENSATE, COMP_AIR)
+
+    Bağıntı kuralları:
+      Pump: DISCHARGE = SUCTION + 4 bar (her zaman pompa basıyor)
+      Chiller COND > EVAP (yüksek basınç tarafı)
+      Header HOT > COLD > RETURN
+    """
+    o = reg_idx - 50
+
+    if o < 8:
+        # AHU FILTER_DP (kind=0) + FAN_DP (kind=1)
+        ahu_local = o // 2
+        kind = o % 2
+        if kind == 0:  # FILTER_DP (küçük, 0.15-0.25 bar)
+            return int((0.2 + 0.05 * math.sin(2 * math.pi * t / 1800 + ahu_local)) * 100)
+        # FAN_DP (orta, 0.3-0.5 bar)
+        return int((0.4 + 0.1 * math.sin(2 * math.pi * t / 1800 + ahu_local)) * 100)
+
+    if o < 14:
+        # Chiller EVAP, COND, OIL
+        ch_local = (o - 8) // 3
+        kind = (o - 8) % 3
+        if kind == 0:  # EVAP_PRES (4.2-4.8 bar)
+            return int((4.5 + 0.3 * math.sin(2 * math.pi * t / 1800 + ch_local)) * 100)
+        if kind == 1:  # COND_PRES (12.5-13.5 bar, yüksek basınç tarafı)
+            return int((13.0 + 0.5 * math.sin(2 * math.pi * t / 1800 + ch_local)) * 100)
+        # OIL_PRES (2.8-3.2 bar)
+        return int((3.0 + 0.2 * math.sin(2 * math.pi * t / 1800 + ch_local)) * 100)
+
+    if o < 38:
+        # Pump 01-12 SUCTION (kind=0) + DISCHARGE (kind=1)
+        pump_local = (o - 14) // 2
+        kind = (o - 14) % 2
+        suction_base = 2.0 + 0.3 * math.sin(2 * math.pi * t / 1800 + pump_local * 0.4)
+        if kind == 0:  # SUCTION (1.7-2.3 bar)
+            return int(suction_base * 100)
+        # DISCHARGE = SUCTION + 4 bar (5.7-6.3 bar)
+        return int((suction_base + 4.0) * 100)
+
+    if o < 41:
+        # HEADER HOT (5.5), COLD (5.0), RETURN (4.5)
+        header_kind = o - 38
+        bases = [5.5, 5.0, 4.5]
+        return int((bases[header_kind] + 0.3 * math.sin(2 * math.pi * t / 1800)) * 100)
+
+    if o < 43:
+        # BOOSTER01-02 OUT (6-7 bar)
+        boost_local = o - 41
+        return int((6.5 + 0.5 * math.sin(2 * math.pi * t / 1800 + boost_local * 0.8)) * 100)
+
+    # PRESS_SWITCH + MISC: random walk (eski davranış, prev tabanlı)
     delta = random.gauss(0, 3)
     new_val = prev + int(delta)
     return max(100, min(1000, new_val))
@@ -194,9 +313,11 @@ def main() -> int:
             # allow-arch-check: simulator helper
             client.write_registers(TEMP_OFFSET, temps, device_id=SLAVE_UNIT_ID)
 
-            # --- Basınç (Reg 51-100, offset 50-99) ---
+            # --- Basınç (Reg 51-100, offset 50-99) — ekipman-bağıntılı ---
             for i in range(PRES_COUNT):
-                pressure_state[i] = _pressure_step(pressure_state[i])
+                pressure_state[i] = _pressure_raw(
+                    PRES_OFFSET + i, t, pressure_state[i],
+                )
             # allow-arch-check: simulator helper
             client.write_registers(PRES_OFFSET, pressure_state, device_id=SLAVE_UNIT_ID)
 
