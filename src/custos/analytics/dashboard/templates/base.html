@@ -44,7 +44,7 @@
            x-data="{count: null, total: null, globalEnabled: true,
                     async load() {
                       try {
-                        const r = await fetch('/api/push/active-count');
+                        const r = await fetch('/dashboard/api/push/active-count');
                         if (!r.ok) return;
                         const d = await r.json();
                         this.count = d.active;
