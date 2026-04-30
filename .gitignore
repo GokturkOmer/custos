@@ -30,3 +30,6 @@ _personal/
 
 # Backup dosyaları
 *.bak
+
+# ML model çıktıları (eğitim sonucu, idempotent yeniden üretilir)
+data/models/

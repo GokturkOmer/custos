@@ -55,6 +55,18 @@ UNIT_TO_PRESET: Final[dict[str, str]] = {
     "A": "fast",
     "V": "slow",
     "rpm": "fast",
+    # Status / dijital sinyaller — liveness anlamsiz (FIRE_ALARM, RUNNING,
+    # POWER_OK gibi tag'ler tasarim geregi haftalarca degismez, hareket
+    # eden sensor degil bilgi sinyali). Bos string ve yaygin boolean
+    # birim isimleri 'none' map edilir (kontrol kapali).
+    "": "none",
+    "bool": "none",
+    "boolean": "none",
+    "(boolean)": "none",
+    "digital": "none",
+    "binary": "none",
+    "0/1": "none",
+    "on/off": "none",
 }
 
 # Bilinmeyen birim için fallback preset (`auto` çözümü).
