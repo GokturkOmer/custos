@@ -225,20 +225,24 @@ def test_custom_range_passed_to_query(detail_db: _CustomRangeMockDB) -> None:
 
 
 def test_custom_range_invalid_end_before_start(detail_db: _CustomRangeMockDB) -> None:
-    """end <= start ise 400 + Türkçe hata."""
+    """end <= start ise sayfa default pencere + uyari banner ile acilir (S4c)."""
     client = TestClient(app)
     response = client.get(
         "/dashboard/overview/charts/solo/view"
         "?start=2026-04-20T10:00&end=2026-04-20T08:00",
     )
-    assert response.status_code == 400
+    # S4c (commit 698b397): tarih hatasinda 400 yerine 200 + banner doner.
+    # Sayfa default zaman penceresi ile acilir, kullanici hatayi banner'da gorur.
+    assert response.status_code == 200
+    assert "ozel tarih araligi uygulanamadi" in response.text.lower()
     assert "baslangictan" in response.text.lower()
-    # query_readings_auto çağrılmamalı
-    assert detail_db.auto_calls == []
+    # Default pencereyle DB sorgu yapildi (eski davranista 400 sebebiyle hic
+    # cagrilmiyordu).
+    assert len(detail_db.auto_calls) == 1
 
 
 def test_custom_range_invalid_future_end(detail_db: _CustomRangeMockDB) -> None:
-    """end gelecek tarihte ise 400."""
+    """end gelecek tarihte ise 200 + uyari banner."""
     local_tz = ZoneInfo(settings.custos_timezone)
     future = datetime.now(local_tz) + timedelta(days=2)
     start_str = (future - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M")
@@ -247,13 +251,14 @@ def test_custom_range_invalid_future_end(detail_db: _CustomRangeMockDB) -> None:
     response = client.get(
         f"/dashboard/overview/charts/solo/view?start={start_str}&end={end_str}",
     )
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert "ozel tarih araligi uygulanamadi" in response.text.lower()
     assert "gelecekte" in response.text.lower()
-    assert detail_db.auto_calls == []
+    assert len(detail_db.auto_calls) == 1
 
 
 def test_custom_range_too_old_start(detail_db: _CustomRangeMockDB) -> None:
-    """start 10 yıldan eski ise 400."""
+    """start 10 yildan eski ise 200 + uyari banner."""
     local_tz = ZoneInfo(settings.custos_timezone)
     too_old = datetime.now(local_tz) - timedelta(days=3700)
     end_local = too_old + timedelta(hours=1)
@@ -263,19 +268,21 @@ def test_custom_range_too_old_start(detail_db: _CustomRangeMockDB) -> None:
         f"?start={too_old.strftime('%Y-%m-%dT%H:%M')}"
         f"&end={end_local.strftime('%Y-%m-%dT%H:%M')}",
     )
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert "ozel tarih araligi uygulanamadi" in response.text.lower()
     assert "10 yil" in response.text.lower() or "10 yildan" in response.text.lower()
-    assert detail_db.auto_calls == []
+    assert len(detail_db.auto_calls) == 1
 
 
 def test_custom_range_partial_params_rejected(detail_db: _CustomRangeMockDB) -> None:
-    """Sadece start ya da sadece end verilirse 400."""
+    """Sadece start ya da sadece end verilirse 200 + uyari banner."""
     client = TestClient(app)
     response = client.get(
         "/dashboard/overview/charts/solo/view?start=2026-04-20T08:00",
     )
-    assert response.status_code == 400
-    assert detail_db.auto_calls == []
+    assert response.status_code == 200
+    assert "ozel tarih araligi uygulanamadi" in response.text.lower()
+    assert len(detail_db.auto_calls) == 1
 
 
 def test_no_custom_range_uses_time_window(detail_db: _CustomRangeMockDB) -> None:
