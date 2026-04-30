@@ -43,20 +43,31 @@ body {
   visibility: hidden;
 }
 
-/* Multi-row legend (default uPlot): hover'da değer uzunluğu (örn. 40.475,5 vs
-   40.958,667) kolon genişliğini değiştirip wrap satır sayısını oynatıyor → chart
-   yüksekliği +/- 20-30 px sıçrıyordu. Min-height ile alt boşluk sabitlenir;
-   chart alanı stabil kalır. 6 seriye kadar 4 satır rezerve. */
+/* uPlot multi-row legend (<table>) default olarak tum series'leri kendi
+   <tr>'sinde dikey listeler — kucuk chart'larda 6 satir alt alta cirkin
+   gozukur. Tabloyu CSS Grid'e cevir: tbody/tr'ye `display: contents` ile
+   katman hierarchy'sini sil, td/th hucreleri dogrudan grid item olur.
+   auto-fit minmax ile container genisligine gore 1-3 sutun dinamik. */
 .uplot .u-legend {
-  min-height: 88px;
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 24px;
+  min-height: 64px;
+  width: 100%;
 }
-
-/* Cell'lere min-width vererek kolon sayısı hover'lar arası tutarlı kalır
-   (içerik 1.234,5 → 1.234.567,89'a çıkınca yine aynı kolonda görünür). */
+.uplot .u-legend thead,
+.uplot .u-legend tbody {
+  display: contents;
+}
+.uplot .u-legend tr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
 .uplot .u-legend th,
 .uplot .u-legend td {
-  /* 140px: kompakt overview chart'larinda (~340px container) 2 kolon
-     sigar; genis chart detay sayfasinda 3-4 kolon. 180px ise kucuk
-     container'da tek kolon (alt alta) yapip kotu duruyordu. */
-  min-width: 140px;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
 }

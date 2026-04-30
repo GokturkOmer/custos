@@ -531,12 +531,31 @@ function panFetchPlugin(chartId, opts) {
   }
 
   function mergeIntoChart(u, fetched, isResolutionChange) {
+    // S4a fix: setData(data, false) X scale'i koruyor ama Y scale'lerin
+    // range() fn'i tanimliysa uPlot her data update'inde Y'leri yeniden
+    // hesapliyor → kullanicinin manuel kaydirdigi Y range'i siliniyordu.
+    // Cozum: setData OnCESi Y scale'lerini snapshot al, sonra setScale
+    // ile yeniden uygula (panel/persist plugin'in kaydettigi degerleri).
+    const ySnapshot = {};
+    for (const [key, sc] of Object.entries(u.scales)) {
+      if (key === 'x') continue;
+      if (sc && sc.min != null && sc.max != null) {
+        ySnapshot[key] = { min: sc.min, max: sc.max };
+      }
+    }
+    const restoreY = () => {
+      for (const [key, range] of Object.entries(ySnapshot)) {
+        u.setScale(key, range);
+      }
+    };
+
     if (isResolutionChange) {
       // Mixed bucket'i onlemek icin tum chart'i yeniden yukle
       const newTs = (fetched.timestamps || []).slice();
       const newSeries = (fetched.series || []).map((arr) => (arr || []).slice());
       if (newTs.length === 0) return;
       u.setData([newTs, ...newSeries], false);
+      restoreY();
       return;
     }
     const cur = u.data;
@@ -548,6 +567,7 @@ function panFetchPlugin(chartId, opts) {
       return prepend.concat(arr);
     });
     u.setData([newTs, ...newSeries], false);
+    restoreY();
   }
 
   function maybeFetch(u) {
@@ -733,25 +753,20 @@ function chartPanel(chartId) {
           auto: false,
         },
       };
-      // Y scale'lere `auto: false` kritik: pan-fetch sonrasi setData(data, false)
-      // X'i koruyor ama range() fn'i tanimliysa uPlot her redraw'da Y'yi yeniden
-      // hesapliyordu → kullanicinin Shift+drag (Y pan) sonrasi X pan yapinca
-      // Y scale auto-range'e geri donuyordu (S4a regression). auto:false ile
-      // range() sadece initial render'da calisir; setScale ile manuel override
-      // (pan/zoom + scaleStatePersist restore) korunur.
+      // Y scale tanimi: range fn ile initial range hesabi, kullanici manuel
+      // pan/zoom yaptiktan sonra sticky tutmayi panFetchPlugin ve
+      // resizeObserver post-action restore mekanizmasi ile sagliyoruz
+      // (charts.js asagisindaki ilgili plugin/handler'larda).
       if (axisMode === 'per-tag') {
-        // Her tag kendi scale'inde → sadece kendi verisinin min/max'i
         layout.forEach((l) => {
           const sIdx = l.seriesIdx;
           scales[l.key] = {
-            auto: false,
             range: () => calcYRangeForSeries(effectiveSeries[sIdx]),
           };
         });
       } else {
         for (const l of layout) {
           scales[l.key] = {
-            auto: false,
             range: () => calcYRangeForScale(
               effectiveSeries, effectiveUnits, l.key,
             ),
