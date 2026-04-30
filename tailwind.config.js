@@ -18,10 +18,15 @@ module.exports = {
         'text-disabled':  '#5A5D62',
         'accent-primary': '#3274D9',
         'accent-hover':   '#5794F2',
-        'status-ok':   '#56A64B',
-        'status-warn': '#F2CC0C',
-        'status-crit': '#E02F44',
-        'status-info': '#3274D9',
+        // Status renkleri — koyu temada okunaklı ama az parlak.
+        // Eski (parlak): ok #56A64B, warn #F2CC0C, crit #E02F44, info #3274D9
+        // Sarı (#F2CC0C) ve kırmızı (#E02F44) ozellikle yorucu — desaturated
+        // pastel variant'larina cevrildi. Hue korundu (yesil/sari/kirmizi/mavi
+        // hala tanınabilir), saturasyon ve luminance düşürüldü.
+        'status-ok':   '#6FA563',
+        'status-warn': '#D4B033',
+        'status-crit': '#C95C68',
+        'status-info': '#6A8FCC',
         'chart-1': '#73BF69',
         'chart-2': '#F2CC0C',
         'chart-3': '#E02F44',

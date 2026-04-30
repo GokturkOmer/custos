@@ -42,3 +42,18 @@ body {
   display: inline-block !important;
   visibility: hidden;
 }
+
+/* Multi-row legend (default uPlot): hover'da değer uzunluğu (örn. 40.475,5 vs
+   40.958,667) kolon genişliğini değiştirip wrap satır sayısını oynatıyor → chart
+   yüksekliği +/- 20-30 px sıçrıyordu. Min-height ile alt boşluk sabitlenir;
+   chart alanı stabil kalır. 6 seriye kadar 4 satır rezerve. */
+.uplot .u-legend {
+  min-height: 88px;
+}
+
+/* Cell'lere min-width vererek kolon sayısı hover'lar arası tutarlı kalır
+   (içerik 1.234,5 → 1.234.567,89'a çıkınca yine aynı kolonda görünür). */
+.uplot .u-legend th,
+.uplot .u-legend td {
+  min-width: 180px;
+}
