@@ -147,10 +147,13 @@ def _pressure_raw(reg_idx: int, t: float, prev: int) -> int:
         # AHU FILTER_DP (kind=0) + FAN_DP (kind=1)
         ahu_local = o // 2
         kind = o % 2
-        if kind == 0:  # FILTER_DP (küçük, 0.15-0.25 bar)
-            return int((0.2 + 0.05 * math.sin(2 * math.pi * t / 1800 + ahu_local)) * 100)
-        # FAN_DP (orta, 0.3-0.5 bar)
-        return int((0.4 + 0.1 * math.sin(2 * math.pi * t / 1800 + ahu_local)) * 100)
+        if kind == 0:  # FILTER_DP (0.10-0.30 bar; period 600 sn)
+            # Genlik 0.10, period 600 sn — eski (0.05/1800) min/max civarinda
+            # integer rounding ile 5+ dk takiliyor, liveness 300sn esigine
+            # takiliyordu. Genis genlik + kisa period → her tick gercek drift.
+            return int((0.2 + 0.10 * math.sin(2 * math.pi * t / 600 + ahu_local)) * 100)
+        # FAN_DP (orta, 0.25-0.55 bar; period 600 sn)
+        return int((0.4 + 0.15 * math.sin(2 * math.pi * t / 600 + ahu_local)) * 100)
 
     if o < 14:
         # Chiller EVAP, COND, OIL
@@ -160,8 +163,8 @@ def _pressure_raw(reg_idx: int, t: float, prev: int) -> int:
             return int((4.5 + 0.3 * math.sin(2 * math.pi * t / 1800 + ch_local)) * 100)
         if kind == 1:  # COND_PRES (12.5-13.5 bar, yüksek basınç tarafı)
             return int((13.0 + 0.5 * math.sin(2 * math.pi * t / 1800 + ch_local)) * 100)
-        # OIL_PRES (2.8-3.2 bar)
-        return int((3.0 + 0.2 * math.sin(2 * math.pi * t / 1800 + ch_local)) * 100)
+        # OIL_PRES (2.8-3.2 bar; period 900 sn — kisalti, slow-drift sinir)
+        return int((3.0 + 0.2 * math.sin(2 * math.pi * t / 900 + ch_local)) * 100)
 
     if o < 38:
         # Pump 01-12 SUCTION (kind=0) + DISCHARGE (kind=1)
