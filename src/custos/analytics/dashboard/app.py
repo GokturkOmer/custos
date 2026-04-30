@@ -879,7 +879,15 @@ async def overview_chart_detail(
     chart_tags = await db.list_overview_chart_tags(chart_key)
 
     now = datetime.now(UTC)
-    custom_range = _parse_custom_range(start, end, now=now)
+    # S4c fix: Tarih hatasinda 400 sayfasi yerine sayfa default pencere ile
+    # acilsin + uyari banner gosterilsin (kullanici "neyi yanlis girdim"
+    # anlasin, beyaz sayfaya patlamasin).
+    chart_error: str | None = None
+    try:
+        custom_range = _parse_custom_range(start, end, now=now)
+    except HTTPException as exc:
+        custom_range = None
+        chart_error = str(exc.detail)
     if custom_range is not None:
         chart_start, chart_end = custom_range
     else:
@@ -983,6 +991,7 @@ async def overview_chart_detail(
         custom_range_active=custom_range_active,
         custom_start_local=custom_start_local,
         custom_end_local=custom_end_local,
+        chart_error=chart_error,
     )
     return templates.TemplateResponse(
         request,

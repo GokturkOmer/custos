@@ -5,6 +5,17 @@
 
 {% block content %}
 <div class="space-y-4">
+  {# S4c: Tarih hatasinda 400 sayfa yerine default pencere + uyari banner #}
+  {% if chart_error %}
+  <div class="bg-status-warn/10 border border-status-warn/40 rounded-md px-4 py-2 flex items-start gap-2">
+    {{ icon_inline('alert-triangle', class='w-4 h-4 text-status-warn flex-shrink-0 mt-0.5') }}
+    <div class="text-small text-status-warn">
+      <span class="font-semibold">Ozel tarih araligi uygulanamadi:</span> {{ chart_error }}.
+      Varsayilan zaman penceresi kullaniliyor.
+    </div>
+  </div>
+  {% endif %}
+
   {# Üst bar: geri + başlık + zaman aralığı dropdown #}
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-2">
@@ -252,6 +263,47 @@
       const maxInput = panel.querySelector(`[data-action="max"][data-tag-id="${tagId}"]`);
       if (minInput) minInput.value = '';
       if (maxInput) maxInput.value = '';
+    });
+
+    // S4a fix: Y axis pan/zoom (Shift+drag, Ctrl+wheel, dblclick) sonrasi
+    // charts.js'in scaleStatePersistPlugin'i `custos:chart-scale-changed`
+    // event'i yayar. Burada ilgili tag'in Min/Max input'larini guncelle —
+    // boylece pan sonra "Auto'ya dondu" gibi gozukmesin.
+    function scaleToTagIds(targetScale) {
+      const chart = getChart();
+      if (!chart) return [];
+      const out = [];
+      for (let i = 1; i < chart.series.length; i++) {
+        if (chart.series[i].scale === targetScale) {
+          // Series label'inin basindaki tag_id'yi cikar (label format:
+          // 'AHU01_FAN_RPM (rpm)' veya benzeri).
+          const label = chart.series[i].label || '';
+          const tagId = label.split(' ')[0];
+          if (tagId) out.push(tagId);
+        }
+      }
+      return out;
+    }
+
+    function fmtRange(v) {
+      if (v == null) return '';
+      // Cok ondalikli sayilari kisalt — input'a 23.7672819237 yazmak yerine 23.77.
+      const abs = Math.abs(v);
+      if (abs === 0) return '0';
+      if (abs >= 100) return v.toFixed(1);
+      if (abs >= 1) return v.toFixed(2);
+      return v.toFixed(3);
+    }
+
+    window.addEventListener('custos:chart-scale-changed', (e) => {
+      if (!e.detail || e.detail.chartId !== chartId) return;
+      const { scaleKey, min, max } = e.detail;
+      for (const tagId of scaleToTagIds(scaleKey)) {
+        const minInput = panel.querySelector(`[data-action="min"][data-tag-id="${tagId}"]`);
+        const maxInput = panel.querySelector(`[data-action="max"][data-tag-id="${tagId}"]`);
+        if (minInput) minInput.value = fmtRange(min);
+        if (maxInput) maxInput.value = fmtRange(max);
+      }
     });
   })();
 </script>

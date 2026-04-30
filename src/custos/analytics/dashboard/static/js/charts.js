@@ -473,6 +473,16 @@ function scaleStatePersistPlugin(chartId) {
             state[scaleKey] = { min: s.min, max: s.max };
           }
           writeState(state);
+          // Y axis pan/zoom sonrasi UI'daki Min/Max input'larini sync etmek
+          // icin event yay (chart_detail tag kontrol paneli dinler).
+          window.dispatchEvent(new CustomEvent('custos:chart-scale-changed', {
+            detail: {
+              chartId,
+              scaleKey,
+              min: s.min == null ? null : s.min,
+              max: s.max == null ? null : s.max,
+            },
+          }));
         }, 300);
       },
     },
@@ -834,8 +844,22 @@ function chartPanel(chartId) {
       const ro = new ResizeObserver(() => {
         if (resizeTimer) clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
-          if (this.chart) {
-            this.chart.setSize({ width: el.clientWidth, height: chartHeight });
+          if (!this.chart) return;
+          this.chart.setSize({ width: el.clientWidth, height: chartHeight });
+          // setSize sonrasi uPlot internal scale'i auto-range moduna donebiliyor
+          // (S4b). LocalStorage'daki kullanici ayarlarini yeniden uygula.
+          try {
+            const raw = localStorage.getItem('custos:chart-state:' + chartId);
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            for (const [scaleKey, range] of Object.entries(saved)) {
+              if (!this.chart.scales[scaleKey]) continue;
+              if (range && range.min != null && range.max != null) {
+                this.chart.setScale(scaleKey, { min: range.min, max: range.max });
+              }
+            }
+          } catch (_e) {
+            // localStorage erisim/parse hatasi — sessizce gec
           }
         }, 200);
       });
