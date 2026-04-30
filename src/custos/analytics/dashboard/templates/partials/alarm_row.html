@@ -100,21 +100,47 @@
       {{ status_badge('Acknowledged', 'warn') }}
     {% endif %}
   </td>
-  {# Etiket sütunu (R-05) — 4 buton; etiketli sınıf ring ile vurgulanır. #}
+  {# Etiket sütunu (R-05) — Alpine.js dropdown ile kompakt UI.
+     Eski 4-buton-yan-yana tasarımı satırı kalabalıklaştırıyordu.
+     Yeni: tek trigger butonu (mevcut etiketi gösterir veya "Etiketle"),
+     tıklanınca 4 seçenek açılır, seçim sonrası HTMX swap dropdown'u kapatır. #}
   <td class="px-3 py-2 text-cell">
     {% set current_class = label.label_class if label else '' %}
-    <div class="flex flex-wrap gap-1"
+    {% set current_cfg = _label_config.get(current_class) %}
+    <div x-data="{ open: false }" class="relative inline-block"
          hx-target="#alarm-row-{{ alarm.id }}"
          hx-swap="outerHTML">
-      {% for cls in label_class_values %}
-        {% set cfg = _label_config.get(cls) %}
-        <button type="button"
-                hx-post="/dashboard/alarms/{{ alarm.id }}/label?cls={{ cls }}"
-                class="px-2 py-0.5 rounded text-small transition-colors {{ cfg.class }} {{ 'ring-1 ring-inset ring-current font-semibold' if cls == current_class else '' }}"
-                title="{{ cfg.title }}{{ ' (mevcut etiket)' if cls == current_class else '' }}">
-          {{ cfg.emoji }} {{ cfg.text }}
-        </button>
-      {% endfor %}
+      <button type="button"
+              @click="open = !open"
+              :aria-expanded="open"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-small transition-colors
+                     {% if current_cfg %}{{ current_cfg.class }} font-medium{% else %}bg-bg-elevated text-text-secondary hover:text-text-primary hover:bg-bg-base{% endif %}"
+              title="{% if current_cfg %}{{ current_cfg.title }}{% else %}Bu alarmi etiketle{% endif %}">
+        {% if current_cfg %}
+          {{ current_cfg.emoji }} {{ current_cfg.text }}
+        {% else %}
+          🏷 Etiketle
+        {% endif %}
+        <span class="text-text-disabled" aria-hidden="true">▾</span>
+      </button>
+      <div x-show="open"
+           x-transition.opacity.duration.100ms
+           @click.outside="open = false"
+           @keydown.escape.window="open = false"
+           class="absolute right-0 mt-1 w-36 bg-bg-elevated border border-border-weak rounded-md shadow-lg z-10 py-1"
+           style="display: none;">
+        {% for cls in label_class_values %}
+          {% set cfg = _label_config.get(cls) %}
+          <button type="button"
+                  hx-post="/dashboard/alarms/{{ alarm.id }}/label?cls={{ cls }}"
+                  @click="open = false"
+                  class="w-full text-left px-3 py-1.5 text-small flex items-center gap-2 hover:bg-bg-surface transition-colors {% if cls == current_class %}font-semibold ring-1 ring-inset ring-current{% endif %}"
+                  title="{{ cfg.title }}">
+            <span>{{ cfg.emoji }}</span>
+            <span>{{ cfg.text }}</span>
+          </button>
+        {% endfor %}
+      </div>
     </div>
   </td>
   <td class="px-3 py-2 text-cell">
