@@ -490,16 +490,29 @@ async def overview(request: Request) -> HTMLResponse:
                 if event.threshold_id is not None
                 else None
             )
-            state_label = {
-                "triggered": "Critical",
-                "acknowledged": "Warning",
-                "cleared": "OK",
-            }.get(event.state, event.state)
-            state_status = {
-                "triggered": "crit",
-                "acknowledged": "warn",
-                "cleared": "ok",
-            }.get(event.state, "neutral")
+            # Status sutunu severity'e gore renk/label gostersin —
+            # eski mapping `triggered` icin sabit "Critical" yaziyordu,
+            # info/warn alarmlari da kirmizi badge olarak yaniltici
+            # gorunuyordu (ornek: ZONE03_TEMP info severity ama UI Critical).
+            # Triggered alarm'da severity'e gore label, diger state'lerde
+            # state'e gore (Onayli/Temiz).
+            if event.state == "triggered":
+                sev = event.severity or "warn"
+                state_label = {
+                    "info": "Info",
+                    "warn": "Warning",
+                    "crit": "Critical",
+                    "emergency": "Emergency",
+                }.get(sev, sev.capitalize())
+                # Emergency icin kirmizi + pulse animasyonu (status_badge
+                # 'emergency' variant'i ile destekliyor).
+                state_status = sev
+            elif event.state == "acknowledged":
+                state_label = "Onayli"
+                state_status = "warn"
+            else:  # cleared
+                state_label = "Temiz"
+                state_status = "ok"
             # P-05: liveness/watchdog kaynaklı alarmlarda threshold yok;
             # source label'a düşeriz.
             if t is not None:
