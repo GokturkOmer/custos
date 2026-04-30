@@ -733,17 +733,25 @@ function chartPanel(chartId) {
           auto: false,
         },
       };
+      // Y scale'lere `auto: false` kritik: pan-fetch sonrasi setData(data, false)
+      // X'i koruyor ama range() fn'i tanimliysa uPlot her redraw'da Y'yi yeniden
+      // hesapliyordu → kullanicinin Shift+drag (Y pan) sonrasi X pan yapinca
+      // Y scale auto-range'e geri donuyordu (S4a regression). auto:false ile
+      // range() sadece initial render'da calisir; setScale ile manuel override
+      // (pan/zoom + scaleStatePersist restore) korunur.
       if (axisMode === 'per-tag') {
         // Her tag kendi scale'inde → sadece kendi verisinin min/max'i
         layout.forEach((l) => {
           const sIdx = l.seriesIdx;
           scales[l.key] = {
+            auto: false,
             range: () => calcYRangeForSeries(effectiveSeries[sIdx]),
           };
         });
       } else {
         for (const l of layout) {
           scales[l.key] = {
+            auto: false,
             range: () => calcYRangeForScale(
               effectiveSeries, effectiveUnits, l.key,
             ),

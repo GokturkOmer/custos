@@ -55,5 +55,8 @@ body {
    (içerik 1.234,5 → 1.234.567,89'a çıkınca yine aynı kolonda görünür). */
 .uplot .u-legend th,
 .uplot .u-legend td {
-  min-width: 180px;
+  /* 140px: kompakt overview chart'larinda (~340px container) 2 kolon
+     sigar; genis chart detay sayfasinda 3-4 kolon. 180px ise kucuk
+     container'da tek kolon (alt alta) yapip kotu duruyordu. */
+  min-width: 140px;
 }
