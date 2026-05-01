@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 import structlog
 
 from custos.analytics.push_sender import send_push_notifications
+from custos.shared.config import Settings
 from custos.shared.database import DatabaseInterface
 
 logger = structlog.get_logger(logger_name="disk_telemetry")
@@ -29,7 +30,20 @@ logger = structlog.get_logger(logger_name="disk_telemetry")
 # Varsayılan mount point — pilot deploy'da /var/custos burada PostgreSQL
 # tablespace'i + Parquet arşivleri yer alır. Linux dışı ortamda (dev makine)
 # path mevcut değilse shutil FileNotFoundError fırlatır; caller yakalar.
+# v1.0.1 borç #2: ``CUSTOS_DISK_MONITOR_PATH`` env'i ile override edilebilir;
+# fallback ``Settings`` default'u (``/var/custos``).
 DEFAULT_MOUNT_POINT = "/var/custos"
+
+
+def _default_mount_point() -> str:
+    """Çağrı zamanında ``Settings`` üzerinden mount path'ini çözer.
+
+    Sadeleştirme: ``Settings()`` her seferinde yeni instance kurar; pydantic
+    .env'i ucuz okur. Çağrı sıklığı düşük (DiskMonitor init + tick başına bir
+    ölçüm) — overhead ihmal edilebilir. Lazy resolve sayesinde testler
+    ``monkeypatch.setenv`` ile env'i değiştirebilir.
+    """
+    return Settings().custos_disk_monitor_path or DEFAULT_MOUNT_POINT
 
 # Uyarı eşiği (%) — altyapı vizyon özeti §2.3 ile uyumlu. Kullanıcıya önce
 # zamanı olsun; bu eşik disk tükenmeden ciddi bir alandır.
@@ -59,17 +73,21 @@ class DiskUsage:
     used_percent: float
 
 
-def get_disk_usage(path: str = DEFAULT_MOUNT_POINT) -> DiskUsage:
+def get_disk_usage(path: str | None = None) -> DiskUsage:
     """Verilen mount point için disk kullanımını döndürür.
+
+    ``path`` ``None`` ise ``CUSTOS_DISK_MONITOR_PATH`` env (Settings)
+    üzerinden çözülür; default ``/var/custos``.
 
     ``shutil.disk_usage`` senkrondur; çağıran asyncio loop'undan bu fonksiyonu
     ``asyncio.to_thread`` ile sarmalamalıdır (tick içinde zaten öyle
     yapılıyor).
     """
-    total, used, free = shutil.disk_usage(path)
+    resolved = path if path is not None else _default_mount_point()
+    total, used, free = shutil.disk_usage(resolved)
     used_pct = (used / total * 100.0) if total > 0 else 0.0
     return DiskUsage(
-        mount_point=path,
+        mount_point=resolved,
         total_bytes=total,
         used_bytes=used,
         free_bytes=free,
@@ -88,13 +106,17 @@ class DiskMonitor:
     def __init__(
         self,
         db: DatabaseInterface,
-        mount_point: str = DEFAULT_MOUNT_POINT,
+        mount_point: str | None = None,
         tick_seconds: int = DEFAULT_TICK_SECONDS,
         threshold_percent: float = ALERT_THRESHOLD_PERCENT,
         cooldown_seconds: int = ALERT_COOLDOWN_SECONDS,
     ) -> None:
         self._db = db
-        self._mount_point = mount_point
+        # ``mount_point=None`` ise env (Settings) çözer — pilot deploy'da
+        # CUSTOS_DISK_MONITOR_PATH override eder.
+        self._mount_point = (
+            mount_point if mount_point is not None else _default_mount_point()
+        )
         self._tick_seconds = tick_seconds
         self._threshold = threshold_percent
         self._cooldown = cooldown_seconds

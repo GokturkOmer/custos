@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     query_guard_1min_max_tag_days: float = 200.0
     query_guard_1hour_max_days: float = 3650.0  # ~10 yıl
 
+    # Disk doluluk widget'ı + DiskMonitor tick'i izlenen mount point
+    # (v1.0.1 borç #2). Pilot deploy'da PostgreSQL data dir'i veya
+    # parquet arşiv mount'u olmalı; dev'de path yoksa shutil.disk_usage
+    # FileNotFoundError fırlatır ve DiskMonitor sessizce geçer.
+    custos_disk_monitor_path: str = "/var/custos"
+
     # Teknik asistan chatbot (F8b) ayarları.
     # knowledge_dir: Bilgi tabanı kök dizini — Markdown + YAML dokümanlar burada.
     # knowledge_local_dir: Saha-spesifik (lokal) dizin (V11-110, K6 hibrit).

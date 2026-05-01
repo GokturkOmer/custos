@@ -44,6 +44,32 @@ def test_disk_usage_missing_mount_raises() -> None:
         get_disk_usage("/kesinlikle-olmayan-custos-dizini-xyz")
 
 
+def test_env_override_changes_default_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``CUSTOS_DISK_MONITOR_PATH`` env'i set edildiğinde default mount o
+    path'e geçer; explicit override hâlâ önceliklidir.
+
+    v1.0.1 borç #2: pilot deploy /var/custos mount'unu kurmazsa root FS'e
+    düşmesin diye env'den okuma kritik.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        monkeypatch.setenv("CUSTOS_DISK_MONITOR_PATH", tmpdir)
+
+        # Default (path=None) env'den okur — tmpdir görmeli.
+        usage_default = get_disk_usage()
+        assert usage_default.mount_point == tmpdir
+
+        # Explicit path verildiğinde env yok sayılır.
+        with tempfile.TemporaryDirectory() as other_tmp:
+            usage_explicit = get_disk_usage(other_tmp)
+            assert usage_explicit.mount_point == other_tmp
+
+        # DiskMonitor de mount_point=None'da env'i çözer.
+        monitor = DiskMonitor(db=None)  # type: ignore[arg-type]
+        assert monitor._mount_point == tmpdir
+
+
 def _fake_usage(used_percent: float) -> DiskUsage:
     """Test helper'ı — istediğimiz yüzdede sahte DiskUsage üretir."""
     total = 1000 * 1024**3  # 1000 GB

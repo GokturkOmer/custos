@@ -569,7 +569,9 @@ async def overview(request: Request) -> HTMLResponse:
         "disk_monitor",
         None,
     )
-    mount_init = monitor_init._mount_point if monitor_init is not None else "/var/custos"
+    # Monitor varsa zaten env-bilinçli mount tutuyor; yoksa get_disk_usage
+    # default'unu (Settings.custos_disk_monitor_path) kullansın.
+    mount_init = monitor_init._mount_point if monitor_init is not None else None
     try:
         usage_init = await asyncio.to_thread(get_disk_usage, mount_init)
         disk_info_init = _disk_usage_to_dict(usage_init)
@@ -3274,7 +3276,7 @@ async def settings_page(request: Request) -> HTMLResponse:
         "disk_monitor",
         None,
     )
-    mount = monitor._mount_point if monitor is not None else "/var/custos"
+    mount = monitor._mount_point if monitor is not None else None
     try:
         usage = await asyncio.to_thread(get_disk_usage, mount)
         disk_info = _disk_usage_to_dict(usage)
@@ -3703,7 +3705,7 @@ async def api_disk_usage(request: Request) -> HTMLResponse:
         "disk_monitor",
         None,
     )
-    mount = monitor._mount_point if monitor is not None else "/var/custos"
+    mount = monitor._mount_point if monitor is not None else None
     disk_info: dict[str, Any] | None = None
     try:
         usage = await asyncio.to_thread(get_disk_usage, mount)
