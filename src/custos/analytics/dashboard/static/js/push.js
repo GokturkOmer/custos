@@ -321,6 +321,16 @@ document.addEventListener("alpine:init", function () {
         } catch (e) {
           this.error = e.message || "Master switch hatası";
         }
+        // Bug telafi: subscribe akışındaki window.prompt() sonrasında
+        // browser'ın scroll lock'ı bozuluyor; toggle render'ı sırasında
+        // viewport içeriğin altına kayıp ekran kararıyor. push-recipients
+        // elementine scrollIntoView ile sabitliyoruz. Root cause prompt()
+        // → custom modal geçişi v1.0.1 borç.
+        setTimeout(() => {
+          document
+            .getElementById("push-recipients")
+            ?.scrollIntoView({ block: "center" });
+        }, 50);
       },
     };
   });

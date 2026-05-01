@@ -16,6 +16,10 @@ self.addEventListener("push", function (event) {
     icon: "/static/img/custos-icon-192.png",
     badge: "/static/img/custos-icon-192.png",
     tag: payload.tag || "custos-alarm",
+    // Aynı severity için tag aynı (custos-warn vb). renotify=true olmadan
+    // browser ikinci bildirimi sessizce eskinin yerine koyar — operatör
+    // görmez. renotify her seferinde yeniden uyarır (titreşim/ses dahil).
+    renotify: true,
     data: { url: payload.url || "/dashboard/alarms" },
   };
 
