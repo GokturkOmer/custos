@@ -20,6 +20,11 @@ document.addEventListener("alpine:init", function () {
       loading: false,
       error: "",
       vapidPublicKey: "",
+      // v1.0.1 borç #4: window.prompt() Chrome scroll lock'ını bozuyor
+      // (sustur toggle ekran kararma root cause). subscribe() artık modal
+      // açar, kullanıcı "Devam" der → _doSubscribe çalışır.
+      labelModalOpen: false,
+      pendingLabel: "",
 
       async init() {
         if (!this.supported) return;
@@ -45,21 +50,28 @@ document.addEventListener("alpine:init", function () {
         }
       },
 
-      async subscribe() {
+      subscribe() {
         if (!this.supported || !this.vapidPublicKey) return;
+        // Modal'ı aç; default label'ı UA'dan tahmin et. Kullanıcı düzenleyip
+        // "Devam"a basar veya "İptal" eder. Async iş _doSubscribe'da.
+        this.pendingLabel = this._defaultLabel();
+        this.error = "";
+        this.labelModalOpen = true;
+      },
 
-        // P-03: Subscribe öncesi label sor — boş bırakılırsa tarayıcı/cihaz
-        // adından tahmin edilen default. İptal edilirse abonelik iptal.
-        const defaultLabel = this._defaultLabel();
-        const label = window.prompt(
-          "Bu cihazı tanımlamak için bir ad gir (örn. 'Ali — Telefon'):",
-          defaultLabel,
-        );
-        if (label === null) {
-          // Kullanıcı iptal etti — abonelik akışı baştan iptal.
-          return;
-        }
+      cancelLabel() {
+        this.labelModalOpen = false;
+        this.pendingLabel = "";
+      },
 
+      async confirmLabel() {
+        const label = (this.pendingLabel || "").trim();
+        this.labelModalOpen = false;
+        this.pendingLabel = "";
+        await this._doSubscribe(label);
+      },
+
+      async _doSubscribe(label) {
         this.loading = true;
         this.error = "";
 
@@ -86,7 +98,7 @@ document.addEventListener("alpine:init", function () {
               endpoint: subJson.endpoint,
               p256dh: subJson.keys.p256dh,
               auth: subJson.keys.auth,
-              label: label.trim(),
+              label: label,
             }),
           });
 
@@ -321,11 +333,10 @@ document.addEventListener("alpine:init", function () {
         } catch (e) {
           this.error = e.message || "Master switch hatası";
         }
-        // Bug telafi: subscribe akışındaki window.prompt() sonrasında
-        // browser'ın scroll lock'ı bozuluyor; toggle render'ı sırasında
-        // viewport içeriğin altına kayıp ekran kararıyor. push-recipients
-        // elementine scrollIntoView ile sabitliyoruz. Root cause prompt()
-        // → custom modal geçişi v1.0.1 borç.
+        // Toggle sonrası push-recipients görünür kalsın — viewport iç içe
+        // scroll geometrisinde kayma yaşandığında listeyi merkezde tutar.
+        // Subscribe akışı window.prompt'tan custom modal'a geçti
+        // (v1.0.1 borç #4); bu scrollIntoView puristik defansif tutuluyor.
         setTimeout(() => {
           document
             .getElementById("push-recipients")

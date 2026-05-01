@@ -435,6 +435,57 @@
       </div>
       {% endif %}
     </div>
+
+    {# Subscribe label modal — v1.0.1 borç #4: window.prompt() Chrome scroll
+       lock'ını bozuyordu (sustur toggle ekran kararma root cause). Custom
+       Alpine modal — ESC ile iptal, Enter ile devam. #}
+    <div x-show="labelModalOpen"
+         x-cloak
+         x-transition.opacity
+         @keydown.escape.window="cancelLabel()"
+         class="fixed inset-0 z-50 flex items-center justify-center
+                bg-black/60 backdrop-blur-sm p-4">
+      <div @click.outside="cancelLabel()"
+           class="w-full max-w-md bg-bg-surface border border-border-weak
+                  rounded-lg shadow-xl overflow-hidden">
+        <div class="px-4 py-3 border-b border-border-weak">
+          <h3 class="text-panel-title text-text-primary font-semibold">
+            Cihaz adı
+          </h3>
+        </div>
+        <form @submit.prevent="confirmLabel()" class="p-4 space-y-3">
+          <p class="text-small text-text-secondary">
+            Bu cihazı listede tanımlamak için bir ad girin
+            (örn. <em>Ali — Telefon</em>). Boş bırakılabilir.
+          </p>
+          <input type="text"
+                 x-model="pendingLabel"
+                 x-ref="labelInput"
+                 x-effect="if (labelModalOpen) $nextTick(() => $refs.labelInput?.focus())"
+                 maxlength="120"
+                 class="w-full px-3 py-2 text-body bg-bg-elevated
+                        border border-border-weak rounded-md
+                        text-text-primary placeholder-text-secondary
+                        focus:border-accent-primary focus:outline-none">
+          <div class="flex justify-end gap-2 pt-2">
+            <button type="button"
+                    @click="cancelLabel()"
+                    class="px-4 py-1.5 text-small font-medium text-text-secondary
+                           bg-bg-elevated border border-border-weak rounded-md
+                           hover:text-text-primary hover:border-border-medium
+                           transition-colors">
+              İptal
+            </button>
+            <button type="submit"
+                    class="px-4 py-1.5 text-small font-medium text-white
+                           bg-accent-primary rounded-md hover:bg-accent-hover
+                           transition-colors">
+              Devam
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 
   {# B2) Bildirim Alıcıları (P-03 / V11-103) — push çoklu alıcı yönetimi #}
