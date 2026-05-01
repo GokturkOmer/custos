@@ -1,14 +1,21 @@
 """Severity Escalation arka plan task'ı (R-06 / V11-306).
 
-``warn`` severity ile tetiklenen alarm operatör tarafından zamanında
-ele alınmazsa otomatik olarak ``crit`` severity'ye yükseltilir + push
-tetiklenir. Yükseltme süresi singleton ``retention_config.escalation_warn_to_crit_minutes``
-(default 30, range 5-240) ile globaldir.
+``warn`` severity ile tetiklenen **kullanıcı tanımlı** alarm operatör
+tarafından zamanında ele alınmazsa otomatik olarak ``crit`` severity'ye
+yükseltilir + push tetiklenir. Yükseltme süresi singleton
+``retention_config.escalation_warn_to_crit_minutes`` (default 30,
+range 5-240) ile globaldir.
+
+**Kapsam (1 May 2026, kullanıcı kuralı):** Critical sadece kullanıcının
+kendi tanımladığı kaynaklarda olur — yani ``source='threshold'`` veya
+``source='cross_sensor'``. Otomatik üretilen alarmlar (liveness, anomaly,
+spc, watchdog, rate_of_change) crit'e yükseltilmez; warn olarak kalır.
+Operatör manuel olarak kapatır.
 
 Algoritma — her tick'te:
 
 1. Aktif (``cleared_at IS NULL``), ``warn`` severity, henüz yükseltilmemiş
-   (``escalated_from IS NULL``) alarm'ları çek.
+   (``escalated_from IS NULL``), ``source IN _ESCALATABLE_SOURCES`` alarm'ları çek.
 2. ``now - triggered_at >= threshold_minutes`` ise:
    - ``severity='crit'``, ``escalated_from='warn'``, ``escalated_at=now``
    - Push gönder (crit kanalı)
@@ -55,6 +62,14 @@ _TICK_INTERVAL_SECONDS: Final[float] = 60.0
 # açtıysa hepsini tek tick'te yükseltmek istemiyoruz). Pilot ölçeğinde
 # 200 yeter; aşılırsa bir sonraki tick'te kalan kayıt işlenir.
 _MAX_ALARMS_PER_TICK: Final[int] = 200
+
+# Yalnızca kullanıcı tanımlı kaynaklar warn → crit yükseltilir. Otomatik
+# kaynaklar (liveness, anomaly, spc, watchdog, rate_of_change) operatörün
+# kararı olmadan crit'e çıkamaz; warn'da kalır. Kullanıcı kuralı (1 May
+# 2026): "Critical alarm sadece kullanıcının kendi belirlediği eşik veya
+# sistem üzerinde olur." threshold + cross_sensor: ikisi de UI'dan kullanıcı
+# tarafından tanımlanır.
+_ESCALATABLE_SOURCES: Final[frozenset[str]] = frozenset({"threshold", "cross_sensor"})
 
 
 class EscalationLoop:
@@ -126,6 +141,7 @@ class EscalationLoop:
         candidates = triggered + acknowledged
 
         escalated_count = 0
+        skipped_non_user_source = 0
         for alarm in candidates:
             if alarm.id is None:
                 continue
@@ -137,6 +153,11 @@ class EscalationLoop:
             if alarm.is_test:
                 # Bakım modu alarm'ı — yükseltme yok (push gitmiyor zaten,
                 # operasyonel sinyal değil).
+                continue
+            if alarm.source not in _ESCALATABLE_SOURCES:
+                # Otomatik kaynak (liveness/anomaly/spc/watchdog/rate_of_change)
+                # — kullanıcı tanımlı değil, crit'e çıkmaz.
+                skipped_non_user_source += 1
                 continue
             if alarm.triggered_at is None:
                 continue
@@ -155,10 +176,11 @@ class EscalationLoop:
             )
             escalated_count += 1
 
-        if escalated_count > 0:
+        if escalated_count > 0 or skipped_non_user_source > 0:
             await logger.ainfo(
                 "Escalation tick tamamlandı",
                 escalated_count=escalated_count,
+                skipped_non_user_source=skipped_non_user_source,
                 threshold_minutes=threshold_minutes,
             )
 

@@ -12,6 +12,10 @@ Sınanan davranışlar:
 3. Zaten yükseltilmiş alarm tekrar dokunulmaz.
 4. ``is_test=True`` alarm yükseltme yapılmaz (bakım modu).
 5. Severity ``warn`` dışı (ör. ``info``, ``crit``) alarm yükseltilmez.
+6. Otomatik kaynaklı (liveness/anomaly/spc/watchdog/rate_of_change)
+   warn alarm yükseltilmez — kullanıcı kuralı: crit sadece kullanıcı
+   tanımlı kaynaklarda (threshold/cross_sensor).
+7. ``cross_sensor`` kaynaklı warn alarm crit'e yükseltilir.
 """
 
 from __future__ import annotations
@@ -105,8 +109,13 @@ def _make_alarm(
     age_minutes: float = 0.0,
     is_test: bool = False,
     escalated_from: str | None = None,
+    source: str = "threshold",
 ) -> AlarmEvent:
-    """Test alarm'ı üretir; ``age_minutes`` triggered_at'i geçmişe iter."""
+    """Test alarm'ı üretir; ``age_minutes`` triggered_at'i geçmişe iter.
+
+    Default ``source='threshold'`` — kullanıcı tanımlı kaynak, escalate
+    edilebilir. Otomatik kaynak testleri için açıkça override edilir.
+    """
     triggered = datetime.now(UTC) - timedelta(minutes=age_minutes)
     return AlarmEvent(
         id=alarm_id,
@@ -117,6 +126,7 @@ def _make_alarm(
         severity=severity,
         is_test=is_test,
         escalated_from=escalated_from,
+        source=source,
     )
 
 
@@ -240,3 +250,47 @@ async def test_acknowledged_warn_alarm_is_escalated(
     event_id, updates = db.update_calls[0]
     assert event_id == 99
     assert updates["severity"] == "crit"
+
+
+@pytest.mark.parametrize(
+    "auto_source",
+    ["liveness", "anomaly", "spc", "watchdog", "rate_of_change"],
+)
+async def test_auto_source_alarm_is_not_escalated(
+    auto_source: str,
+    _stub_push: list[dict[str, Any]],
+) -> None:
+    """Otomatik kaynaklar (liveness/anomaly/spc/watchdog/rate_of_change)
+    eşik aşsa bile crit'e yükseltilmez. Kullanıcı kuralı: critical sadece
+    kullanıcı tanımlı kaynaklarda (threshold/cross_sensor)."""
+    db = _StubDB(
+        triggered=[
+            _make_alarm(alarm_id=50, age_minutes=120.0, source=auto_source),
+        ],
+        escalation_minutes=30,
+    )
+    loop = EscalationLoop(db=db)  # type: ignore[arg-type]
+    await loop._tick()
+    assert db.update_calls == []
+    assert db.audit_calls == []
+    assert _stub_push == []
+
+
+async def test_cross_sensor_alarm_is_escalated(
+    _stub_push: list[dict[str, Any]],
+) -> None:
+    """Cross-sensor alarmları kullanıcı tanımlı kuralla üretilir → crit'e
+    yükseltilir."""
+    db = _StubDB(
+        triggered=[
+            _make_alarm(alarm_id=77, age_minutes=45.0, source="cross_sensor"),
+        ],
+        escalation_minutes=30,
+    )
+    loop = EscalationLoop(db=db)  # type: ignore[arg-type]
+    await loop._tick()
+    assert len(db.update_calls) == 1
+    event_id, updates = db.update_calls[0]
+    assert event_id == 77
+    assert updates["severity"] == "crit"
+    assert updates["escalated_from"] == "warn"
