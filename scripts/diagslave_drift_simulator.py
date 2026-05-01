@@ -194,11 +194,18 @@ def _pressure_raw(reg_idx: int, t: float, prev: int) -> int:
 
 
 def _energy_step(prev: int) -> int:
-    """Enerji raw: monoton artan kWh sayacı, tick başına 0-2 artış.
+    """Enerji raw: monoton artan kWh sayacı, tick başına ortalama ~0.05 artış.
 
-    uint16 sınırına yaklaşınca rollover (sayaç reset davranışı).
+    Eski hız (0-2 / 60-35-5 weights, ort 0.45/tick) ~30 saatte uint16 sınırına
+    ulasiyordu → rollover (65000 → 0) → Custos liveness counter pipeline
+    "geri gitti" sahte alarmi tetikliyordu (50 KWH tag iceren saha icin
+    feci gorsel). Yeni hiz demo penceresinde (4-5 gun) max'a ulasmaz:
+        4 gun × 86400 sn × 0.05 ort = ~17280 birim/4 gun (max 65000'in 1/4).
+    Pilot icin liveness rollover-aware yapilacak (v1.0.1, sec. B).
+
+    uint16 sınırına yaklaşırsa rollover korunur (Modbus register max 65535).
     """
-    inc = random.choices([0, 1, 2], weights=[60, 35, 5])[0]
+    inc = random.choices([0, 1], weights=[95, 5])[0]
     new_val = prev + inc
     if new_val >= ENERGY_ROLLOVER:
         return 0
