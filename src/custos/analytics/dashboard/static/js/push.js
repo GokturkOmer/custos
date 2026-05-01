@@ -25,7 +25,7 @@ document.addEventListener("alpine:init", function () {
         if (!this.supported) return;
 
         try {
-          const resp = await fetch("/api/push/vapid-public-key");
+          const resp = await fetch("/dashboard/api/push/vapid-public-key");
           if (!resp.ok) return;
           const data = await resp.json();
           this.vapidPublicKey = data.public_key;
@@ -65,7 +65,11 @@ document.addEventListener("alpine:init", function () {
 
         try {
           const reg = await navigator.serviceWorker.register("/static/js/sw.js");
-          await navigator.serviceWorker.ready;
+          // navigator.serviceWorker.ready, mevcut sayfayı kontrol eden SW'yi
+          // bekler. SW scope'u /static/js/, sayfa /dashboard/settings — SW
+          // sayfayı kontrol etmiyor, ready hiç resolve etmez. Bunun yerine
+          // register'dan dönen registration'ın activate olmasını bekliyoruz.
+          await this._waitForActivation(reg);
 
           const key = this._urlBase64ToUint8Array(this.vapidPublicKey);
 
@@ -75,7 +79,7 @@ document.addEventListener("alpine:init", function () {
           });
 
           const subJson = sub.toJSON();
-          const resp = await fetch("/api/push/subscribe", {
+          const resp = await fetch("/dashboard/api/push/subscribe", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -109,7 +113,7 @@ document.addEventListener("alpine:init", function () {
           if (reg) {
             const sub = await reg.pushManager.getSubscription();
             if (sub) {
-              await fetch("/api/push/subscribe", {
+              await fetch("/dashboard/api/push/subscribe", {
                 method: "DELETE",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ endpoint: sub.endpoint }),
@@ -130,7 +134,7 @@ document.addEventListener("alpine:init", function () {
       async sendTest() {
         this.error = "";
         try {
-          const resp = await fetch("/api/push/test", { method: "POST" });
+          const resp = await fetch("/dashboard/api/push/test", { method: "POST" });
           if (!resp.ok) {
             const data = await resp.json();
             this.error = data.detail || "Test bildirimi gönderilemedi";
@@ -138,6 +142,20 @@ document.addEventListener("alpine:init", function () {
         } catch (e) {
           this.error = e.message || "Test bildirimi gönderilemedi";
         }
+      },
+
+      _waitForActivation(reg) {
+        // Service worker register'i bittiğinde reg.installing/waiting/active
+        // dolu olur. Subscribe için aktivasyonu beklemek lazım, yoksa Chrome
+        // bazen "no active service worker" döndürür.
+        if (reg.active) return Promise.resolve();
+        const sw = reg.installing || reg.waiting;
+        if (!sw) return Promise.resolve();
+        return new Promise(function (resolve) {
+          sw.addEventListener("statechange", function () {
+            if (sw.state === "activated") resolve();
+          });
+        });
       },
 
       _defaultLabel() {
@@ -185,8 +203,8 @@ document.addEventListener("alpine:init", function () {
         this.error = "";
         try {
           const [subsResp, switchResp] = await Promise.all([
-            fetch("/api/push/subscriptions"),
-            fetch("/api/push/master-switch"),
+            fetch("/dashboard/api/push/subscriptions"),
+            fetch("/dashboard/api/push/master-switch"),
           ]);
           if (!subsResp.ok) throw new Error("Liste alınamadı");
           const subsData = await subsResp.json();
@@ -214,7 +232,7 @@ document.addEventListener("alpine:init", function () {
         this.success = "";
         const body = { endpoint: sub.endpoint, [field]: value };
         try {
-          const resp = await fetch("/api/push/subscriptions", {
+          const resp = await fetch("/dashboard/api/push/subscriptions", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -241,7 +259,7 @@ document.addEventListener("alpine:init", function () {
         if (!window.confirm(`'${labelTxt}' aboneliğini sil?`)) return;
         this.error = "";
         try {
-          const resp = await fetch("/api/push/subscribe", {
+          const resp = await fetch("/dashboard/api/push/subscribe", {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ endpoint: sub.endpoint }),
@@ -262,7 +280,7 @@ document.addEventListener("alpine:init", function () {
         this.error = "";
         this.success = "";
         try {
-          const resp = await fetch("/api/push/test", {
+          const resp = await fetch("/dashboard/api/push/test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ endpoint: sub.endpoint }),
@@ -288,7 +306,7 @@ document.addEventListener("alpine:init", function () {
         if (!this.isDeveloper) return;
         this.error = "";
         try {
-          const resp = await fetch("/api/push/master-switch", {
+          const resp = await fetch("/dashboard/api/push/master-switch", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ enabled: newState }),

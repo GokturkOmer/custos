@@ -5,7 +5,12 @@
 {% block title %}Settings — Custos{% endblock %}
 
 {% block scripts %}
-<script src="/static/js/push.js" defer></script>
+{# push.js Alpine.data() kayıtlarını ``alpine:init`` event'inde yapar.
+   Defer kaldırıldı: alpine.min.js'in (defer) ardından çalışırsa event'i
+   kaçırır → component init olmaz, x-data="pushManager()" hata verir. Defer'siz
+   body sonunda sync çalışır; addEventListener Alpine yüklenmeden önce
+   hazırlanır. #}
+<script src="/static/js/push.js"></script>
 {% endblock %}
 
 {% block content %}
