@@ -73,17 +73,28 @@ def _should_notify(sub: PushSubscription, severity: str, now_time: time) -> bool
     return False
 
 
-def _build_payload(title: str, body: str, severity: str) -> str:
+def _build_payload(
+    title: str,
+    body: str,
+    severity: str,
+    alarm_id: int | None = None,
+) -> str:
     """Web Push payload JSON'unu üretir.
+
+    ``alarm_id`` verilirse notification tag ``custos-{alarm_id}`` olur — her
+    alarm bildirim merkezinde ayrı satır olarak birikir. Aksi halde
+    ``custos-{severity}`` (geri uyumlu): disk/resource/escalation gibi
+    alarm-id'siz çağrılarda eski davranış korunur.
 
     Service worker emergency'de ``priority='high'`` flag'ini okuyup
     vibrate + requireInteraction uygular.
     """
+    tag = f"custos-{alarm_id}" if alarm_id is not None else f"custos-{severity}"
     return json.dumps(
         {
             "title": title,
             "body": body,
-            "tag": f"custos-{severity}",
+            "tag": tag,
             "url": "/dashboard/alarms",
             "priority": "high" if severity == "emergency" else "normal",
         }
@@ -152,6 +163,7 @@ async def send_push_notifications(
     body: str,
     severity: str,
     is_test: bool = False,
+    alarm_id: int | None = None,
 ) -> int:
     """Aktif abonelere push bildirim gönderir.
 
@@ -202,7 +214,7 @@ async def send_push_notifications(
     # Sessiz saat karsilastirmasi kullanicinin yerel saatinde yapilmali
     local_tz = ZoneInfo(settings.custos_timezone)
     now_time = datetime.now(UTC).astimezone(local_tz).time()
-    payload = _build_payload(title, body, severity)
+    payload = _build_payload(title, body, severity, alarm_id=alarm_id)
 
     sent = 0
     for sub in subs:
@@ -228,6 +240,7 @@ async def send_push_to_subscription(
     title: str,
     body: str,
     severity: str = "warn",
+    alarm_id: int | None = None,
 ) -> int:
     """Tek bir aboneliğe test push gönderir.
 
@@ -241,7 +254,7 @@ async def send_push_to_subscription(
         return 0
     _public_key, private_key = get_vapid_keys()
     mailto = get_vapid_mailto()
-    payload = _build_payload(title, body, severity)
+    payload = _build_payload(title, body, severity, alarm_id=alarm_id)
     return 1 if await _send_one_push(sub, payload, private_key, mailto, db) else 0
 
 

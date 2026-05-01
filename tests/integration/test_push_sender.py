@@ -3,15 +3,25 @@
 Sessiz saat ve severity filtresi kontrolü. P-03 ile genişletildi:
 ``enabled`` toggle, ``notify_info``/``notify_emergency`` ayrı kolonlar,
 master switch.
+
+v1.0.1 borç #3: ``_build_payload`` ``alarm_id`` parametresiyle
+notification tag'i unique yapar; ardışık alarmlar bildirim merkezinde
+ayrı satır olarak birikir (önceki davranış: aynı severity tek satır
+olarak ezilir).
 """
 
 from __future__ import annotations
 
+import json
 from datetime import time
 
 import pytest
 
-from custos.analytics.push_sender import _is_quiet_hour, _should_notify
+from custos.analytics.push_sender import (
+    _build_payload,
+    _is_quiet_hour,
+    _should_notify,
+)
 from custos.shared.database import PushSubscription
 
 
@@ -157,6 +167,42 @@ def test_should_notify_all_enabled() -> None:
     assert _should_notify(sub, "warn", time(12, 0)) is True
     assert _should_notify(sub, "crit", time(12, 0)) is True
     assert _should_notify(sub, "emergency", time(12, 0)) is True
+
+
+def test_build_payload_default_tag_uses_severity() -> None:
+    """``alarm_id=None`` (default) → tag custos-{severity} (geri uyumlu).
+
+    Disk/resource/escalation gibi alarm-id'siz çağrılarda eski davranış
+    korunmalı.
+    """
+    payload = json.loads(_build_payload("Title", "Body", "warn"))
+    assert payload["tag"] == "custos-warn"
+    assert payload["title"] == "Title"
+    assert payload["priority"] == "normal"
+
+
+def test_build_payload_alarm_id_makes_tag_unique() -> None:
+    """``alarm_id`` verilince tag custos-{id}; ardışık alarmlar ayrı satır."""
+    payload_1 = json.loads(
+        _build_payload("Title", "Body", "warn", alarm_id=42),
+    )
+    payload_2 = json.loads(
+        _build_payload("Title", "Body", "warn", alarm_id=43),
+    )
+    assert payload_1["tag"] == "custos-42"
+    assert payload_2["tag"] == "custos-43"
+    # Aynı severity ama farklı alarm_id → tag'ler farklı.
+    assert payload_1["tag"] != payload_2["tag"]
+
+
+def test_build_payload_emergency_priority_unaffected_by_alarm_id() -> None:
+    """``alarm_id`` priority alanını etkilemez — emergency hâlâ 'high'."""
+    with_id = json.loads(
+        _build_payload("T", "B", "emergency", alarm_id=1),
+    )
+    without_id = json.loads(_build_payload("T", "B", "emergency"))
+    assert with_id["priority"] == "high"
+    assert without_id["priority"] == "high"
 
 
 def test_quiet_hour_timezone_conversion(monkeypatch: pytest.MonkeyPatch) -> None:

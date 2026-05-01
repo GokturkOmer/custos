@@ -187,7 +187,7 @@ class LivenessEngine:
         is_test: bool,
     ) -> None:
         """Liveness alarm event'i oluşturur ve push'u tetikler."""
-        await self._db.insert_alarm_event(
+        created = await self._db.insert_alarm_event(
             AlarmEvent(
                 tag_id=tag.tag_id,
                 threshold_id=None,
@@ -209,6 +209,8 @@ class LivenessEngine:
 
         # Push bildirim — threshold_engine ile aynı yaklaşım. Bakım modunda
         # is_test=True ise send_push_notifications zaten atlar (P-04).
+        # alarm_id geçilince notification tag custos-{id} olur — bildirim
+        # merkezinde her alarm ayrı satır.
         try:
             await send_push_notifications(
                 db=self._db,
@@ -216,6 +218,7 @@ class LivenessEngine:
                 body=f"Tag {tag.tag_id}: {message}",
                 severity="warn",
                 is_test=is_test,
+                alarm_id=created.id,
             )
         except Exception:
             await logger.awarning(

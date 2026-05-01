@@ -285,6 +285,8 @@ class ThresholdEngine:
         )
 
         # Push bildirim — bakım modu alarm'larında atlanır (is_test=True).
+        # alarm_id geçilirse notification tag custos-{id} (her alarm ayrı
+        # satır olarak browser bildirim merkezinde birikir).
         try:
             await send_push_notifications(
                 db=self._db,
@@ -295,6 +297,7 @@ class ThresholdEngine:
                 ),
                 severity=threshold.severity,
                 is_test=is_test,
+                alarm_id=created.id,
             )
         except Exception:
             await logger.awarning(
@@ -557,7 +560,7 @@ class ThresholdEngine:
                     self._db, instance_id, now,
                 )
 
-        await self._db.insert_alarm_event(
+        created = await self._db.insert_alarm_event(
             AlarmEvent(
                 threshold_id=None,
                 tag_id=tag_id,
@@ -601,6 +604,7 @@ class ThresholdEngine:
         )
 
         # Push — bakım modu zaten send_push_notifications içinde atlıyor.
+        # alarm_id geçilince bildirim merkezinde her alarm ayrı satır.
         try:
             await send_push_notifications(
                 db=self._db,
@@ -608,6 +612,7 @@ class ThresholdEngine:
                 body=message,
                 severity=severity,
                 is_test=is_test,
+                alarm_id=created.id,
             )
         except Exception:
             await logger.awarning(
