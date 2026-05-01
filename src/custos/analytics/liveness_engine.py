@@ -58,6 +58,15 @@ _LOOKBACK_HOURS: Final[int] = 2
 # alarmı acknowledge etmese bile hourly tekrar gürültüsü yok.
 _COOLDOWN: Final[timedelta] = timedelta(hours=1)
 
+# Counter rollover heuristic — Modbus uint16 sayaçları (kWh, m³ vb.)
+# 65535'e ulaşınca 0'a sarar (rollover). Pencerenin başı yüksek (>60000)
+# ve sonu düşük (<5000) ise sahte alarm yerine rollover kabul edilir.
+# Eşikler güvenlik payı bırakır: pencere içinde sayaç ~5500 birim daha
+# arttıktan sonra rollover'ı yakalayan testler bile çalışır, bu arada
+# 30000 → 28000 gibi gerçek geri-gitmeleri yakalamaya devam eder.
+_COUNTER_ROLLOVER_HIGH_THRESHOLD: Final[float] = 60000.0
+_COUNTER_ROLLOVER_LOW_THRESHOLD: Final[float] = 5000.0
+
 
 class LivenessEngine:
     """Stuck-at + counter mode kural-bazlı sensör donma tespiti.
@@ -145,7 +154,7 @@ class LivenessEngine:
 
             preset = resolve_effective_preset(tag)
             if preset == "counter":
-                message = _check_counter(readings, seconds)
+                message = await _check_counter(readings, seconds, tag.tag_id)
             else:
                 message = _check_stuck_at(readings, seconds, now)
 
@@ -246,11 +255,17 @@ def _check_stuck_at(
     return None
 
 
-def _check_counter(readings: list[TagReading], seconds: int) -> str | None:
+async def _check_counter(
+    readings: list[TagReading],
+    seconds: int,
+    tag_id: str,
+) -> str | None:
     """Counter tag (sayaç) için iki kural birden:
 
-    1. Son değer ilk değerden küçükse → sayaç geri gitti (taşma değil
-       genelde gerçek arıza).
+    1. Son değer ilk değerden küçükse → sayaç geri gitti. Modbus uint16
+       sayaçlarında 65535 → 0 sarması (rollover) protokolde normal
+       davranıştır; ``first_value > 60000`` ve ``last_value < 5000`` ise
+       rollover kabul edilir, alarm yok (sadece debug log).
     2. Son değer ilk değere eşitse ve pencere ``seconds``'i aştıysa →
        sayaç durağan, beklenen artış yok.
     """
@@ -258,6 +273,18 @@ def _check_counter(readings: list[TagReading], seconds: int) -> str | None:
     last_value = readings[-1].value
 
     if last_value < first_value:
+        # uint16 rollover'ı sahte alarmdan ayır.
+        if (
+            first_value > _COUNTER_ROLLOVER_HIGH_THRESHOLD
+            and last_value < _COUNTER_ROLLOVER_LOW_THRESHOLD
+        ):
+            await logger.adebug(
+                "Counter rollover kabul edildi",
+                tag_id=tag_id,
+                from_value=first_value,
+                to_value=last_value,
+            )
+            return None
         return f"Counter geri gitti: {first_value:.2f} → {last_value:.2f}"
 
     if last_value == first_value:
