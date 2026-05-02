@@ -118,7 +118,9 @@ async def test_check_counter_decreasing_value_alarm() -> None:
         _make_reading(995.0, now - timedelta(seconds=300)),
         _make_reading(990.0, now),
     ]
-    msg = await _check_counter(readings, seconds=300, tag_id="TAG_TEST")
+    msg = await _check_counter(
+        readings, seconds=300, tag_id="TAG_TEST", register_type="uint16",
+    )
     assert msg is not None
     assert "geri gitti" in msg
 
@@ -132,12 +134,14 @@ async def test_check_counter_stagnant_alarm() -> None:
         _make_reading(500.0, now),
     ]
     # 600 sn pencere, eşik 300 sn → alarm
-    msg = await _check_counter(readings, seconds=300, tag_id="TAG_TEST")
+    msg = await _check_counter(
+        readings, seconds=300, tag_id="TAG_TEST", register_type="uint16",
+    )
     assert msg is not None
     assert "durağan" in msg or "artmıyor" in msg
 
     # Eşik 700 sn → henüz alarm yok
     msg_no_alarm = await _check_counter(
-        readings, seconds=700, tag_id="TAG_TEST",
+        readings, seconds=700, tag_id="TAG_TEST", register_type="uint16",
     )
     assert msg_no_alarm is None

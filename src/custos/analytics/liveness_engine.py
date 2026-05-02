@@ -154,7 +154,9 @@ class LivenessEngine:
 
             preset = resolve_effective_preset(tag)
             if preset == "counter":
-                message = await _check_counter(readings, seconds, tag.tag_id)
+                message = await _check_counter(
+                    readings, seconds, tag.tag_id, tag.register_type,
+                )
             else:
                 message = _check_stuck_at(readings, seconds, now)
 
@@ -262,13 +264,17 @@ async def _check_counter(
     readings: list[TagReading],
     seconds: int,
     tag_id: str,
+    register_type: str,
 ) -> str | None:
     """Counter tag (sayaç) için iki kural birden:
 
     1. Son değer ilk değerden küçükse → sayaç geri gitti. Modbus uint16
        sayaçlarında 65535 → 0 sarması (rollover) protokolde normal
-       davranıştır; ``first_value > 60000`` ve ``last_value < 5000`` ise
-       rollover kabul edilir, alarm yok (sadece debug log).
+       davranıştır; ``register_type == "uint16"`` AND ``first_value > 60000``
+       AND ``last_value < 5000`` ise rollover kabul edilir, alarm yok
+       (sadece debug log). uint32/int32/float32 counter'lar pratikte
+       rollover yapmaz (uint32 max 4.29 milyar) — bu tiplerde her azalma
+       gerçek arıza sayılır.
     2. Son değer ilk değere eşitse ve pencere ``seconds``'i aştıysa →
        sayaç durağan, beklenen artış yok.
     """
@@ -276,9 +282,11 @@ async def _check_counter(
     last_value = readings[-1].value
 
     if last_value < first_value:
-        # uint16 rollover'ı sahte alarmdan ayır.
+        # uint16 rollover'ı sahte alarmdan ayır. Heuristik sadece uint16'da
+        # geçerli; uint32/int32/float32'de değer aralığına bakmadan alarm.
         if (
-            first_value > _COUNTER_ROLLOVER_HIGH_THRESHOLD
+            register_type == "uint16"
+            and first_value > _COUNTER_ROLLOVER_HIGH_THRESHOLD
             and last_value < _COUNTER_ROLLOVER_LOW_THRESHOLD
         ):
             await logger.adebug(

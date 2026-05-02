@@ -3,8 +3,10 @@
 ``_check_counter`` davranışı:
 
 - uint16 rollover (65535 → 0) sahte alarm olarak okunmamalı; eşikler
-  ``first > 60000 AND last < 5000``. Diğer azalmalar gerçek sayaç-geri
-  gitti olarak alarm tetikler.
+  ``first > 60000 AND last < 5000`` AND ``register_type == "uint16"``.
+- uint32/int32/float32 counter'lar pratikte rollover yapmaz; bu tiplerde
+  her azalma gerçek arıza olarak alarm tetikler — değer aralığına
+  bakılmaz.
 - Sayaç durağansa (pencere boyu eşiği aşmış, değer aynı) "Counter durağan"
   mesajı döner — bu davranış v1.0.1 fix'inden önce de vardı, regresyon
   yaşamadığını doğrulamak için tutuyoruz.
@@ -47,7 +49,9 @@ def _make_readings(
 async def test_counter_rollover_no_alarm() -> None:
     """uint16 rollover (63000 → 1700) sahte alarma yol açmamalı."""
     readings = _make_readings([63000.0, 63500.0, 64200.0, 1700.0])
-    message = await _check_counter(readings, seconds=300, tag_id="KWH_01")
+    message = await _check_counter(
+        readings, seconds=300, tag_id="KWH_01", register_type="uint16",
+    )
     assert message is None
 
 
@@ -55,7 +59,9 @@ async def test_counter_rollover_no_alarm() -> None:
 async def test_counter_real_decrease_still_triggers() -> None:
     """Eşik altında gerçek azalma (30000 → 28000) hâlâ alarm üretir."""
     readings = _make_readings([30000.0, 29500.0, 28000.0])
-    message = await _check_counter(readings, seconds=300, tag_id="KWH_02")
+    message = await _check_counter(
+        readings, seconds=300, tag_id="KWH_02", register_type="uint16",
+    )
     assert message is not None
     assert "Counter geri gitti" in message
 
@@ -65,7 +71,9 @@ async def test_counter_small_decrease_below_high_threshold_triggers() -> None:
     """``first <= 60000`` ise rollover heuristic'i devreye girmez —
     örnek: 70 → 50 azalması gerçek arıza."""
     readings = _make_readings([70.0, 60.0, 50.0])
-    message = await _check_counter(readings, seconds=300, tag_id="KWH_03")
+    message = await _check_counter(
+        readings, seconds=300, tag_id="KWH_03", register_type="uint16",
+    )
     assert message is not None
     assert "Counter geri gitti" in message
 
@@ -78,7 +86,9 @@ async def test_counter_stagnant_still_alarms() -> None:
         [42.0] * 11,
         spacing_seconds=60,
     )
-    message = await _check_counter(readings, seconds=300, tag_id="KWH_04")
+    message = await _check_counter(
+        readings, seconds=300, tag_id="KWH_04", register_type="uint16",
+    )
     assert message is not None
     assert "Counter durağan" in message
 
@@ -88,7 +98,43 @@ async def test_counter_rollover_threshold_boundary() -> None:
     """Eşik tam sınırda (first=60000, last=5000) heuristic devreye
     girmemeli (strict greater/less than). Bu da gerçek geri-gitti."""
     readings = _make_readings([60000.0, 5000.0])
-    message = await _check_counter(readings, seconds=300, tag_id="KWH_05")
+    message = await _check_counter(
+        readings, seconds=300, tag_id="KWH_05", register_type="uint16",
+    )
+    assert message is not None
+    assert "Counter geri gitti" in message
+
+
+@pytest.mark.asyncio
+async def test_counter_uint32_decrease_in_rollover_range_still_alarms() -> None:
+    """uint32 counter'da uint16 rollover penceresine düşen azalma
+    (60001 → 4999) gerçek arızadır; heuristic uint32'ye uygulanmaz."""
+    readings = _make_readings([60001.0, 30000.0, 4999.0])
+    message = await _check_counter(
+        readings, seconds=300, tag_id="KWH_U32", register_type="uint32",
+    )
+    assert message is not None
+    assert "Counter geri gitti" in message
+
+
+@pytest.mark.asyncio
+async def test_counter_int32_decrease_in_rollover_range_still_alarms() -> None:
+    """int32 counter'da da rollover heuristic'i devre dışıdır."""
+    readings = _make_readings([62000.0, 1000.0])
+    message = await _check_counter(
+        readings, seconds=300, tag_id="KWH_I32", register_type="int32",
+    )
+    assert message is not None
+    assert "Counter geri gitti" in message
+
+
+@pytest.mark.asyncio
+async def test_counter_float32_decrease_in_rollover_range_still_alarms() -> None:
+    """float32 counter'da rollover heuristic'i devre dışıdır."""
+    readings = _make_readings([63500.0, 2000.0])
+    message = await _check_counter(
+        readings, seconds=300, tag_id="KWH_F32", register_type="float32",
+    )
     assert message is not None
     assert "Counter geri gitti" in message
 
