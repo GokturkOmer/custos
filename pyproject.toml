@@ -16,7 +16,7 @@ dependencies = [
     # migration'ları prepared statement protocol altında reddettiği için
     # (migration 012 alarm_events: CREATE TABLE + 3 CREATE INDEX aynı
     # op.execute()'ta) Q3=(a) fallback'e dönüldü.
-    "psycopg2-binary>=2.9",
+    "psycopg2-binary>=2.9.12",
     "pydantic-settings",
     "pymodbus>=3.6.0,<3.13.0",
     "structlog",
