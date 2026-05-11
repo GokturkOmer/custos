@@ -1,0 +1,32 @@
+[Unit]
+# Custos Wind Pivot — CSV replay simulator (Faz 1.2'de yazilacak)
+#
+# Bu unit Faz 1.1'de YAZILIR ama ENABLE EDILMEZ. Faz 1.2 (Prompt 2) ile
+# birlikte scripts/csv_replay_simulator.py implement edildiginde aktive
+# edilir. Simulator Wind Farm A datasets/*.csv'yi okur, 10 dk aggregate
+# satirlari Modbus register'lara yazar (port 5021 diagslave).
+#
+# AVM mutator pattern'i ile paralel: dataset CSV → mutator → diagslave
+# → Custos critical loop (port 5021) → custos_wind DB.
+Description=Custos Wind — CSV Replay Simulator (Wind Farm A → diagslave)
+After=custos-wind-diagslave.service
+Requires=custos-wind-diagslave.service
+
+[Service]
+Type=simple
+User=orientpro
+Group=orientpro
+WorkingDirectory=/home/orientpro/projeler/custos
+EnvironmentFile=/home/orientpro/projeler/custos/_personal/wind_pivot/.env.wind
+# Faz 1.1 itibariyle bu script YAZILMADI — Prompt 2'de eklenecek.
+# Unit dosyasini simdiden hazirliyoruz ki kullanici manuel olarak
+# systemctl enable etmeden kalip dursun. Script yazildiktan sonra
+# systemctl daemon-reload + systemctl enable --now ile aktive edilir.
+ExecStart=/home/orientpro/projeler/custos/.venv/bin/python /home/orientpro/projeler/custos/scripts/csv_replay_simulator.py --dataset-dir /home/orientpro/projeler/custos/_personal/wind_pivot/raw/CARE_To_Compare/Wind\x20Farm\x20A/datasets --diagslave-port 5021
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/var/log/custos-wind/mutator.log
+StandardError=append:/var/log/custos-wind/mutator.log
+
+[Install]
+WantedBy=multi-user.target

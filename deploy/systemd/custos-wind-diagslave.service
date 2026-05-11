@@ -1,0 +1,21 @@
+[Unit]
+# Custos Wind Pivot — diagslave (Modbus TCP slave port 5021)
+# AVM production 502 ve endurance 502 ile cakismayan dedicated port.
+Description=Custos Wind — diagslave (Modbus TCP slave port 5021)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orientpro
+Group=orientpro
+# Port 5021 unprivileged (>1024) — setcap gerekmez.
+# -a 1 unit_id 1; replay simulator bu unit'e yazar.
+ExecStart=/usr/local/bin/diagslave -m tcp -p 5021 -a 1
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/custos-wind/diagslave.log
+StandardError=append:/var/log/custos-wind/diagslave.log
+
+[Install]
+WantedBy=multi-user.target

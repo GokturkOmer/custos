@@ -1,0 +1,20 @@
+[Unit]
+# Custos Wind Pivot — Metrics Daemon (5 dakika CSV snapshot)
+# Endurance metrics scriptini ortak kullanir; DSN ve out path .env.wind'den.
+Description=Custos Wind — Metrics Daemon (5 dk CSV snapshot)
+After=custos-wind.service custos-wind-critical.service
+
+[Service]
+Type=simple
+User=orientpro
+Group=orientpro
+WorkingDirectory=/home/orientpro/projeler/custos
+EnvironmentFile=/home/orientpro/projeler/custos/_personal/wind_pivot/.env.wind
+ExecStart=/home/orientpro/projeler/custos/.venv/bin/python /home/orientpro/projeler/custos/scripts/endurance_metrics.py --out /var/log/custos-wind/wind_metrics.csv --disk-path /home/orientpro/projeler/custos
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/var/log/custos-wind/metrics.log
+StandardError=append:/var/log/custos-wind/metrics.log
+
+[Install]
+WantedBy=multi-user.target

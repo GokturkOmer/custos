@@ -1,0 +1,21 @@
+[Unit]
+# Custos Wind Pivot — Critical Loop (Modbus collector → custos_wind DB)
+# Diagslave'den 81 tag okur, threshold engine'i besler.
+Description=Custos Wind — Critical Loop (Modbus collector → DB)
+After=custos-wind-diagslave.service custos-wind.service
+Requires=custos-wind-diagslave.service
+
+[Service]
+Type=simple
+User=orientpro
+Group=orientpro
+WorkingDirectory=/home/orientpro/projeler/custos
+EnvironmentFile=/home/orientpro/projeler/custos/_personal/wind_pivot/.env.wind
+ExecStart=/home/orientpro/projeler/custos/.venv/bin/python -m custos.critical
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/var/log/custos-wind/critical.log
+StandardError=append:/var/log/custos-wind/critical.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+[Unit]
+# Custos Wind Pivot — Analytics + Dashboard (uvicorn port 8003)
+# AVM production 8000, endurance 8002, wind 8003 — cakisma yok.
+# DB: custos_wind (custos / custos_endurance dokunulmaz).
+Description=Custos Wind — Analytics + Dashboard (port 8003, custos_wind DB)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orientpro
+Group=orientpro
+WorkingDirectory=/home/orientpro/projeler/custos
+EnvironmentFile=/home/orientpro/projeler/custos/_personal/wind_pivot/.env.wind
+# 127.0.0.1 bind — Caddy gerekirse ileride önüne konulur. Faz 1.x'te
+# lokal test icin loopback yeterli.
+ExecStart=/home/orientpro/projeler/custos/.venv/bin/uvicorn custos.__main__:app --host 127.0.0.1 --port 8003 --log-level info
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/var/log/custos-wind/custos.log
+StandardError=append:/var/log/custos-wind/custos.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,247 @@
+# Custos Wind Pivot — Wind Turbine v1 asset template
+#
+# Faz 1.1 (2026-05-12). Fraunhofer CARE dataset (Wind Farm A — Portekiz onshore)
+# uzerinden cikartilmis tipik 2-3 MW class onshore rolling-bearing turbin
+# sablonu. 54 unique sensor type'tan Custos'a 200 tag limiti icinde tum
+# Farm A kolonlari sigar (81 tag); template "must-have" 10 rol uzerinde
+# soyutlar. Diger sensorler tag olarak DB'ye girer ama role'e baglanmaz —
+# anomaly/SPC/cross-sensor kurallarinda kullanilabilir.
+#
+# Format: F9 AVM Template Pack ile birebir uyumlu (HVAC YAML deseni).
+# Brief'te `.json` istenmisti; mevcut Custos loader sadece YAML okur
+# (analytics/templates/loader.py, .yaml glob). YAML formatinda yaziyoruz.
+#
+# Operational state kavrami (Fraunhofer status_type_id 0-5):
+#   0=Normal, 1=Derated, 2=Idling, 3=Service, 4=Downtime, 5=Other.
+# Bu, mevcut asset_instances.operating_mode enum'una (running/startup/
+# shutdown/idle) Faz 2'de eslenecek; sablon bu eslemeyi description'da
+# tasir, DB sema degisikligi YOK (mevcut 4-tier korunur).
+#
+# YUKLEME KOMUTU (production custos DB'sine YAZILMAMASI icin --dir SART):
+#   set -a && source _personal/wind_pivot/.env.wind && set +a && \
+#       python scripts/seed_asset_templates.py --dir data/asset_templates
+# .env.wind yuklendigi icin POSTGRES_DB=custos_wind, sadece wind DB'ye yazilir.
+
+slug: wind_turbine_v1
+name: Rüzgar Türbini (Onshore 2-3 MW)
+description: >-
+  Onshore rolling-bearing rüzgar türbini şablonu. Fraunhofer CARE Wind Farm A
+  (Portekiz EDP-open data tabanlı) referansı; 86 SCADA kolonu (54 unique
+  sensör, 10 dk aggregate). Pilot türbinler için tag bağlama wizard'ında
+  rol yuvaları doldurulur.
+icon: wind
+
+roles:
+  - role_key: rotor_rpm
+    label: Rotor RPM (Düşük Hız Şaftı)
+    unit_hint: rpm
+    required: true
+    sort_order: 1
+  - role_key: generator_rpm
+    label: Jeneratör RPM (Yüksek Hız Şaftı)
+    unit_hint: rpm
+    required: true
+    sort_order: 2
+  - role_key: grid_power_kw
+    label: Şebeke Aktif Gücü
+    unit_hint: kW
+    required: true
+    sort_order: 3
+  - role_key: wind_speed
+    label: Rüzgar Hızı (Nasel Anemometresi)
+    unit_hint: m/s
+    required: true
+    sort_order: 4
+  - role_key: gearbox_oil_temp
+    label: Dişli Kutusu Yağ Sıcaklığı
+    unit_hint: °C
+    required: true
+    sort_order: 5
+  - role_key: gearbox_bearing_temp
+    label: Dişli Kutusu Yüksek Hız Şaftı Yatak Sıcaklığı
+    unit_hint: °C
+    required: true
+    sort_order: 6
+  - role_key: generator_bearing_de_temp
+    label: Jeneratör Yatak Sıcaklığı (Drive End)
+    unit_hint: °C
+    required: false
+    sort_order: 7
+  - role_key: generator_bearing_nde_temp
+    label: Jeneratör Yatak Sıcaklığı (Non-Drive End)
+    unit_hint: °C
+    required: false
+    sort_order: 8
+  - role_key: hv_transformer_temp
+    label: HV Trafo Sıcaklığı (Faz L1)
+    unit_hint: °C
+    required: false
+    sort_order: 9
+  - role_key: hydraulic_oil_temp
+    label: Hidrolik Grup Yağ Sıcaklığı
+    unit_hint: °C
+    required: false
+    sort_order: 10
+  - role_key: ambient_temp
+    label: Ortam Sıcaklığı
+    unit_hint: °C
+    required: false
+    sort_order: 11
+  - role_key: nacelle_temp
+    label: Nasel İçi Sıcaklık
+    unit_hint: °C
+    required: false
+    sort_order: 12
+  - role_key: pitch_angle
+    label: Pala Açısı (Pitch)
+    unit_hint: °
+    required: false
+    sort_order: 13
+  - role_key: nacelle_direction
+    label: Nasel Yönü (Yaw)
+    unit_hint: °
+    required: false
+    sort_order: 14
+
+kpis:
+  - name: power_per_wind_cubed
+    formula: grid_power_kw / (wind_speed * wind_speed * wind_speed)
+    unit: kW/(m/s)³
+    description: >-
+      Aerodinamik verim proxy'si — sabit hava yoğunluğunda P ≈ ρ·A·v³·Cp/2.
+      Bu oran Cp katsayısının ölçek-bağımsız hâli; normal aralıktan sapma
+      pitch/yaw misalignment veya pala kirliliği işaretidir.
+  - name: gearbox_delta_temp
+    formula: gearbox_bearing_temp - gearbox_oil_temp
+    unit: °C
+    description: >-
+      Dişli yatak ile yağ sıcaklığı farkı. Normalde 5-15°C; artış yatak
+      sürtünmesi veya yağ sirkülasyon problemi belirtisidir.
+  - name: generator_bearing_imbalance
+    formula: generator_bearing_de_temp - generator_bearing_nde_temp
+    unit: °C
+    description: >-
+      Drive-end ile non-drive-end yatak arası fark. Sürekli >10°C ise yatak
+      aşınması veya yağlama dengesizliği erken sinyali.
+  - name: rotor_to_generator_ratio
+    formula: generator_rpm / rotor_rpm
+    unit: ratio
+    description: >-
+      Dişli oranı doğrulaması — sabit olmalı (typ. 90-120). Sapma kavrama
+      kayması, encoder hatası veya dişli arızası işaretidir.
+
+alarm_defaults:
+  - role_key: gearbox_oil_temp
+    direction: high
+    set_point: 75.0
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 2.0
+    description: Dişli kutusu yağ sıcaklığı yüksek — yağ pompası veya soğutucu kontrolü
+  - role_key: gearbox_oil_temp
+    direction: high
+    set_point: 85.0
+    severity: crit
+    debounce_seconds: 120
+    hysteresis: 2.0
+    description: Dişli yağı kritik sıcaklık — derhal yük azaltma / durdurma
+  - role_key: gearbox_bearing_temp
+    direction: high
+    set_point: 85.0
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 2.0
+    description: Dişli yatak sıcaklığı yüksek — titreşim/sürtünme artışı olası
+  - role_key: gearbox_bearing_temp
+    direction: high
+    set_point: 95.0
+    severity: crit
+    debounce_seconds: 60
+    hysteresis: 2.0
+    description: Dişli yatak kritik sıcaklık — yatak hasarı riski
+  - role_key: generator_bearing_de_temp
+    direction: high
+    set_point: 90.0
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 2.0
+    description: Jeneratör yatak (DE) sıcaklığı yüksek
+  - role_key: generator_bearing_nde_temp
+    direction: high
+    set_point: 90.0
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 2.0
+    description: Jeneratör yatak (NDE) sıcaklığı yüksek
+  - role_key: hv_transformer_temp
+    direction: high
+    set_point: 90.0
+    severity: warn
+    debounce_seconds: 600
+    hysteresis: 3.0
+    description: HV trafo sıcaklığı yüksek — havalandırma/yük kontrolü
+  - role_key: hv_transformer_temp
+    direction: high
+    set_point: 110.0
+    severity: crit
+    debounce_seconds: 120
+    hysteresis: 3.0
+    description: HV trafo kritik — yalıtım hasarı riski
+  - role_key: hydraulic_oil_temp
+    direction: high
+    set_point: 70.0
+    severity: warn
+    debounce_seconds: 300
+    hysteresis: 2.0
+    description: Hidrolik yağ sıcak — soğutma fanı kontrolü
+  - role_key: rotor_rpm
+    direction: high
+    set_point: 22.0
+    severity: warn
+    debounce_seconds: 30
+    hysteresis: 0.5
+    description: Rotor aşırı hız — pitch kontrol gözlem (typ. 6-19 rpm)
+  - role_key: generator_rpm
+    direction: high
+    set_point: 2100.0
+    severity: warn
+    debounce_seconds: 30
+    hysteresis: 20.0
+    description: Jeneratör aşırı hız (typ. 1500-1800 rpm) — overspeed limit
+  - role_key: wind_speed
+    direction: high
+    set_point: 25.0
+    severity: warn
+    debounce_seconds: 60
+    hysteresis: 1.0
+    description: Cut-out hızı yaklaştı — pitch'i feathering'e alma beklenir
+  - role_key: nacelle_temp
+    direction: high
+    set_point: 50.0
+    severity: warn
+    debounce_seconds: 600
+    hysteresis: 2.0
+    description: Nasel içi yüksek sıcaklık — havalandırma fanı veya yangın riski
+
+maintenance_defaults:
+  - title: Dişli kutusu yağ analizi (numune)
+    period_days: 180
+    description: Yağ kalitesi, parçacık sayımı, su muhtevası laboratuvar testi
+  - title: Pala görsel kontrol (drone veya yer)
+    period_days: 365
+    description: Yıpranma, çatlak, kenar erozyonu, ışık reflektör kontrolü
+  - title: Yaw motor ve sürücü kontrolü
+    period_days: 180
+    description: Yaw bearing yağlama, motor akım testi, encoder kalibrasyonu
+  - title: Pitch sistem hidrolik basınç testi
+    period_days: 365
+    description: Hidrolik basınç, akümülatör nitrojen ön-yükü, pitch sürücü PLC log
+  - title: HV trafo silikajeli ve yağ seviyesi kontrolü
+    period_days: 180
+    description: Silikajel rengi (nem göstergesi), yağ seviye gözü, kaçak izi
+  - title: Jeneratör yatak yağlama (otomatik gres dolumu)
+    period_days: 90
+    description: Otomatik gres dağıtıcı haznesi, blokaj kontrolü, eski gres tahliyesi
+  - title: Tower bolt-tightness denetimi
+    period_days: 730
+    description: Tower flanş cıvataları tork kontrolü (2 yılda 1, ilk yıl 6 ay sonra)
