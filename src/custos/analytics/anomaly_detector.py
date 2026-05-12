@@ -29,11 +29,14 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from custos.analytics.trend_monitor import TrendMonitor
 from custos.shared.database import (
     ANOMALY_SUPPRESSED_MODES,
+    AlarmEvent,
     AnomalyScore,
     AuditLogEntry,
     DatabaseInterface,
+    TrendAlert,
 )
 
 if TYPE_CHECKING:
@@ -48,6 +51,23 @@ _MIN_TRAINING_ROWS = 10
 _ENGINE_MODE_ENV = "CUSTOS_ANOMALY_ENGINE"
 _DEFAULT_ENGINE_MODE = "both"
 _VALID_ENGINE_MODES: frozenset[str] = frozenset({"if", "ae", "both"})
+
+# Wind pivot Faz 2 P0: trend monitor master switch.
+# AVM safe-default: 'off'. Wind .env dosyasinda 'on' yapilir.
+_TREND_MONITOR_ENV = "CUSTOS_TREND_MONITOR"
+_TREND_ENABLED_VALUES: frozenset[str] = frozenset({"on", "1", "true", "yes"})
+
+
+def _resolve_trend_monitor_enabled() -> bool:
+    """``CUSTOS_TREND_MONITOR`` env var → bool (default False — AVM safe).
+
+    Wind pilotunda env dosyasinda 'on' yapilir; AVM'de sessizce kapali
+    kalir. ``trend_alerts`` tablosu sadece ``custos_wind`` DB'sinde
+    mevcuttur, AVM'de yazma denemesi exception firlatir — env kontrolu
+    bu hatayı engelleyen birincil kademe.
+    """
+    raw = os.environ.get(_TREND_MONITOR_ENV, "off").strip().lower()
+    return raw in _TREND_ENABLED_VALUES
 
 
 def _resolve_engine_mode() -> str:
@@ -158,11 +178,19 @@ class AnomalyDetector:
         models_dir: Path,
         interval_seconds: float = 60.0,
         engine_mode: str | None = None,
+        *,
+        trend_monitor_enabled: bool | None = None,
     ) -> None:
         """Detector kurulumu.
 
         ``engine_mode`` None ise env var (``CUSTOS_ANOMALY_ENGINE``) okunur.
         Explicit deger (test fixture'lari icin) override eder.
+
+        Wind pivot Faz 2 P0 — ``trend_monitor_enabled`` None ise
+        ``CUSTOS_TREND_MONITOR`` env'i okur (default 'off'). True iken her
+        AE skoru sonrasi ``TrendMonitor.update()`` cagrilir; alert
+        cikarsa ``trend_alerts`` tablosuna kayit dusulur ve operatore
+        ``alarm_events`` (source='trend_monitor') olarak gosterilir.
         """
         self._db = db
         self._models_dir = models_dir
@@ -187,6 +215,18 @@ class AnomalyDetector:
                 _DEFAULT_ENGINE_MODE,
             )
             self._engine_mode = _DEFAULT_ENGINE_MODE
+
+        # Wind pivot Faz 2 P0 — trend monitor (env-gated)
+        self._trend_enabled = (
+            trend_monitor_enabled
+            if trend_monitor_enabled is not None
+            else _resolve_trend_monitor_enabled()
+        )
+        # Tek shared TrendMonitor — state per-asset dict, asset_instance_id
+        # ile bagimsiz. AnomalyDetector start/stop sirasinda yeniden olusturulur.
+        self._trend_monitor: TrendMonitor | None = (
+            TrendMonitor() if self._trend_enabled else None
+        )
 
     @property
     def models_dir(self) -> Path:
@@ -215,6 +255,16 @@ class AnomalyDetector:
         """Aktif engine mod ('if' | 'ae' | 'both'). Test + debug icin read-only."""
         return self._engine_mode
 
+    @property
+    def trend_monitor_enabled(self) -> bool:
+        """Trend monitor aktif mi (env CUSTOS_TREND_MONITOR). Test/debug icin."""
+        return self._trend_enabled
+
+    @property
+    def trend_monitor(self) -> TrendMonitor | None:
+        """Trend monitor instance'i (disabled ise None). Test/debug icin."""
+        return self._trend_monitor
+
     async def start(self) -> None:
         """Detector'ı başlatır — arka plan task olarak çalışır."""
         self._running = True
@@ -225,6 +275,7 @@ class AnomalyDetector:
             engine_mode=self._engine_mode,
             if_models_loaded=len(self._models),
             ae_models_loaded=len(self._ae_models),
+            trend_monitor_enabled=self._trend_enabled,
         )
         try:
             while self._running:
@@ -438,9 +489,96 @@ class AnomalyDetector:
                                 detail=f"AE anomali skoru: {ae_score:.4f}",
                             )
                         )
+                    # Wind pivot Faz 2 P0 — trend monitor (env-gated)
+                    if self._trend_monitor is not None:
+                        await self._check_trend_alert(
+                            instance.id, now, ae_score, bindings[0].tag_id,
+                        )
 
         if anomaly_count > 0:
             await logger.awarn(
                 "Anomali tespit edildi",
                 count=anomaly_count,
             )
+
+    async def _check_trend_alert(
+        self,
+        instance_id: int,
+        timestamp: datetime,
+        ae_score: float,
+        first_tag_id: str,
+    ) -> None:
+        """AE skoru sonrasi trend monitor tetiklemesi.
+
+        Faz 2 P0: AE reconstruction error (RMSE) ham skoruna EWMA-slope
+        analizi uygular. Slope esigi asilirsa:
+        1. ``trend_alerts`` tablosuna ayrintili kayit (slope, duration).
+        2. ``alarm_events`` tablosuna operator-gorunur satir (source=
+           'trend_monitor'). ``first_tag_id`` instance'in ilk binding
+           tag'i — alarm sayfasinin tag filtresinde gostermek icin.
+
+        DB exception (ornegin ``custos`` AVM DB'sinde ``trend_alerts``
+        tablo yok) ile karsilasildiginda hata yutulur ve uyari loglanir;
+        detector durmaz. Best-practice: env ``CUSTOS_TREND_MONITOR``
+        kontrolu yapildi (init'te), bu fallback sadece migration
+        eksikligi gibi sapmalar icin.
+        """
+        assert self._trend_monitor is not None
+        alert = self._trend_monitor.update(instance_id, timestamp, ae_score)
+        if alert is None:
+            return
+
+        try:
+            await self._db.insert_trend_alert(
+                TrendAlert(
+                    asset_instance_id=alert.asset_instance_id,
+                    timestamp=alert.timestamp,
+                    current_score=alert.current_score,
+                    ewma_slope=alert.ewma_slope,
+                    duration_min=alert.duration_min,
+                    severity=alert.severity,
+                ),
+            )
+        except Exception:
+            await logger.aerror(
+                "trend_alerts INSERT hatasi (migration 041 uygulanmis mi?)",
+                instance_id=instance_id,
+                exc_info=True,
+            )
+
+        # alarm_events'e de yaz — operator alarm sayfasinda gorur.
+        # ``first_tag_id`` zorunlu kolon icin (anchor): trend asset-level
+        # ama UI tag-bazli gosterim yapar.
+        try:
+            await self._db.insert_alarm_event(
+                AlarmEvent(
+                    tag_id=first_tag_id,
+                    triggered_at=alert.timestamp,
+                    trigger_value=alert.ewma_slope,
+                    source="trend_monitor",
+                    severity=alert.severity,
+                    message=(
+                        f"Trend slope {alert.ewma_slope:.6f}/tick "
+                        f"({alert.duration_min} dk surdu)"
+                    ),
+                ),
+            )
+        except Exception:
+            await logger.aerror(
+                "alarm_events INSERT hatasi (trend monitor)",
+                instance_id=instance_id,
+                exc_info=True,
+            )
+
+        await self._db.insert_audit_log(
+            AuditLogEntry(
+                category="anomaly",
+                action="trend_detected",
+                entity_type="asset_instance",
+                entity_id=str(instance_id),
+                detail=(
+                    f"Trend slope={alert.ewma_slope:.6f} "
+                    f"duration={alert.duration_min}dk sev={alert.severity}"
+                ),
+            ),
+        )

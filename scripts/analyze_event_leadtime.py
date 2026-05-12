@@ -44,6 +44,7 @@ from validate_models_on_care import (  # noqa: E402
     load_event_info,
     predictions_autoencoder,
     predictions_isolation_forest,
+    predictions_trend_monitor,
 )
 
 if TYPE_CHECKING:
@@ -175,18 +176,26 @@ def analyze_event(
                 ds.features, models_dir, info.asset,
             ),
         ),
+        (
+            "trend_monitor",
+            predictions_trend_monitor(
+                ds.features, models_dir, info.asset,
+            ),
+        ),
     ]
-    # Combined: bool OR (her ikisi de None ise None)
+    # Combined: bool OR (hepsi None ise None) — Faz 2 P0 tri-engine
     if_p = engines[0][1]
     ae_p = engines[1][1]
-    if if_p is None and ae_p is None:
+    tm_p = engines[2][1]
+    available = [p for p in (if_p, ae_p, tm_p) if p is not None]
+    if not available:
         combined: NDArray[np.int_] | None = None
-    elif if_p is None:
-        combined = ae_p
-    elif ae_p is None:
-        combined = if_p
     else:
-        combined = ((if_p.astype(bool)) | (ae_p.astype(bool))).astype(np.int_)
+        # Tum mevcut tahminleri OR'la
+        acc: NDArray[np.bool_] = available[0].astype(bool)
+        for p in available[1:]:
+            acc = acc | p.astype(bool)
+        combined = acc.astype(np.int_)
     engines.append(("combined", combined))
 
     event_ts = _read_timestamp_at(info.csv_path, info.event_start_id)

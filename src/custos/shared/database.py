@@ -450,6 +450,31 @@ class AnomalyScore:
 
 
 @dataclass
+class TrendAlert:
+    """Trend monitor alarmi — trend_alerts tablosunun Python temsili.
+
+    Wind pivot Faz 2 P0 (migration 041). Yavas yukari trend (EWMA slope
+    esik asimi) yakalandiginda yazilir. ``alarm_events`` ile ayrik bir
+    tablo: trend slope detayi (slope, duration) ayri sutunlarda saklanir,
+    operatore goruntulemek icin alarm_events'e paralel bir satir
+    ``source='trend_monitor'`` ile yazilir (AnomalyDetector entegrasyonu).
+
+    ``ewma_slope``: birim/tick — pozitif yukari kayma.
+    ``duration_min``: slope esiginin uzerinde ardisik kac dakika.
+    ``severity``: 'warn' (default) veya 'crit' (slope crit_multiplier ustu).
+    """
+
+    asset_instance_id: int
+    timestamp: datetime
+    current_score: float
+    ewma_slope: float
+    duration_min: int
+    severity: str = "warn"
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
 class PushSubscription:
     """Web Push bildirim aboneliği — push_subscriptions tablosunun Python temsili.
 
@@ -1206,6 +1231,31 @@ class DatabaseInterface(abc.ABC):
         since: datetime | None = None,
     ) -> int:
         """Anomali sayısını döndürür. Opsiyonel zaman filtresi."""
+
+    # --- Trend Alerts (Wind pivot Faz 2 P0 — migration 041) ---
+
+    @abc.abstractmethod
+    async def insert_trend_alert(self, alert: TrendAlert) -> TrendAlert:
+        """Yeni trend alert kaydeder. RETURNING id + created_at ile geri doner.
+
+        Faz 2 P0 — sadece ``custos_wind`` DB'de tablo mevcut (migration 041
+        conditional guard'i). AVM ``custos`` DB'sinde tablo yok; caller
+        bunu cagirmadan once env ``CUSTOS_TREND_MONITOR=on`` kontrolu
+        yapmali.
+        """
+
+    @abc.abstractmethod
+    async def get_trend_alerts_for_event(
+        self,
+        asset_instance_id: int,
+        start: datetime,
+        end: datetime,
+    ) -> list[TrendAlert]:
+        """Verilen asset + zaman penceresinde tum trend alert'leri doner.
+
+        Lead-time analizi + Combined CARE değerlendirmesi için kullanılır.
+        Sira: timestamp ASC (ilk alert ve sonrasi).
+        """
 
     # --- Push Subscriptions ---
 
@@ -2070,6 +2120,20 @@ def _row_to_anomaly_score(row: asyncpg.Record) -> AnomalyScore:
         is_anomaly=row["is_anomaly"],
         feature_vector=row["feature_vector"],
         engine_type=engine_type,
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_trend_alert(row: asyncpg.Record) -> TrendAlert:
+    """asyncpg satırını TrendAlert'e donusturur (Faz 2 P0 — migration 041)."""
+    return TrendAlert(
+        id=row["id"],
+        asset_instance_id=row["asset_instance_id"],
+        timestamp=row["timestamp"],
+        current_score=row["current_score"],
+        ewma_slope=row["ewma_slope"],
+        duration_min=row["duration_min"],
+        severity=row["severity"],
         created_at=row["created_at"],
     )
 
@@ -3723,6 +3787,55 @@ class TimescaleDBDatabase(DatabaseInterface):
             async with pool.acquire() as conn:
                 count = await conn.fetchval(sql)
         return int(count or 0)
+
+    # --- Trend Alerts (Wind pivot Faz 2 P0 — migration 041) ---
+
+    async def insert_trend_alert(self, alert: TrendAlert) -> TrendAlert:
+        """Yeni trend alert kaydeder ve RETURNING ile geri doner.
+
+        Tablo sadece ``custos_wind`` DB'sinde mevcut (migration 041
+        conditional). AVM ``custos`` DB'sinde calistirildiginda
+        ``UndefinedTableError`` firlatir — caller env
+        ``CUSTOS_TREND_MONITOR=on`` kontrolu ile bunu onlemelidir.
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO trend_alerts "
+                "(asset_instance_id, timestamp, current_score, "
+                "ewma_slope, duration_min, severity) "
+                "VALUES ($1, $2, $3, $4, $5, $6) "
+                "RETURNING *",
+                alert.asset_instance_id,
+                alert.timestamp,
+                alert.current_score,
+                alert.ewma_slope,
+                alert.duration_min,
+                alert.severity,
+            )
+        assert row is not None
+        return _row_to_trend_alert(row)
+
+    async def get_trend_alerts_for_event(
+        self,
+        asset_instance_id: int,
+        start: datetime,
+        end: datetime,
+    ) -> list[TrendAlert]:
+        """Verilen asset + zaman penceresinde trend alert'leri timestamp
+        ASC sirayla doner."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM trend_alerts "
+                "WHERE asset_instance_id = $1 "
+                "AND timestamp >= $2 AND timestamp <= $3 "
+                "ORDER BY timestamp ASC",
+                asset_instance_id,
+                start,
+                end,
+            )
+        return [_row_to_trend_alert(row) for row in rows]
 
     # --- Push Subscriptions implementasyonları ---
 

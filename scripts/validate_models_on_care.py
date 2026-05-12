@@ -33,6 +33,7 @@ import csv
 import logging
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,11 +44,24 @@ from custos.analytics.care_scorer import (
     CAREScorer,
     Event,
 )
+from custos.analytics.trend_monitor import (
+    DEFAULT_EWMA_ALPHA,
+    DEFAULT_MIN_OBSERVATIONS,
+    DEFAULT_SLOPE_THRESHOLD,
+    DEFAULT_WINDOW_SIZE,
+    TrendMonitor,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 logger = logging.getLogger("validate_care")
+
+# Faz 2 P0 — Trend monitor "tick" cikti zamanlama esasi (sentetik base ts;
+# CARE dataset'lerinde wall-clock yerine pozisyon-tabanli analiz yapildigi
+# icin gercek tarih anlami yok, sadece monotonik tick gerekiyor).
+_TREND_BASE_TS = datetime(2026, 1, 1, tzinfo=UTC)
+_TREND_TICK_MINUTES = 10
 
 # Default limit — paper Wind Farm A reduced subset (22 dataset secimi
 # proje-spesifik; tum 89 dataset icin --limit 0).
@@ -283,6 +297,71 @@ def _try_int(value: str) -> int | None:
         return None
 
 
+def predictions_trend_monitor(
+    features: NDArray[np.float64],
+    models_dir: Path,
+    asset: str,
+    *,
+    window_size: int = DEFAULT_WINDOW_SIZE,
+    ewma_alpha: float = DEFAULT_EWMA_ALPHA,
+    slope_threshold: float = DEFAULT_SLOPE_THRESHOLD,
+    min_observations: int = DEFAULT_MIN_OBSERVATIONS,
+) -> NDArray[np.int_] | None:
+    """AE raw skoru uzerinden TrendMonitor predictions uretir.
+
+    Faz 2 P0: Yavas yukari trend (mekanik bearing arizasi) yakalamak icin
+    AE reconstruction error (RMSE) EWMA'lanir, slope esigi asilirsa
+    prediction=1. AE modeli yoksa veya feature uyumsuzsa None doner.
+
+    Caller (build_runs) bunu IF + AE ile birlestirir; Combined engine
+    artik **3 sinyalin OR'u** olarak hesaplanir.
+    """
+    candidates: list[Path] = []
+    asset_int = _try_int(asset)
+    if asset_int is not None:
+        candidates.append(models_dir / f"autoencoder_{asset_int}_wind.joblib")
+    candidates.append(models_dir / f"autoencoder_{asset}_wind.joblib")
+    model_path = next((p for p in candidates if p.exists()), None)
+    if model_path is None:
+        logger.warning(
+            "Trend monitor: AE modeli bulunamadi (asset=%s): %s",
+            asset, candidates,
+        )
+        return None
+
+    from custos.analytics.autoencoder_engine import (  # noqa: PLC0415
+        AutoencoderAnomalyEngine,
+    )
+
+    engine = AutoencoderAnomalyEngine.load(model_path)
+    if features.shape[1] != engine.n_features:
+        logger.warning(
+            "Trend monitor AE feature sayisi uyumsuz asset=%s: data=%d, model=%d",
+            asset, features.shape[1], engine.n_features,
+        )
+        return None
+
+    # AE raw RMSE — sigmoid yok, direct error sinyali (yukari = saglik bozulmasi).
+    raw_scores = engine.score(features)
+
+    mon = TrendMonitor(
+        window_size=window_size,
+        ewma_alpha=ewma_alpha,
+        slope_threshold=slope_threshold,
+        min_observations=min_observations,
+    )
+    # Per-dataset reset varsayilan — her dataset'i bagimsiz isle. Sentetik
+    # asset_id 1 (tek dataset icin yeterli, multi-asset state collision yok).
+    asset_id_pseudo = 1
+    preds = np.zeros(features.shape[0], dtype=np.int_)
+    for i, score in enumerate(raw_scores):
+        ts = _TREND_BASE_TS + timedelta(minutes=_TREND_TICK_MINUTES * i)
+        alert = mon.update(asset_id_pseudo, ts, float(score))
+        if alert is not None:
+            preds[i] = 1
+    return preds
+
+
 # --- Orkestrator ---
 
 
@@ -306,9 +385,24 @@ class EngineRun:
         )
 
 
+@dataclass(frozen=True)
+class TrendConfig:
+    """TrendMonitor hyperparametre demeti — CLI override icin (Faz 2 P0).
+
+    Default'lar trend_monitor modul sabitleriyle ayni; saha kalibrasyonu
+    icin CLI --trend-* argumanlariyla override edilir.
+    """
+
+    window_size: int = DEFAULT_WINDOW_SIZE
+    ewma_alpha: float = DEFAULT_EWMA_ALPHA
+    slope_threshold: float = DEFAULT_SLOPE_THRESHOLD
+    min_observations: int = DEFAULT_MIN_OBSERVATIONS
+
+
 def build_runs(
     datasets: list[LoadedDataset],
     models_dir: Path,
+    trend_config: TrendConfig | None = None,
 ) -> dict[str, EngineRun]:
     """Tum engine'ler icin birlesik tahmin akisini hazirlar.
 
@@ -377,14 +471,34 @@ def build_runs(
             n_skipped=0,
         )
 
-    # 3) IF ve AE — per-dataset model yuklemesi
+    # 3) IF, AE, Trend Monitor — per-dataset model yuklemesi.
+    # Faz 2 P0: trend_monitor AE skoru uzerinden EWMA-slope analizi yapar.
+    cfg = trend_config if trend_config is not None else TrendConfig()
+
+    def _predict_trend(
+        features: NDArray[np.float64],
+        models_dir: Path,
+        asset: str,
+    ) -> NDArray[np.int_] | None:
+        return predictions_trend_monitor(
+            features,
+            models_dir,
+            asset,
+            window_size=cfg.window_size,
+            ewma_alpha=cfg.ewma_alpha,
+            slope_threshold=cfg.slope_threshold,
+            min_observations=cfg.min_observations,
+        )
+
     per_dataset_preds: dict[str, list[NDArray[np.int_]]] = {
         "isolation_forest": [],
         "autoencoder": [],
+        "trend_monitor": [],
     }
     for engine_name, predict_fn in (
         ("isolation_forest", predictions_isolation_forest),
         ("autoencoder", predictions_autoencoder),
+        ("trend_monitor", _predict_trend),
     ):
         skipped = 0
         for ds in datasets:
@@ -407,19 +521,31 @@ def build_runs(
             n_skipped=skipped,
         )
 
-    # 4) Combined engine — IF OR AE (anomaly_detector engine_mode='both' davranisi).
-    #    Her dataset icin her iki engine de varsa, bool OR; biri yoksa sadece
-    #    digerinin tahmini gecerli olur.
+    # 4) Combined engine — IF OR AE OR Trend (Faz 2 P0: 3 sinyal birlesimi).
+    # Anomaly detector engine_mode='both' + CUSTOS_TREND_MONITOR=on davranisi.
     if_chunks = per_dataset_preds["isolation_forest"]
     ae_chunks = per_dataset_preds["autoencoder"]
+    trend_chunks = per_dataset_preds["trend_monitor"]
     combined_chunks: list[NDArray[np.int_]] = []
     combined_skipped = 0
-    for if_arr, ae_arr in zip(if_chunks, ae_chunks, strict=True):
-        if if_arr.sum() == 0 and ae_arr.sum() == 0:
-            # Ikisi de bos / model yok — skipped sayilir (tahmin yok)
+    for if_arr, ae_arr, trend_arr in zip(
+        if_chunks, ae_chunks, trend_chunks, strict=True,
+    ):
+        if (
+            if_arr.sum() == 0
+            and ae_arr.sum() == 0
+            and trend_arr.sum() == 0
+        ):
+            # Hicbiri pozitif uretmedi — skipped sayilir (model yok varsayimi)
             combined_skipped += 1
         # OR — herhangi biri 1 ise combined 1
-        combined_chunks.append(((if_arr.astype(bool)) | (ae_arr.astype(bool))).astype(np.int_))
+        combined_chunks.append(
+            (
+                if_arr.astype(bool)
+                | ae_arr.astype(bool)
+                | trend_arr.astype(bool)
+            ).astype(np.int_),
+        )
     runs["combined"] = EngineRun(
         name="combined",
         predictions=np.concatenate(combined_chunks),
@@ -440,6 +566,7 @@ def render_markdown_report(
     runs: dict[str, EngineRun],
     scorer: CAREScorer,
     datasets: list[LoadedDataset],
+    trend_config: TrendConfig | None = None,
 ) -> str:
     """Markdown tablosu olarak rapor uretir.
 
@@ -466,6 +593,13 @@ def render_markdown_report(
         f"weights=(cov={scorer.weights[0]}, earl={scorer.weights[1]}, "
         f"rel={scorer.weights[2]}, acc={scorer.weights[3]})",
     )
+    if trend_config is not None:
+        lines.append(
+            f"- Trend monitor: window={trend_config.window_size}, "
+            f"alpha={trend_config.ewma_alpha}, "
+            f"slope_thr={trend_config.slope_threshold}, "
+            f"min_obs={trend_config.min_observations}",
+        )
     lines.append("")
     lines.append("## Sonuc Tablosu")
     lines.append("")
@@ -484,7 +618,8 @@ def render_markdown_report(
         "all_normal": "Paper = 0 (no positive)",
         "isolation_forest": "Paper ≈ 0.40-0.45",
         "autoencoder": "Paper ≈ 0.66",
-        "combined": "Custos dual-engine (IF OR AE)",
+        "trend_monitor": "Faz 2 P0 — EWMA slope (yavas trend)",
+        "combined": "Custos tri-engine (IF OR AE OR Trend)",
     }
 
     order = [
@@ -493,6 +628,7 @@ def render_markdown_report(
         "all_normal",
         "isolation_forest",
         "autoencoder",
+        "trend_monitor",
         "combined",
     ]
     for engine_name in order:
@@ -500,7 +636,7 @@ def render_markdown_report(
             continue
         run = runs[engine_name]
         if run.n_skipped == run.n_datasets and engine_name in {
-            "isolation_forest", "autoencoder", "combined",
+            "isolation_forest", "autoencoder", "trend_monitor", "combined",
         }:
             lines.append(
                 f"| `{engine_name}` | N/A | N/A | N/A | N/A | **N/A** | "
@@ -597,8 +733,14 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     scorer = CAREScorer()
-    runs = build_runs(datasets, models_dir)
-    report = render_markdown_report(runs, scorer, datasets)
+    trend_cfg = TrendConfig(
+        window_size=args.trend_window,
+        ewma_alpha=args.trend_alpha,
+        slope_threshold=args.trend_threshold,
+        min_observations=args.trend_min_obs,
+    )
+    runs = build_runs(datasets, models_dir, trend_cfg)
+    report = render_markdown_report(runs, scorer, datasets, trend_cfg)
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report, encoding="utf-8")
@@ -644,6 +786,38 @@ def build_argparser() -> argparse.ArgumentParser:
         help=(
             f"En fazla bu kadar event yukle (default {DEFAULT_LIMIT}). "
             "0 → tum event'ler."
+        ),
+    )
+    # Faz 2 P0 — Trend Monitor hyperparametre CLI override'lari.
+    # AE RMSE olcek farkliligi nedeniyle default'lar saha verisinde
+    # kalibre edilmelidir; CARE benchmark icin sweep yapilabilir.
+    parser.add_argument(
+        "--trend-window",
+        type=int,
+        default=DEFAULT_WINDOW_SIZE,
+        help=f"Trend monitor slope lag window (tick). Default {DEFAULT_WINDOW_SIZE}.",
+    )
+    parser.add_argument(
+        "--trend-alpha",
+        type=float,
+        default=DEFAULT_EWMA_ALPHA,
+        help=f"Trend monitor EWMA alpha (0,1]. Default {DEFAULT_EWMA_ALPHA}.",
+    )
+    parser.add_argument(
+        "--trend-threshold",
+        type=float,
+        default=DEFAULT_SLOPE_THRESHOLD,
+        help=(
+            f"Trend monitor slope esigi (birim/tick). "
+            f"Default {DEFAULT_SLOPE_THRESHOLD}."
+        ),
+    )
+    parser.add_argument(
+        "--trend-min-obs",
+        type=int,
+        default=DEFAULT_MIN_OBSERVATIONS,
+        help=(
+            f"Trend monitor warmup (tick). Default {DEFAULT_MIN_OBSERVATIONS}."
         ),
     )
     return parser
