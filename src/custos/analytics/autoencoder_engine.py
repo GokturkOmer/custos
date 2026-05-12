@@ -4,13 +4,19 @@ Wind pivot Faz 1.3 (2026-05-12). Fraunhofer CARE paper baseline'inda
 autoencoder skoru 0.66, Isolation Forest skoru 0.50; %24 performans
 artisi icin IF ile yan yana kosturulur.
 
+Wind pivot Faz 2 Prompt 5 (2026-05-12) ile genisletildi: ``alpha``
+(L2 regularization), ``activation`` (relu/tanh/logistic) ve
+``n_iter_no_change`` (early stopping patience) parametreleri CLI'dan
+ayarlanabilir hale getirildi. Hyperparameter grid search ile AE CARE
+skorunu 0.502'den 0.60+ uzerine cikarmak hedefleniyor.
+
 CLAUDE.md "ML kurallari" 2026-05-12 revize: sklearn MLPRegressor
 autoencoder sigi NN olarak izinli (PyTorch reddedildi — 800 MB ekstra
 dependency yasak).
 
 Mimari (paper baseline ile uyumlu):
-- 86 input → 32 → 8 (bottleneck) → 32 → 86 output
-- ReLU aktivasyon, Adam optimizer
+- 86 input → 32 → 8 (bottleneck) → 32 → 86 output (varsayilan)
+- ReLU aktivasyon (varsayilan), Adam optimizer
 - z-score scaling (per-feature mean/std, eğitim setinden hesaplanir)
 
 Anomaly tespiti:
@@ -57,6 +63,16 @@ _SCALE_EPS = 1e-9
 
 # Minimum egitim satiri — bundan az veriyle anlamli MLPRegressor egitilemez.
 MIN_TRAINING_ROWS = 30
+
+# Wind pivot Faz 2 Prompt 5 (2026-05-12) — hyperparameter default'lari.
+# sklearn MLPRegressor varsayilanlariyla baslangic; grid search ile en iyi
+# kombinasyon belirlenecek.
+DEFAULT_ALPHA = 0.0001  # L2 regularization (sklearn default)
+DEFAULT_ACTIVATION = "relu"  # 'relu' | 'tanh' | 'logistic'
+DEFAULT_N_ITER_NO_CHANGE = 25  # Early stopping patience (sklearn default 10)
+
+# Hyperparameter grid search'inde izin verilen activation'lar.
+ALLOWED_ACTIVATIONS: frozenset[str] = frozenset({"relu", "tanh", "logistic", "identity"})
 
 
 @dataclasses.dataclass
@@ -106,22 +122,42 @@ class AutoencoderAnomalyEngine:
         early_stopping: bool = True,
         valid_status_types: tuple[int, ...] = DEFAULT_VALID_STATUS_TYPES,
         threshold_quantile: float = DEFAULT_THRESHOLD_QUANTILE,
+        alpha: float = DEFAULT_ALPHA,
+        activation: str = DEFAULT_ACTIVATION,
+        n_iter_no_change: int = DEFAULT_N_ITER_NO_CHANGE,
     ) -> None:
         """Hyperparametre konfigurasyonu.
 
         - ``hidden_layer_sizes``: Bottleneck dahil hidden katmanlar.
-          Default (32, 8, 32) paper mimarisi ile uyumlu.
+          Default (32, 8, 32) paper mimarisi ile uyumlu. Faz 2 P5 grid
+          search'te (32, 16, 32) ve (64, 16, 64) da denenir.
         - ``random_state``: Reproducibility — model + np.random_state.
         - ``max_iter`` + ``early_stopping``: MLPRegressor erken durdurma.
         - ``valid_status_types``: Egitimde tutulacak status_type_id'ler.
         - ``threshold_quantile``: Anomaly cutoff (0-1).
+        - ``alpha``: L2 regularization (Faz 2 P5). sklearn MLPRegressor
+          default 0.0001; daha yuksek (0.001, 0.01) overfitting'i azaltabilir.
+        - ``activation``: Hidden katman aktivasyon ('relu' | 'tanh' |
+          'logistic' | 'identity'). Tanh seasonal pattern icin daha uygun
+          olabilir (paper baseline tipik olarak relu kullanir).
+        - ``n_iter_no_change``: Early stopping patience (Faz 2 P5).
+          sklearn default 10; 25 ile daha uzun convergence izni veriyoruz.
         """
+        if activation not in ALLOWED_ACTIVATIONS:
+            msg = (
+                f"activation gecersiz: {activation!r}. "
+                f"Izin verilenler: {sorted(ALLOWED_ACTIVATIONS)}"
+            )
+            raise ValueError(msg)
         self.hidden_layer_sizes = hidden_layer_sizes
         self.random_state = random_state
         self.max_iter = max_iter
         self.early_stopping = early_stopping
         self.valid_status_types = valid_status_types
         self.threshold_quantile = threshold_quantile
+        self.alpha = alpha
+        self.activation = activation
+        self.n_iter_no_change = n_iter_no_change
         self._state: AutoencoderState | None = None
 
     # --- Public properties ---
@@ -208,13 +244,17 @@ class AutoencoderAnomalyEngine:
         samples_scaled = (samples_filtered - feature_mean) / feature_std
 
         # MLPRegressor — autoencoder modu: target = input.
+        # Faz 2 P5: alpha (L2), activation, n_iter_no_change parametre olarak
+        # gecirilir; grid search'te bu eksende sweep yapilir.
         model = MLPRegressor(
             hidden_layer_sizes=self.hidden_layer_sizes,
-            activation="relu",
+            activation=self.activation,
             solver="adam",
+            alpha=self.alpha,
             random_state=self.random_state,
             max_iter=self.max_iter,
             early_stopping=self.early_stopping,
+            n_iter_no_change=self.n_iter_no_change,
         )
         model.fit(samples_scaled, samples_scaled)
 
@@ -280,15 +320,27 @@ class AutoencoderAnomalyEngine:
         """Joblib dosyasindan engine'i yukler.
 
         Bozuk veya eski format dosya → ValueError (caller fallback'e
-        gecebilir; sessizce yutmuyoruz).
+        gecebilir; sessizce yutmuyoruz). v1 ve v2 formatlari yukler;
+        v1'de olmayan alanlar (alpha, activation, n_iter_no_change)
+        modul default'larina geri duser — eski modeller skor uretmeye
+        devam edebilir.
         """
         payload = joblib.load(path)
-        if not isinstance(payload, dict) or payload.get("kind") != "autoencoder_v1":
+        if not isinstance(payload, dict) or payload.get("kind") not in {
+            "autoencoder_v1",
+            "autoencoder_v2",
+        }:
             msg = (
                 f"Bozuk veya uyumsuz autoencoder dosyasi: {path} "
-                f"(beklenen kind='autoencoder_v1')"
+                f"(beklenen kind='autoencoder_v1' veya 'autoencoder_v2')"
             )
             raise ValueError(msg)
+        # v2 eklentilerini opsiyonel olarak oku — v1 dosyalar default'a duser.
+        alpha = float(payload.get("alpha", DEFAULT_ALPHA))
+        activation = str(payload.get("activation", DEFAULT_ACTIVATION))
+        n_iter_no_change = int(
+            payload.get("n_iter_no_change", DEFAULT_N_ITER_NO_CHANGE),
+        )
         engine = cls(
             hidden_layer_sizes=tuple(payload["hidden_layer_sizes"]),
             random_state=int(payload["random_state"]),
@@ -296,6 +348,9 @@ class AutoencoderAnomalyEngine:
             early_stopping=bool(payload["early_stopping"]),
             valid_status_types=tuple(payload["valid_status_types"]),
             threshold_quantile=float(payload["threshold_quantile"]),
+            alpha=alpha,
+            activation=activation,
+            n_iter_no_change=n_iter_no_change,
         )
         state_dict = payload["state"]
         engine._state = AutoencoderState(
@@ -312,16 +367,23 @@ class AutoencoderAnomalyEngine:
     # --- Internal ---
 
     def _serialize(self) -> dict[str, object]:
-        """save() helper'i — joblib'a verilebilen dict."""
+        """save() helper'i — joblib'a verilebilen dict.
+
+        Faz 2 P5 ile ``kind='autoencoder_v2'``; v1 dosyalar yine load
+        edilebilir (yeni alanlar opsiyonel, default'a duser).
+        """
         assert self._state is not None
         return {
-            "kind": "autoencoder_v1",
+            "kind": "autoencoder_v2",
             "hidden_layer_sizes": list(self.hidden_layer_sizes),
             "random_state": self.random_state,
             "max_iter": self.max_iter,
             "early_stopping": self.early_stopping,
             "valid_status_types": list(self.valid_status_types),
             "threshold_quantile": self.threshold_quantile,
+            "alpha": self.alpha,
+            "activation": self.activation,
+            "n_iter_no_change": self.n_iter_no_change,
             "state": {
                 "model": self._state.model,
                 "feature_mean": self._state.feature_mean,
@@ -351,6 +413,10 @@ def _rmse_per_row(
 
 
 __all__ = [
+    "ALLOWED_ACTIVATIONS",
+    "DEFAULT_ACTIVATION",
+    "DEFAULT_ALPHA",
+    "DEFAULT_N_ITER_NO_CHANGE",
     "DEFAULT_THRESHOLD_QUANTILE",
     "DEFAULT_VALID_STATUS_TYPES",
     "MIN_TRAINING_ROWS",

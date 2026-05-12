@@ -8,16 +8,30 @@ Kapsam:
 - Untrained engine: score/is_anomaly/save → RuntimeError.
 - Dimension mismatch: feature count uyumsuzlugu → ValueError.
 - Yetersiz veri (< MIN_TRAINING_ROWS) → ValueError.
+
+Faz 2 P5 ek kapsami:
+- alpha (L2) + activation + n_iter_no_change CLI parametreleri MLPRegressor'a
+  dogru gecirilir.
+- Activation validasyonu — gecersiz deger ValueError.
+- Bottleneck 16 senaryosu (hidden_layer_sizes=(32,16,32)) egitilebilir.
+- Save → load v2 formatinda alpha/activation/n_iter_no_change korunur.
+- v1 formatindaki eski joblib dosyalari yuklenebilir (backward-compat,
+  yeni alanlar default'a duser).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pytest
 
 from custos.analytics.autoencoder_engine import (
+    ALLOWED_ACTIVATIONS,
+    DEFAULT_ACTIVATION,
+    DEFAULT_ALPHA,
+    DEFAULT_N_ITER_NO_CHANGE,
     DEFAULT_VALID_STATUS_TYPES,
     MIN_TRAINING_ROWS,
     AutoencoderAnomalyEngine,
@@ -257,9 +271,174 @@ def test_save_creates_parent_directory(tmp_path: Path) -> None:
 
 def test_load_raises_on_invalid_payload(tmp_path: Path) -> None:
     """Bozuk joblib (yanlis kind) → ValueError."""
-    import joblib  # noqa: PLC0415
-
     bad = tmp_path / "bad.joblib"
     joblib.dump({"kind": "isolation_forest_v1", "data": [1, 2]}, bad)
     with pytest.raises(ValueError, match="Bozuk veya uyumsuz"):
         AutoencoderAnomalyEngine.load(bad)
+
+
+# --- Faz 2 Prompt 5: Hyperparameter genislemesi ---
+
+
+def test_alpha_parameter_is_passed_to_mlpregressor() -> None:
+    """``alpha`` CLI degeri MLPRegressor'a iletilir (L2 regularization)."""
+    samples = _sine_dataset(n_samples=80, n_features=4)
+    engine = AutoencoderAnomalyEngine(
+        hidden_layer_sizes=(8, 2, 8),
+        max_iter=20,
+        early_stopping=False,
+        alpha=0.01,
+    )
+    engine.train(samples)
+    assert engine.alpha == pytest.approx(0.01)
+    # MLPRegressor instance alpha'yi ic state'inde tutar.
+    assert engine._state is not None  # noqa: SLF001
+    inner_alpha = engine._state.model.alpha  # type: ignore[attr-defined]
+    assert inner_alpha == pytest.approx(0.01)
+
+
+def test_activation_parameter_is_passed_to_mlpregressor() -> None:
+    """``activation='tanh'`` MLPRegressor'a iletilir."""
+    samples = _sine_dataset(n_samples=80, n_features=4)
+    engine = AutoencoderAnomalyEngine(
+        hidden_layer_sizes=(8, 2, 8),
+        max_iter=20,
+        early_stopping=False,
+        activation="tanh",
+    )
+    engine.train(samples)
+    assert engine.activation == "tanh"
+    assert engine._state is not None  # noqa: SLF001
+    inner_activation = engine._state.model.activation  # type: ignore[attr-defined]
+    assert inner_activation == "tanh"
+
+
+def test_activation_validates_input() -> None:
+    """Gecersiz activation → ValueError; ALLOWED_ACTIVATIONS hep frozenset olur."""
+    assert "relu" in ALLOWED_ACTIVATIONS
+    assert "tanh" in ALLOWED_ACTIVATIONS
+    with pytest.raises(ValueError, match="activation gecersiz"):
+        AutoencoderAnomalyEngine(activation="bogus_activation")
+
+
+def test_n_iter_no_change_parameter_is_passed_to_mlpregressor() -> None:
+    """``n_iter_no_change`` MLPRegressor'a iletilir (early stopping patience)."""
+    samples = _sine_dataset(n_samples=80, n_features=4)
+    engine = AutoencoderAnomalyEngine(
+        hidden_layer_sizes=(8, 2, 8),
+        max_iter=20,
+        early_stopping=False,
+        n_iter_no_change=15,
+    )
+    engine.train(samples)
+    assert engine.n_iter_no_change == 15
+    assert engine._state is not None  # noqa: SLF001
+    inner = engine._state.model.n_iter_no_change  # type: ignore[attr-defined]
+    assert inner == 15
+
+
+def test_bottleneck_16_layer_trains_successfully() -> None:
+    """``hidden_layer_sizes=(32, 16, 32)`` ile egitim — Faz 2 P5 grid alternatif."""
+    samples = _sine_dataset(n_samples=200, n_features=8)
+    engine = AutoencoderAnomalyEngine(
+        hidden_layer_sizes=(32, 16, 32),
+        max_iter=30,
+        early_stopping=False,
+    )
+    engine.train(samples)
+    assert engine.is_trained
+    # Bottleneck = 16 olarak hidden_layer_sizes attribute'unda goruluyor
+    assert engine.hidden_layer_sizes == (32, 16, 32)
+    # Egitim setiyle ayni distribution'dan yeni veri saglikli kalmali
+    new_samples = _sine_dataset(n_samples=50, n_features=8)
+    flags = engine.is_anomaly(new_samples)
+    assert flags.mean() < 0.5
+
+
+def test_default_hyperparams_match_expected() -> None:
+    """Default'lar ALLOWED ile uyumlu — backward-compat icin sabit."""
+    engine = AutoencoderAnomalyEngine()
+    assert engine.alpha == pytest.approx(DEFAULT_ALPHA)
+    assert engine.activation == DEFAULT_ACTIVATION
+    assert engine.n_iter_no_change == DEFAULT_N_ITER_NO_CHANGE
+
+
+def test_save_v2_roundtrip_preserves_new_hyperparams(tmp_path: Path) -> None:
+    """v2 dosya: alpha + activation + n_iter_no_change save/load sonrasi korunur."""
+    samples = _sine_dataset(n_samples=100, n_features=5)
+    engine = AutoencoderAnomalyEngine(
+        hidden_layer_sizes=(16, 4, 16),
+        max_iter=30,
+        early_stopping=False,
+        alpha=0.005,
+        activation="tanh",
+        n_iter_no_change=20,
+    )
+    engine.train(samples)
+    out = tmp_path / "ae_v2.joblib"
+    engine.save(out)
+    # Dosya icindeki kind v2 olmali
+    payload = joblib.load(out)
+    assert payload["kind"] == "autoencoder_v2"
+    assert payload["alpha"] == pytest.approx(0.005)
+    assert payload["activation"] == "tanh"
+    assert payload["n_iter_no_change"] == 20
+    # Load roundtrip parametreleri korur
+    loaded = AutoencoderAnomalyEngine.load(out)
+    assert loaded.alpha == pytest.approx(0.005)
+    assert loaded.activation == "tanh"
+    assert loaded.n_iter_no_change == 20
+
+
+def test_load_v1_backward_compat_defaults_new_fields(tmp_path: Path) -> None:
+    """v1 joblib (eski format) yuklenebilir — yeni alanlar default'a duser."""
+    # Once v2 ile egit, sonra payload'i manuel v1'e cevirip yaz.
+    samples = _sine_dataset(n_samples=80, n_features=4)
+    engine = AutoencoderAnomalyEngine(
+        hidden_layer_sizes=(8, 2, 8),
+        max_iter=20,
+        early_stopping=False,
+    )
+    engine.train(samples)
+    v2_path = tmp_path / "ae_v2.joblib"
+    engine.save(v2_path)
+    payload = joblib.load(v2_path)
+    # v1 format simule et: yeni alanlari kaldir, kind=v1 yap
+    v1_payload = {k: v for k, v in payload.items() if k not in {
+        "alpha", "activation", "n_iter_no_change",
+    }}
+    v1_payload["kind"] = "autoencoder_v1"
+    v1_path = tmp_path / "ae_v1.joblib"
+    joblib.dump(v1_payload, v1_path)
+
+    loaded = AutoencoderAnomalyEngine.load(v1_path)
+    assert loaded.is_trained
+    # Yeni alanlar default'a duser
+    assert loaded.alpha == pytest.approx(DEFAULT_ALPHA)
+    assert loaded.activation == DEFAULT_ACTIVATION
+    assert loaded.n_iter_no_change == DEFAULT_N_ITER_NO_CHANGE
+    # Skor uretebiliyor — backward-compat asil hedef
+    test_samples = _sine_dataset(n_samples=20, n_features=4)
+    scores = loaded.score(test_samples)
+    assert scores.shape == (20,)
+
+
+def test_joblib_size_under_300_kb(tmp_path: Path) -> None:
+    """Production wind AE modelleri ~150 KB. Test fixture'un uzak ust siniri 300 KB.
+
+    Asil 5 production model 154-156 KB; %90 tolerans = 290 KB. Bu test
+    AE serialization'in beklenmedik buyume yapmadigini garanti eder
+    (joblib compressed default).
+    """
+    samples = _sine_dataset(n_samples=200, n_features=8)
+    engine = AutoencoderAnomalyEngine(
+        hidden_layer_sizes=(32, 16, 32),
+        max_iter=30,
+        early_stopping=False,
+    )
+    engine.train(samples)
+    out = tmp_path / "ae.joblib"
+    engine.save(out)
+    assert out.stat().st_size < 300_000, (
+        f"AE joblib boyutu beklenmedik: {out.stat().st_size} bytes (>300 KB)"
+    )
