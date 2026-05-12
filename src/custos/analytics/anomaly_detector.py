@@ -29,6 +29,13 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from custos.analytics.cross_sensor_engine import (
+    resolve_enabled as _resolve_cross_sensor_enabled,
+)
+from custos.analytics.per_asset_threshold import (
+    PerAssetThresholdCalibrator,
+    is_anomaly_at_threshold,
+)
 from custos.analytics.trend_monitor import TrendMonitor
 from custos.shared.database import (
     ANOMALY_SUPPRESSED_MODES,
@@ -180,6 +187,8 @@ class AnomalyDetector:
         engine_mode: str | None = None,
         *,
         trend_monitor_enabled: bool | None = None,
+        per_asset_calibrator: PerAssetThresholdCalibrator | None = None,
+        cross_sensor_enabled: bool | None = None,
     ) -> None:
         """Detector kurulumu.
 
@@ -191,6 +200,24 @@ class AnomalyDetector:
         AE skoru sonrasi ``TrendMonitor.update()`` cagrilir; alert
         cikarsa ``trend_alerts`` tablosuna kayit dusulur ve operatore
         ``alarm_events`` (source='trend_monitor') olarak gosterilir.
+
+        Wind pivot Faz 2 Prompt 2 — ``per_asset_calibrator`` None ise
+        per-asset threshold devre disi (global engine threshold'u
+        kullanilir). Verilirse cache'ten asset+engine threshold okur ve
+        ``is_anomaly`` karari bu degerle yapilir (yon konvansiyonu
+        ``is_anomaly_at_threshold`` ile uygulanir). Calibrator kendi
+        env-gate'ine sahiptir (``CUSTOS_PER_ASSET_THRESHOLD``); disabled
+        iken ``get_threshold`` her zaman None doner, mevcut davranis
+        bozulmaz.
+
+        Wind pivot Faz 2 Prompt 2 mini-edit (2026-05-12) —
+        ``cross_sensor_enabled`` None ise env ``CUSTOS_CROSS_SENSOR``
+        okunur (default 'off'). Cross-sensor engine load + evaluate
+        sadece True iken yapilir; AVM ve pilot saha kalibrasyonu
+        oncesinde 'off' birakilir. CARE benchmark'inda Wind Farm A
+        Portekiz iklim baseline'inin Custos kural esikleriyle uyumsuz
+        oldugu gosterildi (Combined CARE 0.530 → 0.500 regresyon);
+        default OFF bu regresyonu iptal eder, mimari kodda kalir.
         """
         self._db = db
         self._models_dir = models_dir
@@ -226,6 +253,21 @@ class AnomalyDetector:
         # ile bagimsiz. AnomalyDetector start/stop sirasinda yeniden olusturulur.
         self._trend_monitor: TrendMonitor | None = (
             TrendMonitor() if self._trend_enabled else None
+        )
+        # Wind pivot Faz 2 Prompt 2 — per-asset adaptive threshold.
+        # None → davranis degisiklik yok (global engine threshold).
+        self._per_asset_calibrator = per_asset_calibrator
+
+        # Wind pivot Faz 2 Prompt 2 mini-edit (2026-05-12) — cross-sensor
+        # engine env-gate (default 'off'). Bu detector cross-sensor
+        # engine'i henuz online evaluate etmiyor (entegrasyon noktasi
+        # ileride eklenecek); flag _detect_cycle'da check edilir ve
+        # cross_sensor evaluate'i skip eder. Property test/debug + log
+        # icin kullanilir.
+        self._cross_sensor_enabled = (
+            cross_sensor_enabled
+            if cross_sensor_enabled is not None
+            else _resolve_cross_sensor_enabled()
         )
 
     @property
@@ -265,10 +307,40 @@ class AnomalyDetector:
         """Trend monitor instance'i (disabled ise None). Test/debug icin."""
         return self._trend_monitor
 
+    @property
+    def per_asset_calibrator(self) -> PerAssetThresholdCalibrator | None:
+        """Per-asset threshold calibrator (None ise disabled). Test/debug icin."""
+        return self._per_asset_calibrator
+
+    @property
+    def cross_sensor_enabled(self) -> bool:
+        """Cross-sensor engine master switch (env ``CUSTOS_CROSS_SENSOR``).
+
+        Default False (AVM/pilot safe). Online evaluate entegrasyonu
+        eklendiginde bu flag _detect_cycle'da kontrol edilir; False ise
+        engine.load_rules() + evaluate skip edilir.
+        """
+        return self._cross_sensor_enabled
+
     async def start(self) -> None:
         """Detector'ı başlatır — arka plan task olarak çalışır."""
         self._running = True
         self._load_models()
+        # Wind pivot Faz 2 Prompt 2 — per-asset threshold cache'i diskten
+        # (DB'den) yukle. Calibrator None ise veya kendi env'i 'off' ise
+        # warm_cache no-op (0 doner).
+        per_asset_count = 0
+        if self._per_asset_calibrator is not None:
+            try:
+                per_asset_count = await self._per_asset_calibrator.warm_cache()
+            except Exception:
+                # Migration 042 uygulanmadiysa burada UndefinedTableError
+                # gelir; detector durmasin, sadece warn at.
+                await logger.aerror(
+                    "Per-asset threshold cache yuklenirken hata "
+                    "(migration 042 uygulanmis mi?)",
+                    exc_info=True,
+                )
         await logger.ainfo(
             "Anomaly detector başlatıldı",
             interval=self._interval,
@@ -276,6 +348,8 @@ class AnomalyDetector:
             if_models_loaded=len(self._models),
             ae_models_loaded=len(self._ae_models),
             trend_monitor_enabled=self._trend_enabled,
+            per_asset_threshold_count=per_asset_count,
+            cross_sensor_enabled=self._cross_sensor_enabled,
         )
         try:
             while self._running:
@@ -431,6 +505,17 @@ class AnomalyDetector:
                 raw_scores = if_model.score_samples(feature_array)  # type: ignore[attr-defined]
                 if_score = float(raw_scores[0])
                 if_is_anomaly = bool(prediction[0] == -1)
+                # Wind pivot Faz 2 Prompt 2 — per-asset threshold override
+                # (IF: alt kuyruk, score < threshold = anomaly). Cache'te
+                # asset+engine entry yoksa global model davranisi korunur.
+                if self._per_asset_calibrator is not None:
+                    if_threshold = self._per_asset_calibrator.get_threshold(
+                        instance.id, "if",
+                    )
+                    if if_threshold is not None:
+                        if_is_anomaly = is_anomaly_at_threshold(
+                            if_score, "if", if_threshold,
+                        )
                 await self._db.insert_anomaly_score(
                     AnomalyScore(
                         instance_id=instance.id,
@@ -468,6 +553,16 @@ class AnomalyDetector:
                 else:
                     ae_score = float(ae_scores[0])
                     ae_is_anomaly = bool(ae_flags[0])
+                    # Wind pivot Faz 2 Prompt 2 — per-asset threshold override
+                    # (AE: ust kuyruk, score > threshold = anomaly).
+                    if self._per_asset_calibrator is not None:
+                        ae_threshold = self._per_asset_calibrator.get_threshold(
+                            instance.id, "ae",
+                        )
+                        if ae_threshold is not None:
+                            ae_is_anomaly = is_anomaly_at_threshold(
+                                ae_score, "ae", ae_threshold,
+                            )
                     await self._db.insert_anomaly_score(
                         AnomalyScore(
                             instance_id=instance.id,

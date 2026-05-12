@@ -44,6 +44,12 @@ from custos.analytics.care_scorer import (
     CAREScorer,
     Event,
 )
+from custos.analytics.cross_sensor_engine import (
+    CrossSensorEngine,
+)
+from custos.analytics.cross_sensor_engine import (
+    resolve_enabled as resolve_cross_sensor_enabled,
+)
 from custos.analytics.trend_monitor import (
     DEFAULT_EWMA_ALPHA,
     DEFAULT_MIN_OBSERVATIONS,
@@ -103,11 +109,18 @@ class DatasetInfo:
 
 @dataclass(frozen=True)
 class LoadedDataset:
-    """Yuklenmis CSV + status + feature matrix."""
+    """Yuklenmis CSV + status + feature matrix.
+
+    ``sensor_columns`` features matrix'inin kolon adlari (Fraunhofer
+    ``sensor_X_avg`` konvansiyonu). Wind pivot Faz 2 Prompt 2 ile eklendi —
+    cross_sensor engine bu adlari tag_map ile esleyip kural-tag → kolon
+    indeksi map'i kuruyor.
+    """
 
     info: DatasetInfo
     features: NDArray[np.float64]   # shape (n_rows, n_features)
     status: NDArray[np.int_]        # shape (n_rows,)
+    sensor_columns: tuple[str, ...] = ()
 
 
 # --- event_info + dataset yukleyiciler ---
@@ -174,7 +187,12 @@ def load_dataset(info: DatasetInfo) -> LoadedDataset | None:
             features[i, j] = _safe_float(row.get(col, ""))
         status[i] = _safe_int(row.get(STATUS_COLUMN, "0"))
 
-    return LoadedDataset(info=info, features=features, status=status)
+    return LoadedDataset(
+        info=info,
+        features=features,
+        status=status,
+        sensor_columns=tuple(sensor_cols),
+    )
 
 
 def _safe_float(value: str | None) -> float:
@@ -297,6 +315,137 @@ def _try_int(value: str) -> int | None:
         return None
 
 
+def load_tag_map(path: Path) -> dict[str, str]:
+    """tag_map_farm_a.csv'yi yukler — custos_tag_name → sensor_name (Fraunhofer).
+
+    YAML cross_sensor_rules ``wind_t_*`` custos isimleri kullanir; CARE
+    dataset kolonlari ``sensor_X_avg`` Fraunhofer isimleridir. Bu reverse
+    map cross_sensor evaluation icin koprudur.
+
+    Eksik dosya → ``FileNotFoundError``. CSV bos veya gerekli kolon yok
+    → ``ValueError``.
+    """
+    if not path.is_file():
+        msg = f"tag_map dosyasi bulunamadi: {path}"
+        raise FileNotFoundError(msg)
+    reverse: dict[str, str] = {}
+    with path.open(encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames is None or (
+            "custos_tag_name" not in reader.fieldnames
+            or "sensor_name" not in reader.fieldnames
+        ):
+            msg = (
+                f"tag_map gerekli kolonlari icermiyor "
+                f"('custos_tag_name' + 'sensor_name'): {reader.fieldnames}"
+            )
+            raise ValueError(msg)
+        for row in reader:
+            custos = (row.get("custos_tag_name") or "").strip()
+            sensor = (row.get("sensor_name") or "").strip()
+            if custos and sensor:
+                reverse[custos] = sensor
+    if not reverse:
+        msg = f"tag_map bos: {path}"
+        raise ValueError(msg)
+    return reverse
+
+
+def load_cross_sensor_engine(
+    asset_template_path: Path | None,
+) -> CrossSensorEngine | None:
+    """Asset template'inden ``CrossSensorEngine`` olusturur (env-gated).
+
+    Wind pivot Faz 2 Prompt 2 mini-edit (2026-05-12): ``CUSTOS_CROSS_SENSOR``
+    env var 'off' (default) ise None doner — engine yuklenmez, Combined
+    sonuca dahil edilmez. CARE benchmark'ında Wind Farm A Portekiz iklim
+    baseline'inin Custos kural esikleriyle uyumsuz oldugu (Combined CARE
+    0.530 → 0.500 regresyon) gosterildi; default OFF saha kalibrasyonu
+    olmadan engine'in regresyon uretmesini engeller.
+
+    Yol None veya dosya yoksa None doner (caller cross_sensor engine'i
+    devre disi birakir, mevcut combined IF/AE/Trend bozulmaz). YAML
+    parsing hatasi caller'a yansir (config hatasi sessiz gecmesin).
+    """
+    if not resolve_cross_sensor_enabled():
+        logger.info(
+            "Cross-sensor engine disabled by env CUSTOS_CROSS_SENSOR=off "
+            "(default — saha kalibrasyonu sonrasi pilotta 'on' yapilir)",
+        )
+        return None
+    if asset_template_path is None:
+        return None
+    if not asset_template_path.is_file():
+        logger.warning(
+            "Asset template bulunamadi (cross_sensor skipped): %s",
+            asset_template_path,
+        )
+        return None
+    return CrossSensorEngine.from_yaml_file(asset_template_path)
+
+
+def build_cross_sensor_columns_map(
+    sensor_columns: list[str],
+    tag_map: dict[str, str],
+    engine: CrossSensorEngine,
+) -> dict[str, int]:
+    """Engine'in baktigi her ``wind_t_*`` tag'i CARE feature kolonuna esleyen
+    map'i hazirlar.
+
+    sensor_columns: dataset feature matrix'inin kolon adlari sirasi
+    (Fraunhofer isimleriyle). tag_map: custos_tag_name → sensor_name.
+    Eksik tag (CARE dataset'inde kolon yoksa veya tag_map'de yer almiyorsa)
+    sessizce atlanir — kural ANDed ise eksik tag = False, evaluation
+    erken-cikar.
+    """
+    sensor_index = {name: i for i, name in enumerate(sensor_columns)}
+    out: dict[str, int] = {}
+    for custos_name in engine.required_tags:
+        sensor_name = tag_map.get(custos_name)
+        if sensor_name is None:
+            logger.debug(
+                "Cross-sensor tag tag_map'de yok (atlandi): %s",
+                custos_name,
+            )
+            continue
+        idx = sensor_index.get(sensor_name)
+        if idx is None:
+            logger.debug(
+                "Cross-sensor sensor_name dataset kolonunda yok (atlandi): "
+                "%s → %s", custos_name, sensor_name,
+            )
+            continue
+        out[custos_name] = idx
+    return out
+
+
+def predictions_cross_sensor(
+    features: NDArray[np.float64],
+    sensor_columns: list[str],
+    engine: CrossSensorEngine | None,
+    tag_map: dict[str, str],
+) -> NDArray[np.int_] | None:
+    """Bir dataset features matrix'i icin cross_sensor 0/1 predictions uretir.
+
+    Engine yoksa veya hicbir kuralin tag'i CARE dataset'inde bulunamiyorsa
+    None doner (caller skip eder, runs[cross_sensor].n_skipped++).
+    Aksi halde her satir icin herhangi bir kural tetiklenirse 1, yoksa 0.
+    """
+    if engine is None or engine.n_rules == 0:
+        return None
+    tag_columns_map = build_cross_sensor_columns_map(
+        sensor_columns, tag_map, engine,
+    )
+    if not tag_columns_map:
+        logger.warning(
+            "Cross-sensor engine kurallarinin hicbir tag'i CARE "
+            "dataset'inde bulunamadi — engine skipped",
+        )
+        return None
+    preds_list = engine.evaluate_history(features, tag_columns_map)
+    return np.asarray(preds_list, dtype=np.int_)
+
+
 def predictions_trend_monitor(
     features: NDArray[np.float64],
     models_dir: Path,
@@ -403,6 +552,9 @@ def build_runs(
     datasets: list[LoadedDataset],
     models_dir: Path,
     trend_config: TrendConfig | None = None,
+    *,
+    cross_sensor_engine: CrossSensorEngine | None = None,
+    tag_map: dict[str, str] | None = None,
 ) -> dict[str, EngineRun]:
     """Tum engine'ler icin birlesik tahmin akisini hazirlar.
 
@@ -521,20 +673,55 @@ def build_runs(
             n_skipped=skipped,
         )
 
-    # 4) Combined engine — IF OR AE OR Trend (Faz 2 P0: 3 sinyal birlesimi).
-    # Anomaly detector engine_mode='both' + CUSTOS_TREND_MONITOR=on davranisi.
+    # 4) Cross-sensor engine (Wind pivot Faz 2 Prompt 2). YAML kurallarini
+    # her dataset features matrix'inde tek-tick row-bazinda degerlendirir.
+    cs_chunks: list[NDArray[np.int_]] = []
+    cs_skipped = 0
+    if cross_sensor_engine is not None and tag_map is not None:
+        for ds in datasets:
+            preds_cs = predictions_cross_sensor(
+                ds.features,
+                list(ds.sensor_columns),
+                cross_sensor_engine,
+                tag_map,
+            )
+            if preds_cs is None:
+                preds_cs = np.zeros(ds.features.shape[0], dtype=np.int_)
+                cs_skipped += 1
+            cs_chunks.append(preds_cs)
+    else:
+        # Engine veya tag_map yok — tum dataset'leri 0 ile doldur ve skip
+        # say. runs["cross_sensor"] yine olusur (raporda 'N/A' satiri).
+        for ds in datasets:
+            cs_chunks.append(np.zeros(ds.features.shape[0], dtype=np.int_))
+        cs_skipped = len(datasets)
+
+    runs["cross_sensor"] = EngineRun(
+        name="cross_sensor",
+        predictions=np.concatenate(cs_chunks),
+        status=status_all,
+        events=all_events,
+        n_datasets=len(datasets),
+        n_skipped=cs_skipped,
+    )
+    per_dataset_preds["cross_sensor"] = cs_chunks
+
+    # 5) Combined engine — IF OR AE OR Trend OR CrossSensor (Faz 2 Prompt 2:
+    # 4 sinyal birlesimi). Anomaly detector engine_mode='both' +
+    # CUSTOS_TREND_MONITOR=on + cross_sensor engine yuklu davranisi.
     if_chunks = per_dataset_preds["isolation_forest"]
     ae_chunks = per_dataset_preds["autoencoder"]
     trend_chunks = per_dataset_preds["trend_monitor"]
     combined_chunks: list[NDArray[np.int_]] = []
     combined_skipped = 0
-    for if_arr, ae_arr, trend_arr in zip(
-        if_chunks, ae_chunks, trend_chunks, strict=True,
+    for if_arr, ae_arr, trend_arr, cs_arr in zip(
+        if_chunks, ae_chunks, trend_chunks, cs_chunks, strict=True,
     ):
         if (
             if_arr.sum() == 0
             and ae_arr.sum() == 0
             and trend_arr.sum() == 0
+            and cs_arr.sum() == 0
         ):
             # Hicbiri pozitif uretmedi — skipped sayilir (model yok varsayimi)
             combined_skipped += 1
@@ -544,6 +731,7 @@ def build_runs(
                 if_arr.astype(bool)
                 | ae_arr.astype(bool)
                 | trend_arr.astype(bool)
+                | cs_arr.astype(bool)
             ).astype(np.int_),
         )
     runs["combined"] = EngineRun(
@@ -612,6 +800,12 @@ def render_markdown_report(
         "---------:|-----|",
     )
 
+    cross_sensor_off = not resolve_cross_sensor_enabled()
+    combined_note = (
+        "Custos tri-engine (IF OR AE OR Trend) — cross_sensor disabled by env"
+        if cross_sensor_off
+        else "Custos quad-engine (IF OR AE OR Trend OR CrossSensor)"
+    )
     paper_baseline = {
         "random": "Paper ≈ 0.50",
         "all_anomaly": "Paper = 0 (Acc<0.5 fallback)",
@@ -619,7 +813,8 @@ def render_markdown_report(
         "isolation_forest": "Paper ≈ 0.40-0.45",
         "autoencoder": "Paper ≈ 0.66",
         "trend_monitor": "Faz 2 P0 — EWMA slope (yavas trend)",
-        "combined": "Custos tri-engine (IF OR AE OR Trend)",
+        "cross_sensor": "Faz 2 Prompt 2 — multi-tag AND (YAML kurallari)",
+        "combined": combined_note,
     }
 
     order = [
@@ -629,14 +824,28 @@ def render_markdown_report(
         "isolation_forest",
         "autoencoder",
         "trend_monitor",
+        "cross_sensor",
         "combined",
     ]
     for engine_name in order:
         if engine_name not in runs:
             continue
         run = runs[engine_name]
+        # Wind pivot Faz 2 Prompt 2 mini-edit — env-off durumunda
+        # cross_sensor satirinin "disabled" gosterimi (Model bulunamadi
+        # mesajindan ayrik).
+        if engine_name == "cross_sensor" and cross_sensor_off:
+            lines.append(
+                f"| `{engine_name}` | N/A | N/A | N/A | N/A | **N/A** | "
+                "disabled (env CUSTOS_CROSS_SENSOR=off) |",
+            )
+            continue
         if run.n_skipped == run.n_datasets and engine_name in {
-            "isolation_forest", "autoencoder", "trend_monitor", "combined",
+            "isolation_forest",
+            "autoencoder",
+            "trend_monitor",
+            "cross_sensor",
+            "combined",
         }:
             lines.append(
                 f"| `{engine_name}` | N/A | N/A | N/A | N/A | **N/A** | "
@@ -739,7 +948,35 @@ def run(args: argparse.Namespace) -> int:
         slope_threshold=args.trend_threshold,
         min_observations=args.trend_min_obs,
     )
-    runs = build_runs(datasets, models_dir, trend_cfg)
+    # Wind pivot Faz 2 Prompt 2 — cross_sensor engine + tag_map yuklemesi.
+    # Eksik dosya/arg → engine None, runs["cross_sensor"] N/A satiri yazar.
+    asset_tmpl_path = (
+        Path(args.asset_template) if args.asset_template else None
+    )
+    cross_sensor_engine = load_cross_sensor_engine(asset_tmpl_path)
+    tag_map: dict[str, str] | None = None
+    if args.tag_map:
+        tag_map_path = Path(args.tag_map)
+        try:
+            tag_map = load_tag_map(tag_map_path)
+        except (FileNotFoundError, ValueError) as exc:
+            logger.warning(
+                "tag_map yuklenemedi (cross_sensor skipped): %s", exc,
+            )
+            tag_map = None
+    if cross_sensor_engine is not None:
+        logger.info(
+            "Cross-sensor engine yuklendi: %d kural, %d tag",
+            cross_sensor_engine.n_rules,
+            len(cross_sensor_engine.required_tags),
+        )
+    runs = build_runs(
+        datasets,
+        models_dir,
+        trend_cfg,
+        cross_sensor_engine=cross_sensor_engine,
+        tag_map=tag_map,
+    )
     report = render_markdown_report(runs, scorer, datasets, trend_cfg)
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -818,6 +1055,24 @@ def build_argparser() -> argparse.ArgumentParser:
         default=DEFAULT_MIN_OBSERVATIONS,
         help=(
             f"Trend monitor warmup (tick). Default {DEFAULT_MIN_OBSERVATIONS}."
+        ),
+    )
+    # Wind pivot Faz 2 Prompt 2 — cross_sensor engine args.
+    parser.add_argument(
+        "--asset-template",
+        default="data/asset_templates/wind_turbine_v1.yaml",
+        help=(
+            "Cross-sensor kurallarinin okunacagi asset template YAML "
+            "(default wind_turbine_v1). Bos veya bulunamayan dosya → "
+            "cross_sensor engine devre disi."
+        ),
+    )
+    parser.add_argument(
+        "--tag-map",
+        default="_personal/wind_pivot/tag_map_farm_a.csv",
+        help=(
+            "Custos tag adi ↔ CARE sensor kolon esleme CSV'si "
+            "(default tag_map_farm_a.csv). Eksikse cross_sensor skipped."
         ),
     )
     return parser

@@ -138,6 +138,84 @@ class MaintenanceDefaultSchema(BaseModel):
     checklist_slug: str | None = None
 
 
+# Wind pivot Faz 2 Prompt 2 cross-sensor kural semantigi.
+# AVM legacy F3.5 CrossSensorRule (database.py) tag_a-op-tag_b karsilastirmasi
+# yaparken bu schema multi-tag scalar threshold AND/OR mantigini ifade eder.
+# Yon konvansiyonu role_key DEGIL tag_name uzerinden — wind_t_* tag isimleri
+# seed_wind_tags.py ile sabitlenmis (stat tag'lar 'std'/'max'/'min' suffix'i
+# role olarak template'te yoktur, dogrudan tag adi referans verilir).
+_VALID_CROSS_SENSOR_OPS: frozenset[str] = frozenset(
+    {"gt", "gte", "lt", "lte", "eq"},
+)
+_VALID_CROSS_SENSOR_SEVERITIES: frozenset[str] = frozenset({"warn", "crit"})
+
+
+class CrossSensorTagConditionSchema(BaseModel):
+    """Tek tag scalar threshold kosulu (CrossSensorRule alt-elemani)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tag_name: str = Field(..., min_length=1, max_length=120)
+    op: str = Field(..., min_length=2, max_length=3)
+    threshold: float
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> CrossSensorTagConditionSchema:
+        if not _is_snake_case(self.tag_name):
+            raise ValueError(
+                f"tag_name snake_case olmali: {self.tag_name!r}",
+            )
+        if self.op not in _VALID_CROSS_SENSOR_OPS:
+            raise ValueError(
+                f"op {sorted(_VALID_CROSS_SENSOR_OPS)} arasinda olmali, "
+                f"geldi: {self.op!r}",
+            )
+        return self
+
+
+class CrossSensorRuleSchema(BaseModel):
+    """Multi-tag cross-sensor kural — YAML'dan okunur, DB'ye yazilmaz.
+
+    ``window_min`` su an metadata (online cagrici 30 dk pencereyi kendisi
+    yonetir; offline CARE row-bazinda tek-tick degerlendirir). Field
+    YAML'da tutulur ki ileride tick-window engine eklemek istedigimizde
+    sema bozulmasin.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str = Field(..., min_length=1, max_length=64)
+    description: str = ""
+    severity: str = "warn"
+    window_min: int = Field(30, ge=1, le=24 * 60)
+    require_all: bool = True
+    tag_conditions: list[CrossSensorTagConditionSchema] = Field(
+        ..., min_length=1,
+    )
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> CrossSensorRuleSchema:
+        if not _is_snake_case(self.rule_id):
+            raise ValueError(
+                f"rule_id snake_case olmali: {self.rule_id!r}",
+            )
+        if self.severity not in _VALID_CROSS_SENSOR_SEVERITIES:
+            raise ValueError(
+                f"severity {sorted(_VALID_CROSS_SENSOR_SEVERITIES)} "
+                f"arasinda olmali, geldi: {self.severity!r}",
+            )
+        # Duplicate tag_name kontrolu — editor hatasi gizlenmesin
+        seen: set[str] = set()
+        for cond in self.tag_conditions:
+            if cond.tag_name in seen:
+                raise ValueError(
+                    f"rule_id={self.rule_id!r} tag_conditions'da "
+                    f"tekrarli tag_name: {cond.tag_name!r}",
+                )
+            seen.add(cond.tag_name)
+        return self
+
+
 class TemplateSchema(BaseModel):
     """F9 AVM Template Pack YAML şeması."""
 
@@ -151,6 +229,11 @@ class TemplateSchema(BaseModel):
     kpis: list[KpiSchema] = Field(default_factory=list)
     alarm_defaults: list[AlarmDefaultSchema] = Field(default_factory=list)
     maintenance_defaults: list[MaintenanceDefaultSchema] = Field(default_factory=list)
+    # Wind pivot Faz 2 Prompt 2: multi-tag scalar threshold AND/OR
+    # kurallari. AVM template'lerinde default bos liste — geri uyumlu.
+    cross_sensor_rules: list[CrossSensorRuleSchema] = Field(
+        default_factory=list,
+    )
 
     @model_validator(mode="after")
     def _validate_cross_references(self) -> TemplateSchema:
@@ -180,6 +263,18 @@ class TemplateSchema(BaseModel):
                 raise ValueError(
                     f"alarm_defaults role_key tanımsız: {alarm.role_key!r}",
                 )
+
+        # Cross-sensor rule_id tekrarı yasak — wind pivot Faz 2 Prompt 2.
+        # tag_name role_key'e baglanmaz; wind_t_* tag adlandirma konvansiyonu
+        # seed_wind_tags.py'da sabitlenmis (template-bagimsiz).
+        cross_sensor_ids: set[str] = set()
+        for rule in self.cross_sensor_rules:
+            if rule.rule_id in cross_sensor_ids:
+                raise ValueError(
+                    f"cross_sensor_rules rule_id tekrarlanıyor: "
+                    f"{rule.rule_id!r}",
+                )
+            cross_sensor_ids.add(rule.rule_id)
 
         return self
 

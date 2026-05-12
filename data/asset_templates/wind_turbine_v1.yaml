@@ -245,3 +245,193 @@ maintenance_defaults:
   - title: Tower bolt-tightness denetimi
     period_days: 730
     description: Tower flanş cıvataları tork kontrolü (2 yılda 1, ilk yıl 6 ay sonra)
+
+# Wind pivot Faz 2 Prompt 2 (2026-05-12) cross-sensor cok-tag kurallari.
+#
+# Tek-sensör threshold (alarm_defaults) sadece bir kanali izler; gerçek
+# arizalar genellikle iki+ sensörün birlikte sapmasiyla erken sinyal verir.
+# Faz 1.5 paradoksu: Hidrolik 6 event'inden 5'i, mekanik bearing 5
+# event'inden 4'u sadece spike threshold'u astıkdan sonra (saat-gun sonra)
+# yakalandı. Bu kurallar Hoinka/EnBW prensibinin pratik uygulamasi —
+# "tek sensör spike yerine kombo trend".
+#
+# tag_name konvansiyonu: seed_wind_tags.py 'wind_t_*' standardini takip
+# eder. Template role_key'leri kullanmaz cunku stat-tag'lar (std/max/min)
+# role olarak tanimli degildir (must-have semantigini bozar — bunlar
+# anomaly + cross-sensor icin gerekli ama operator'in bilmesi gerekmiyor).
+#
+# Severity politikasi (CLAUDE feedback_alarm_critical_policy ile uyumlu):
+# cross_sensor user-defined oldugu icin 'crit' izinli; kritik mekanik
+# (stator/transformer/bearing kombo) crit, geri kalani warn.
+
+cross_sensor_rules:
+  - rule_id: hyd_overheat_pitch_instability
+    description: >-
+      Hidrolik yağ sıcaklığı yükselirken pitch kontrol salınımı artıyor
+      → pitch hidrolik basıncı zayıflıyor. Faz 1.5'te 2 hidrolik event'i
+      bu kombinasyon ile 18 saat erken yakalanabilirdi.
+    severity: warn
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_hydraulic_oil_temp
+        op: gt
+        threshold: 65.0
+      - tag_name: wind_t_pitch_angle_std
+        op: gt
+        threshold: 2.0
+  - rule_id: hyd_overheat_under_load
+    description: >-
+      Yük altında (>500 kW) hidrolik yağ sıcaklığı yükselip pitch açıkken
+      → hidrolik akümülatör doluş kaybı. Salt sıcaklık 70°C alarmı geç
+      kalır; yük + pitch kontekstiyle 1 gün önce tetiklenir.
+    severity: warn
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_hydraulic_oil_temp
+        op: gt
+        threshold: 60.0
+      - tag_name: wind_t_grid_power_avg
+        op: gt
+        threshold: 500.0
+      - tag_name: wind_t_pitch_angle_avg
+        op: gt
+        threshold: 5.0
+  - rule_id: gen_bearing_overheat_vibration
+    description: >-
+      Jeneratör yatak DE + NDE birlikte ısınırken RPM std artıyor
+      → klasik yatak aşınması imzası (vibration proxy). Event 0 (Asset 0)
+      bu kombo ile 36 saat önce; Event 40 (Asset 10) global threshold ile
+      4.5 gün geç yakalanmıştı.
+    severity: crit
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_gen_bearing_de_temp
+        op: gt
+        threshold: 75.0
+      - tag_name: wind_t_gen_bearing_nde_temp
+        op: gt
+        threshold: 75.0
+      - tag_name: wind_t_generator_rpm_std
+        op: gt
+        threshold: 50.0
+  - rule_id: gen_bearing_de_asymmetry
+    description: >-
+      DE yatak yalnız başına yüksek, NDE serin → tek-tarafli yatak
+      dengesizliği (kavrama veya hizalama). RPM normal aralıkta;
+      sadece sıcaklık asimetrisi.
+    severity: warn
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_gen_bearing_de_temp
+        op: gt
+        threshold: 80.0
+      - tag_name: wind_t_gen_bearing_nde_temp
+        op: lt
+        threshold: 70.0
+  - rule_id: gearbox_oil_bearing_load_combo
+    description: >-
+      Dişli yağı + yatak sıcaklığı + rotor RPM (yük göstergesi) üçlüsü.
+      Yağ zayıflarken yatak ısınıyor ve makine hala yükte → soğutma /
+      yağlama hattı tıkanıklığı.
+    severity: crit
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_gearbox_oil_temp
+        op: gt
+        threshold: 70.0
+      - tag_name: wind_t_gearbox_hss_bearing_temp
+        op: gt
+        threshold: 78.0
+      - tag_name: wind_t_rotor_rpm_avg
+        op: gt
+        threshold: 10.0
+  - rule_id: transformer_3phase_overheat
+    description: >-
+      HV trafo L1 + L2 + L3 birlikte yüksek → sistemik overheating
+      (soğutma fanı arızası veya aşırı yük). Tek-faz yüksekse genellikle
+      ölçüm/sensör; 3 faz birlikte = gerçek arıza.
+    severity: crit
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_hv_transformer_l1_temp
+        op: gt
+        threshold: 90.0
+      - tag_name: wind_t_hv_transformer_l2_temp
+        op: gt
+        threshold: 90.0
+      - tag_name: wind_t_hv_transformer_l3_temp
+        op: gt
+        threshold: 90.0
+  - rule_id: stator_3phase_overheat
+    description: >-
+      Stator faz 1 + 2 + 3 birlikte yüksek → sargı yalıtım risk
+      (insulation class H typ 130°C max; 110°C erken sinyal).
+    severity: crit
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_gen_stator_phase1_temp
+        op: gt
+        threshold: 110.0
+      - tag_name: wind_t_gen_stator_phase2_temp
+        op: gt
+        threshold: 110.0
+      - tag_name: wind_t_gen_stator_phase3_temp
+        op: gt
+        threshold: 110.0
+  - rule_id: igbt_rotor_3phase_overheat
+    description: >-
+      Converter rotor-side IGBT 3 fazi birlikte ısınıyor → DFIG
+      converter sıcaklık problemi (su soğutma veya yarı-iletken aşınma).
+    severity: warn
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_igbt_rotor_inv_ph1_temp
+        op: gt
+        threshold: 80.0
+      - tag_name: wind_t_igbt_rotor_inv_ph2_temp
+        op: gt
+        threshold: 80.0
+      - tag_name: wind_t_igbt_rotor_inv_ph3_temp
+        op: gt
+        threshold: 80.0
+  - rule_id: cooling_loop_degradation
+    description: >-
+      VCS soğutma suyu ısınıyor + grid-side IGBT de ısınıyor → soğutma
+      kapasitesi düşüyor (pompa, fan veya hidrolik blokaj). Tek sıcaklık
+      eşiğinden 2-3 gün önce tetiklenir.
+    severity: warn
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_vcs_cooling_water_temp
+        op: gt
+        threshold: 55.0
+      - tag_name: wind_t_igbt_grid_inv_temp
+        op: gt
+        threshold: 75.0
+  - rule_id: rotor_mechanical_imbalance
+    description: >-
+      Rotor RPM std + pitch std yüksek, rüzgar turbulansı düşük →
+      makineden kaynaklı dengesizlik (rüzgardan değil). Bu kombo
+      mekanik bearing veya kanat aerodynamic problemine erken sinyal.
+    severity: warn
+    window_min: 30
+    require_all: true
+    tag_conditions:
+      - tag_name: wind_t_rotor_rpm_std
+        op: gt
+        threshold: 1.5
+      - tag_name: wind_t_pitch_angle_std
+        op: gt
+        threshold: 3.0
+      - tag_name: wind_t_wind_speed_std
+        op: lt
+        threshold: 2.0

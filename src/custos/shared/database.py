@@ -474,6 +474,47 @@ class TrendAlert:
     created_at: datetime | None = None
 
 
+# Wind pivot Faz 2 Prompt 2: per-asset adaptive threshold engine_type'lari.
+# 'if' = Isolation Forest score_samples (alt kuyruk = anomaly),
+# 'ae' = Autoencoder RMSE (ust kuyruk = anomaly). Cross-sensor rule-tabanli
+# olduğu icin bu tabloda yer almaz.
+ASSET_THRESHOLD_ENGINE_TYPES: tuple[str, ...] = ("if", "ae")
+ASSET_THRESHOLD_ENGINE_TYPE_VALUES: frozenset[str] = frozenset(
+    ASSET_THRESHOLD_ENGINE_TYPES,
+)
+
+
+@dataclass
+class AssetThreshold:
+    """Per-asset anomaly threshold — asset_thresholds tablosunun Python temsili.
+
+    Wind pivot Faz 2 Prompt 2 (migration 042). Her asset_instance + engine
+    icin global quantile yerine asset-spesifik threshold saklanir; boylece
+    gürültülü asset'lerde threshold yukari, sessiz asset'lerde asagi
+    kayar ve hem coverage hem accuracy artar.
+
+    ``threshold``: AE icin upper-tail (raw RMSE; score>threshold=anomaly),
+    IF icin lower-tail (score_samples; score<threshold=anomaly). Yon
+    konvansiyonu engine_type'a baglidir; caller (anomaly_detector) yonü
+    bilinen `_is_anomaly_at_threshold` ile uygular.
+    ``training_quantile``: Kalibrasyonda kullanilan numpy quantile
+    parametresi (typ. AE=0.99, IF=0.01). Debug + tekrar uretilebilirlik.
+    ``sample_count``: Kalibrasyona giren skor sayisi — confidence proxy'si.
+    ``calibrated_at``: Son kalibrasyon zamani UTC; saha-drift sonrasi
+    yeniden kalibrasyon icin "ne kadar eski" kontrolu.
+    """
+
+    asset_instance_id: int
+    engine_type: str  # 'if' | 'ae'
+    threshold: float
+    training_quantile: float
+    sample_count: int = 0
+    calibrated_at: datetime | None = None
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 @dataclass
 class PushSubscription:
     """Web Push bildirim aboneliği — push_subscriptions tablosunun Python temsili.
@@ -1233,6 +1274,51 @@ class DatabaseInterface(abc.ABC):
         """Anomali sayısını döndürür. Opsiyonel zaman filtresi."""
 
     # --- Trend Alerts (Wind pivot Faz 2 P0 — migration 041) ---
+
+    # --- Per-Asset Thresholds (Wind pivot Faz 2 Prompt 2 — migration 042) ---
+
+    @abc.abstractmethod
+    async def upsert_asset_threshold(
+        self,
+        threshold: AssetThreshold,
+    ) -> AssetThreshold:
+        """Per-asset adaptive threshold yazar veya gunceller.
+
+        UNIQUE (asset_instance_id, engine_type) ihlali → UPDATE. Bu sayede
+        re-kalibrasyon eski threshold'u tek atomic islemde uzerine yazar.
+        ``calibrated_at`` ve ``updated_at`` her zaman NOW() ile yeniden
+        atilir; insert sirasinda ``created_at`` korunur.
+
+        Tablo sadece ``custos_wind`` DB'sinde mevcut (migration 042
+        conditional). AVM ``custos`` DB'sinde calistirildiginda
+        ``UndefinedTableError`` firlatir — caller env veya feature-gate
+        kontrolu ile bunu onlemelidir.
+        """
+
+    @abc.abstractmethod
+    async def get_asset_threshold(
+        self,
+        asset_instance_id: int,
+        engine_type: str,
+    ) -> AssetThreshold | None:
+        """Bir asset + engine icin kayitli threshold'u doner; yoksa None.
+
+        Caller None gelirse fallback'e (engine'in default threshold'u)
+        gecebilir; bu uretim sirasinda calibrate edilmemis yeni asset'ler
+        icin kritik.
+        """
+
+    @abc.abstractmethod
+    async def list_asset_thresholds(
+        self,
+        asset_instance_id: int | None = None,
+    ) -> list[AssetThreshold]:
+        """Kayitli threshold'lari listeler.
+
+        ``asset_instance_id=None`` → tum kayitlar (cache warm-up icin).
+        Verilirse o asset'in iki engine threshold'u (IF + AE) doner.
+        Sira: asset_instance_id ASC, engine_type ASC (reproducible).
+        """
 
     @abc.abstractmethod
     async def insert_trend_alert(self, alert: TrendAlert) -> TrendAlert:
@@ -2135,6 +2221,21 @@ def _row_to_trend_alert(row: asyncpg.Record) -> TrendAlert:
         duration_min=row["duration_min"],
         severity=row["severity"],
         created_at=row["created_at"],
+    )
+
+
+def _row_to_asset_threshold(row: asyncpg.Record) -> AssetThreshold:
+    """asyncpg satırını AssetThreshold'a donusturur (Faz 2 Prompt 2 — migration 042)."""
+    return AssetThreshold(
+        id=row["id"],
+        asset_instance_id=int(row["asset_instance_id"]),
+        engine_type=row["engine_type"],
+        threshold=float(row["threshold"]),
+        training_quantile=float(row["training_quantile"]),
+        sample_count=int(row["sample_count"]),
+        calibrated_at=row["calibrated_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -3787,6 +3888,83 @@ class TimescaleDBDatabase(DatabaseInterface):
             async with pool.acquire() as conn:
                 count = await conn.fetchval(sql)
         return int(count or 0)
+
+    # --- Per-Asset Thresholds (Wind pivot Faz 2 Prompt 2 — migration 042) ---
+
+    async def upsert_asset_threshold(
+        self,
+        threshold: AssetThreshold,
+    ) -> AssetThreshold:
+        """Per-asset threshold yazar/gunceller (asset+engine UNIQUE upsert).
+
+        ON CONFLICT (asset_instance_id, engine_type) DO UPDATE: threshold,
+        training_quantile, sample_count, calibrated_at, updated_at uzerine
+        yazilir; created_at korunur.
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO asset_thresholds "
+                "(asset_instance_id, engine_type, threshold, "
+                "training_quantile, sample_count, calibrated_at) "
+                "VALUES ($1, $2, $3, $4, $5, NOW()) "
+                "ON CONFLICT ON CONSTRAINT uq_asset_thresholds_asset_engine "
+                "DO UPDATE SET "
+                "threshold = EXCLUDED.threshold, "
+                "training_quantile = EXCLUDED.training_quantile, "
+                "sample_count = EXCLUDED.sample_count, "
+                "calibrated_at = NOW(), "
+                "updated_at = NOW() "
+                "RETURNING *",
+                threshold.asset_instance_id,
+                threshold.engine_type,
+                threshold.threshold,
+                threshold.training_quantile,
+                threshold.sample_count,
+            )
+        assert row is not None
+        return _row_to_asset_threshold(row)
+
+    async def get_asset_threshold(
+        self,
+        asset_instance_id: int,
+        engine_type: str,
+    ) -> AssetThreshold | None:
+        """Asset + engine threshold'unu doner; yoksa None."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM asset_thresholds "
+                "WHERE asset_instance_id = $1 AND engine_type = $2",
+                asset_instance_id,
+                engine_type,
+            )
+        if row is None:
+            return None
+        return _row_to_asset_threshold(row)
+
+    async def list_asset_thresholds(
+        self,
+        asset_instance_id: int | None = None,
+    ) -> list[AssetThreshold]:
+        """Kayitli threshold'lari listeler (cache warm-up + admin view)."""
+        pool = self._get_pool()
+        if asset_instance_id is None:
+            sql = (
+                "SELECT * FROM asset_thresholds "
+                "ORDER BY asset_instance_id ASC, engine_type ASC"
+            )
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(sql)
+        else:
+            sql = (
+                "SELECT * FROM asset_thresholds "
+                "WHERE asset_instance_id = $1 "
+                "ORDER BY engine_type ASC"
+            )
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(sql, asset_instance_id)
+        return [_row_to_asset_threshold(row) for row in rows]
 
     # --- Trend Alerts (Wind pivot Faz 2 P0 — migration 041) ---
 
