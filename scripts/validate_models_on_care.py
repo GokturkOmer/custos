@@ -56,6 +56,18 @@ DEFAULT_LIMIT = 22
 # Status_type_id kolonu ismi (Fraunhofer CSV semantigi).
 STATUS_COLUMN = "status_type_id"
 
+# Feature olarak SAYILMAYAN metadata kolonlari. ``id`` ve ``train_test``
+# Faz 1.5 kapanis bug-fix'i ile dahil edildi (training script ile uyumlu olmali —
+# yoksa feature sayisi 81 vs 83 uyumsuzlugu modelleri sessiz devre disi birakiyor).
+META_COLUMNS: frozenset[str] = frozenset({
+    STATUS_COLUMN,
+    "time_stamp",
+    "timestamp",
+    "asset_id",
+    "id",
+    "train_test",
+})
+
 # Random baseline icin tohum — reproducability icin.
 RANDOM_SEED = 1729
 
@@ -133,7 +145,7 @@ def load_dataset(info: DatasetInfo) -> LoadedDataset | None:
         reader = csv.DictReader(f, delimiter=";")
         sensor_cols = [
             c for c in (reader.fieldnames or [])
-            if c not in {STATUS_COLUMN, "time_stamp", "timestamp", "asset_id"}
+            if c not in META_COLUMNS
         ]
         rows = list(reader)
     if not rows:
@@ -366,11 +378,14 @@ def build_runs(
         )
 
     # 3) IF ve AE — per-dataset model yuklemesi
+    per_dataset_preds: dict[str, list[NDArray[np.int_]]] = {
+        "isolation_forest": [],
+        "autoencoder": [],
+    }
     for engine_name, predict_fn in (
         ("isolation_forest", predictions_isolation_forest),
         ("autoencoder", predictions_autoencoder),
     ):
-        chunks: list[NDArray[np.int_]] = []
         skipped = 0
         for ds in datasets:
             preds_opt = predict_fn(ds.features, models_dir, ds.info.asset)
@@ -382,15 +397,37 @@ def build_runs(
                 skipped += 1
             else:
                 preds_arr = preds_opt
-            chunks.append(preds_arr)
+            per_dataset_preds[engine_name].append(preds_arr)
         runs[engine_name] = EngineRun(
             name=engine_name,
-            predictions=np.concatenate(chunks),
+            predictions=np.concatenate(per_dataset_preds[engine_name]),
             status=status_all,
             events=all_events,
             n_datasets=len(datasets),
             n_skipped=skipped,
         )
+
+    # 4) Combined engine — IF OR AE (anomaly_detector engine_mode='both' davranisi).
+    #    Her dataset icin her iki engine de varsa, bool OR; biri yoksa sadece
+    #    digerinin tahmini gecerli olur.
+    if_chunks = per_dataset_preds["isolation_forest"]
+    ae_chunks = per_dataset_preds["autoencoder"]
+    combined_chunks: list[NDArray[np.int_]] = []
+    combined_skipped = 0
+    for if_arr, ae_arr in zip(if_chunks, ae_chunks, strict=True):
+        if if_arr.sum() == 0 and ae_arr.sum() == 0:
+            # Ikisi de bos / model yok — skipped sayilir (tahmin yok)
+            combined_skipped += 1
+        # OR — herhangi biri 1 ise combined 1
+        combined_chunks.append(((if_arr.astype(bool)) | (ae_arr.astype(bool))).astype(np.int_))
+    runs["combined"] = EngineRun(
+        name="combined",
+        predictions=np.concatenate(combined_chunks),
+        status=status_all,
+        events=all_events,
+        n_datasets=len(datasets),
+        n_skipped=combined_skipped,
+    )
 
     _ = n_features  # placeholder — ileride sanity check icin
     return runs
@@ -447,15 +484,23 @@ def render_markdown_report(
         "all_normal": "Paper = 0 (no positive)",
         "isolation_forest": "Paper ≈ 0.40-0.45",
         "autoencoder": "Paper ≈ 0.66",
+        "combined": "Custos dual-engine (IF OR AE)",
     }
 
-    order = ["random", "all_anomaly", "all_normal", "isolation_forest", "autoencoder"]
+    order = [
+        "random",
+        "all_anomaly",
+        "all_normal",
+        "isolation_forest",
+        "autoencoder",
+        "combined",
+    ]
     for engine_name in order:
         if engine_name not in runs:
             continue
         run = runs[engine_name]
         if run.n_skipped == run.n_datasets and engine_name in {
-            "isolation_forest", "autoencoder",
+            "isolation_forest", "autoencoder", "combined",
         }:
             lines.append(
                 f"| `{engine_name}` | N/A | N/A | N/A | N/A | **N/A** | "
