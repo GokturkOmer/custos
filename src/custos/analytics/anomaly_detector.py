@@ -1,18 +1,31 @@
-"""Anomali tespit modülü — Isolation Forest tabanlı.
+"""Anomali tespit modülü — Isolation Forest + Autoencoder dual-engine.
 
-İki bileşen:
-- train_model_for_instance(): Offline eğitim — tag reading'lerinden
+Üç bileşen:
+- train_model_for_instance(): Offline IF eğitim — tag reading'lerinden
   Isolation Forest modeli eğitir, .joblib dosyasına yazar.
 - AnomalyDetector: Analytics loop'ta periyodik çalışan inference —
   eğitilmiş modelleri yükler, son tag değerlerinden skor hesaplar.
+- Wind pivot Faz 1.3 (2026-05-12): MLPRegressor autoencoder modeli IF ile
+  yan yana skorlanır; ``CUSTOS_ANOMALY_ENGINE`` env var'i ile mod seçilir.
+
+Engine mod (env ``CUSTOS_ANOMALY_ENGINE``, default 'both'):
+- ``'if'``: Sadece Isolation Forest (geri uyumlu — AVM production).
+- ``'ae'``: Sadece autoencoder (wind pivot eval).
+- ``'both'``: Her iki engine — her engine kendi engine_type'i ile yazar.
+
+Model dosya adlandirmasi:
+- IF: ``data/models/anomaly_<instance_id>.joblib`` (AVM ve wind ortak).
+- AE: ``data/models/autoencoder_<instance_id>_wind.joblib`` (sadece wind).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -23,10 +36,37 @@ from custos.shared.database import (
     DatabaseInterface,
 )
 
+if TYPE_CHECKING:
+    from custos.analytics.autoencoder_engine import AutoencoderAnomalyEngine
+
 logger = structlog.get_logger(logger_name="anomaly_detector")
 
 # Minimum eğitim satırı — bundan az veri varsa model eğitilmez
 _MIN_TRAINING_ROWS = 10
+
+# Wind pivot Faz 1.3: engine mod env var.
+_ENGINE_MODE_ENV = "CUSTOS_ANOMALY_ENGINE"
+_DEFAULT_ENGINE_MODE = "both"
+_VALID_ENGINE_MODES: frozenset[str] = frozenset({"if", "ae", "both"})
+
+
+def _resolve_engine_mode() -> str:
+    """``CUSTOS_ANOMALY_ENGINE`` env var → 'if' | 'ae' | 'both' (default 'both').
+
+    Gecersiz deger uyari ile default'a fallback eder; environment yanlis
+    konfigurasyonda detector durmaz, sadece IF + AE'yi her ikisini de
+    deneyerek devam eder.
+    """
+    raw = os.environ.get(_ENGINE_MODE_ENV, _DEFAULT_ENGINE_MODE).strip().lower()
+    if raw not in _VALID_ENGINE_MODES:
+        logger.warning(
+            "Gecersiz %s=%r; default %r kullanildi",
+            _ENGINE_MODE_ENV,
+            raw,
+            _DEFAULT_ENGINE_MODE,
+        )
+        return _DEFAULT_ENGINE_MODE
+    return raw
 
 
 async def train_model_for_instance(
@@ -117,14 +157,36 @@ class AnomalyDetector:
         db: DatabaseInterface,
         models_dir: Path,
         interval_seconds: float = 60.0,
+        engine_mode: str | None = None,
     ) -> None:
+        """Detector kurulumu.
+
+        ``engine_mode`` None ise env var (``CUSTOS_ANOMALY_ENGINE``) okunur.
+        Explicit deger (test fixture'lari icin) override eder.
+        """
         self._db = db
         self._models_dir = models_dir
         self._interval = interval_seconds
         self._task: asyncio.Task[None] | None = None
         self._running = False
-        # Yüklenmiş modeller: instance_id → model
+        # Yüklenmiş IF modelleri: instance_id → IsolationForest (geri uyumlu).
         self._models: dict[int, object] = {}
+        # Wind pivot Faz 1.3: AE modelleri ayri dict'te (model file naming
+        # ``autoencoder_<id>_wind.joblib`` AVM IF dosyalariyla cakismaz).
+        self._ae_models: dict[int, AutoencoderAnomalyEngine] = {}
+        # Engine mode — explicit > env > default
+        self._engine_mode = (
+            engine_mode.strip().lower()
+            if engine_mode is not None
+            else _resolve_engine_mode()
+        )
+        if self._engine_mode not in _VALID_ENGINE_MODES:
+            logger.warning(
+                "Gecersiz engine_mode=%r; default %r kullanildi",
+                self._engine_mode,
+                _DEFAULT_ENGINE_MODE,
+            )
+            self._engine_mode = _DEFAULT_ENGINE_MODE
 
     @property
     def models_dir(self) -> Path:
@@ -133,10 +195,25 @@ class AnomalyDetector:
 
     @property
     def loaded_models(self) -> dict[int, object]:
-        """Bellekteki yüklü modeller (instance_id → model). R-04 ML hub'ı bu sözlüğü
+        """Bellekteki yüklü IF modelleri (instance_id → model). R-04 ML hub'ı bu sözlüğü
         son skor + model varlığı için sorgular; doğrudan ``_models`` private
         attr'ına dokunmak yerine read-only property üzerinden okur."""
         return self._models
+
+    @property
+    def loaded_ae_models(self) -> dict[int, AutoencoderAnomalyEngine]:
+        """Bellekteki yüklü autoencoder modelleri (wind pivot Faz 1.3).
+
+        IF ``loaded_models`` ile semantik olarak ayri: AVM production IF
+        kullanir, wind asset_instance'lar AE kullanir; ``both`` modunda
+        iki dict birlikte populate edilir.
+        """
+        return self._ae_models
+
+    @property
+    def engine_mode(self) -> str:
+        """Aktif engine mod ('if' | 'ae' | 'both'). Test + debug icin read-only."""
+        return self._engine_mode
 
     async def start(self) -> None:
         """Detector'ı başlatır — arka plan task olarak çalışır."""
@@ -145,7 +222,9 @@ class AnomalyDetector:
         await logger.ainfo(
             "Anomaly detector başlatıldı",
             interval=self._interval,
-            models_loaded=len(self._models),
+            engine_mode=self._engine_mode,
+            if_models_loaded=len(self._models),
+            ae_models_loaded=len(self._ae_models),
         )
         try:
             while self._running:
@@ -173,29 +252,65 @@ class AnomalyDetector:
         await logger.ainfo("Anomaly detector durduruldu")
 
     def _load_models(self) -> None:
-        """Model dosyalarını diskten yükler."""
+        """Model dosyalarını diskten yükler — IF + AE (engine_mode'a göre).
+
+        - IF modelleri: ``anomaly_<id>.joblib`` (mevcut davranis).
+        - AE modelleri: ``autoencoder_<id>_wind.joblib`` (wind pivot Faz 1.3).
+
+        Engine mode 'if' ise sadece IF yuklenir, 'ae' ise sadece AE,
+        'both' ise her ikisi. Bozuk dosyalar uyari logu ile atlanir
+        (detector durmaz).
+        """
         import joblib  # noqa: PLC0415 — lazy import
 
         self._models.clear()
+        self._ae_models.clear()
+
         if not self._models_dir.exists():
             return
 
-        for path in self._models_dir.glob("anomaly_*.joblib"):
-            try:
-                # Dosya adından instance_id çıkar: anomaly_{id}.joblib
-                instance_id = int(path.stem.split("_")[1])
-                self._models[instance_id] = joblib.load(path)
-            except (ValueError, IndexError, Exception):
-                logger.warning(
-                    "Model dosyası yüklenemedi",
-                    path=str(path),
-                )
+        if self._engine_mode in {"if", "both"}:
+            for path in self._models_dir.glob("anomaly_*.joblib"):
+                try:
+                    # Dosya adından instance_id çıkar: anomaly_{id}.joblib
+                    instance_id = int(path.stem.split("_")[1])
+                    self._models[instance_id] = joblib.load(path)
+                except (ValueError, IndexError, Exception):
+                    logger.warning(
+                        "IF model dosyası yüklenemedi",
+                        path=str(path),
+                    )
+
+        if self._engine_mode in {"ae", "both"}:
+            # Lazy import — autoencoder_engine sklearn'i lazy yukler,
+            # ama burada sinif gerekir; modul import maliyetini sadece
+            # AE yuklerken oder.
+            from custos.analytics.autoencoder_engine import (  # noqa: PLC0415
+                AutoencoderAnomalyEngine,
+            )
+            for path in self._models_dir.glob("autoencoder_*_wind.joblib"):
+                try:
+                    # Dosya adi: autoencoder_<id>_wind.joblib
+                    # Parts: ['autoencoder', '<id>', 'wind']
+                    parts = path.stem.split("_")
+                    instance_id = int(parts[1])
+                    self._ae_models[instance_id] = AutoencoderAnomalyEngine.load(path)
+                except (ValueError, IndexError, Exception):
+                    logger.warning(
+                        "AE model dosyası yüklenemedi",
+                        path=str(path),
+                    )
 
     async def _detect_cycle(self) -> None:
-        """Tek bir tespit döngüsü — her instance için anomali skoru hesaplar."""
+        """Tek bir tespit döngüsü — her instance için anomali skoru hesaplar.
+
+        Wind pivot Faz 1.3: ``engine_mode``a göre IF + AE skorlanir; her
+        engine kendi engine_type'i ile ayri AnomalyScore satiri yazar.
+        Audit log her anomaly icin tek satir (engine_type detail'de).
+        """
         import numpy as np  # noqa: PLC0415
 
-        if not self._models:
+        if not self._models and not self._ae_models:
             return
 
         # R-04: Sistem-geneli ML inference master switch. False iken
@@ -228,11 +343,13 @@ class AnomalyDetector:
                     operating_mode=instance.operating_mode,
                 )
                 continue
-            model = self._models.get(instance.id)
-            if model is None:
+
+            if_model = self._models.get(instance.id)
+            ae_model = self._ae_models.get(instance.id)
+            if if_model is None and ae_model is None:
                 continue
 
-            # Tag binding → son değerler
+            # Tag binding → son değerler (her iki engine icin ortak)
             bindings = await self._db.list_tag_bindings(instance.id)
             if not bindings:
                 continue
@@ -242,34 +359,38 @@ class AnomalyDetector:
 
             # Feature vektörü oluştur (binding sırasıyla)
             feature_values: list[float] = []
+            missing = False
             for binding in bindings:
                 reading = readings.get(binding.tag_id)
                 if reading is None:
+                    missing = True
                     break
                 feature_values.append(reading.value)
-            else:
-                # Tüm tag'lerden değer alındı — skor hesapla
-                feature_array = np.array([feature_values])
-                prediction = model.predict(feature_array)  # type: ignore[attr-defined]
-                raw_scores = model.score_samples(feature_array)  # type: ignore[attr-defined]
-                score = float(raw_scores[0])
-                is_anomaly = bool(prediction[0] == -1)
+            if missing:
+                continue
 
-                feature_json = json.dumps(
-                    {tid: v for tid, v in zip(tag_ids, feature_values, strict=True)},
-                )
+            feature_array = np.array([feature_values])
+            feature_json = json.dumps(
+                {tid: v for tid, v in zip(tag_ids, feature_values, strict=True)},
+            )
 
+            # --- IF engine ---
+            if if_model is not None:
+                prediction = if_model.predict(feature_array)  # type: ignore[attr-defined]
+                raw_scores = if_model.score_samples(feature_array)  # type: ignore[attr-defined]
+                if_score = float(raw_scores[0])
+                if_is_anomaly = bool(prediction[0] == -1)
                 await self._db.insert_anomaly_score(
                     AnomalyScore(
                         instance_id=instance.id,
                         timestamp=now,
-                        score=score,
-                        is_anomaly=is_anomaly,
+                        score=if_score,
+                        is_anomaly=if_is_anomaly,
                         feature_vector=feature_json,
+                        engine_type="if",
                     )
                 )
-
-                if is_anomaly:
+                if if_is_anomaly:
                     anomaly_count += 1
                     await self._db.insert_audit_log(
                         AuditLogEntry(
@@ -277,9 +398,46 @@ class AnomalyDetector:
                             action="detected",
                             entity_type="asset_instance",
                             entity_id=str(instance.id),
-                            detail=f"Anomali skoru: {score:.4f}",
+                            detail=f"IF anomali skoru: {if_score:.4f}",
                         )
                     )
+
+            # --- AE engine (wind pivot Faz 1.3) ---
+            if ae_model is not None:
+                try:
+                    ae_scores = ae_model.score(feature_array)
+                    ae_flags = ae_model.is_anomaly(feature_array)
+                except ValueError:
+                    # Feature sayisi uyumsuz (tag binding degisti?); skip.
+                    await logger.awarn(
+                        "AE skor hatasi — feature uyumsuzlugu",
+                        instance_id=instance.id,
+                        n_features=feature_array.shape[1],
+                    )
+                else:
+                    ae_score = float(ae_scores[0])
+                    ae_is_anomaly = bool(ae_flags[0])
+                    await self._db.insert_anomaly_score(
+                        AnomalyScore(
+                            instance_id=instance.id,
+                            timestamp=now,
+                            score=ae_score,
+                            is_anomaly=ae_is_anomaly,
+                            feature_vector=feature_json,
+                            engine_type="ae",
+                        )
+                    )
+                    if ae_is_anomaly:
+                        anomaly_count += 1
+                        await self._db.insert_audit_log(
+                            AuditLogEntry(
+                                category="anomaly",
+                                action="detected",
+                                entity_type="asset_instance",
+                                entity_id=str(instance.id),
+                                detail=f"AE anomali skoru: {ae_score:.4f}",
+                            )
+                        )
 
         if anomaly_count > 0:
             await logger.awarn(

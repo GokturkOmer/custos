@@ -37,9 +37,14 @@ Endüstriyel edge izleme sistemi (proje adı: **Custos**). Modbus üzerinden sen
 - Collector modülü (critical/collector.py) SADECE `pymodbus` ve abstract DB arayüzünü kullanır. `asyncpg`, SQL string'leri, veya ORM kodu Collector içinde YAZILMAZ.
 - Modbus client kodunda `write_register`, `write_coil`, `write_registers`, `write_coils` çağrıları ASLA yapılmaz. Sadece read fonksiyonları.
 
-### ML kuralları
-- Derin öğrenme yok. Sadece scikit-learn ailesi.
-- Modeller cihazda eğitilmez, sadece çalıştırılır. Eğitim offline (geliştirici makinesinde).
+### ML kuralları (2026-05-12 revize)
+- Critical loop'ta ML hala yasak (collector + threshold).
+- Analytics loop'ta scikit-learn ailesi öncelikli.
+- Neural network **scikit-learn üzerinden** izinli: MLPRegressor / MLPClassifier
+  (sığ NN, en fazla 3-4 katman, autoencoder veya regression dahil).
+- PyTorch/TensorFlow için ayrı karar gerekir — şu an gerek yok.
+- Asistan modülü (analytics/assistant) için DL istisnası devam.
+- Modeller cihazda eğitilmez, eğitim offline.
 - Test seti ASLA eğitim setine karıştırılmaz.
 
 ### Kod kalitesi

@@ -148,10 +148,12 @@ RULES: Final[tuple[Rule, ...]] = (
     Rule(
         id="DEEP_LEARNING",
         description=(
-            "Derin öğrenme framework'leri yasak "
-            "(CLAUDE.md: 'Derin öğrenme yok. Sadece scikit-learn ailesi'). "
+            "PyTorch / TensorFlow / Keras / JAX import'u yasak "
+            "(CLAUDE.md 2026-05-12 revize: sklearn MLPRegressor sigi NN "
+            "izinli — torch/tensorflow ayri karar gerekir). "
             "Sentence-transformers gibi yüksek seviye API'lar dolaylı "
-            "PyTorch kullansa da kapsanmaz; doğrudan import yasak."
+            "PyTorch kullansa da kapsanmaz; doğrudan import yasak. "
+            "Asistan modülü icin istisna ayrica karar verilecek."
         ),
         pattern=re.compile(
             r"^\s*(?:from|import)\s+"

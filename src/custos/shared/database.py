@@ -429,13 +429,22 @@ class KpiResult:
 
 @dataclass
 class AnomalyScore:
-    """Anomali skoru — anomaly_scores tablosunun Python temsili."""
+    """Anomali skoru — anomaly_scores tablosunun Python temsili.
+
+    Wind pivot Faz 1.3 (migration 040) ile ``engine_type`` kolonu eklendi:
+
+    - ``'if'``: Isolation Forest (default, geri uyumlu — AVM ve wind).
+    - ``'ae'``: Autoencoder (MLPRegressor sigi NN, sadece wind pivot).
+    Dual-engine modunda her instance icin iki satir yazilir (her engine
+    kendi engine_type'i ile).
+    """
 
     instance_id: int
     timestamp: datetime
     score: float
     is_anomaly: bool = False
     feature_vector: str = ""
+    engine_type: str = "if"
     id: int | None = None
     created_at: datetime | None = None
 
@@ -2044,7 +2053,15 @@ def _row_to_kpi_result(row: asyncpg.Record) -> KpiResult:
 
 
 def _row_to_anomaly_score(row: asyncpg.Record) -> AnomalyScore:
-    """asyncpg satırını AnomalyScore'a dönüştürür."""
+    """asyncpg satırını AnomalyScore'a dönüştürür.
+
+    Migration 040 öncesi DB durumu icin defensive: ``engine_type`` kolon
+    yoksa 'if' fallback (KeyError yutuluyor) — geri uyumlu.
+    """
+    try:
+        engine_type = row["engine_type"]
+    except (KeyError, IndexError):
+        engine_type = "if"
     return AnomalyScore(
         id=row["id"],
         instance_id=row["instance_id"],
@@ -2052,6 +2069,7 @@ def _row_to_anomaly_score(row: asyncpg.Record) -> AnomalyScore:
         score=row["score"],
         is_anomaly=row["is_anomaly"],
         feature_vector=row["feature_vector"],
+        engine_type=engine_type,
         created_at=row["created_at"],
     )
 
@@ -3642,19 +3660,25 @@ class TimescaleDBDatabase(DatabaseInterface):
     # --- Anomaly Scores implementasyonları ---
 
     async def insert_anomaly_score(self, score: AnomalyScore) -> AnomalyScore:
-        """Yeni anomali skoru kaydeder ve döndürür."""
+        """Yeni anomali skoru kaydeder ve döndürür.
+
+        Migration 040 ile ``engine_type`` kolonu eklendi — IF skorlari
+        'if', autoencoder skorlari 'ae' degerini alir. INSERT'te explicit
+        verilir (DB default 'if' fallback'i de korunur).
+        """
         pool = self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "INSERT INTO anomaly_scores "
-                "(instance_id, timestamp, score, is_anomaly, feature_vector) "
-                "VALUES ($1, $2, $3, $4, $5) "
+                "(instance_id, timestamp, score, is_anomaly, feature_vector, engine_type) "
+                "VALUES ($1, $2, $3, $4, $5, $6) "
                 "RETURNING *",
                 score.instance_id,
                 score.timestamp,
                 score.score,
                 score.is_anomaly,
                 score.feature_vector,
+                score.engine_type,
             )
         assert row is not None
         return _row_to_anomaly_score(row)
