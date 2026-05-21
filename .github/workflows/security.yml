@@ -40,4 +40,17 @@ jobs:
           # transformers CVE-2026-1839: Trainer class kullanilmiyor, sadece
           # sentence-transformers Pipeline (embeddings). PP-01 kabul edilen
           # risk; v1.2'de transformers 5.x major bump planli.
-          pip-audit -r /tmp/audit_targets.txt --strict --ignore-vuln CVE-2026-1839
+          #
+          # pyarrow PYSEC-2026-113 (CVE-2026-25087): Apache Arrow C++ IPC
+          # okuma use-after-free'i. PyArrow Python binding pre-buffering'i
+          # expose etmiyor (advisory notu) ve archiver.py yalnizca Parquet
+          # YAZIYOR (IPC okumuyor) — Custos icin uygulanamaz. Fix surumu
+          # 23.0.1 pyproject pyarrow<20.0 sinirini asar; bilincli ignore.
+          #
+          # transformers PYSEC-2025-217 (CVE-2025-14929): X-CLIP checkpoint
+          # conversion deserialization. sentence-transformers embeddings bu
+          # yolu cagirmiyor; fix surumu de yok. CVE-2026-1839 ile ayni desen.
+          pip-audit -r /tmp/audit_targets.txt --strict \
+            --ignore-vuln CVE-2026-1839 \
+            --ignore-vuln PYSEC-2026-113 \
+            --ignore-vuln PYSEC-2025-217
