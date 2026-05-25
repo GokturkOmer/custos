@@ -31,7 +31,7 @@ dependencies = [
     "sentence-transformers>=3.0,<4.0",
     "faiss-cpu>=1.13.2,<2.0",
     "pyyaml>=6.0.3,<7.0",
-    "lxml>=6.1.0",  # Transitive guard — CVE-2026-41066 XXE fix (6.0.4 HIGH)
+    "lxml>=6.1.1",  # Transitive guard — CVE-2026-41066 XXE fix (6.0.4 HIGH)
     "bcrypt>=5.0.0,<6.0",  # Parola hash (auth — V11-101)
     # systemd Type=notify + WatchdogSec entegrasyonu (V11-105/K13).
     # Tek dosyalık küçük paket; sistemd yoksa (lokal dev) modül no-op döner.
