@@ -13,9 +13,9 @@ from collections.abc import Sequence
 import numpy as np
 import pytest
 
-from custos.analytics.assistant.index import AssistantIndex
-from custos.analytics.assistant.loader import Chunk
-from custos.analytics.assistant.retriever import (
+from custos.assistant.index import AssistantIndex
+from custos.assistant.loader import Chunk
+from custos.assistant.retriever import (
     EMPTY_MESSAGE,
     AssistantAnswer,
     AssistantRetriever,

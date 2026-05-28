@@ -20,8 +20,8 @@ from typing import Literal
 
 import structlog
 
-from custos.analytics.assistant.index import AssistantIndex
-from custos.analytics.assistant.loader import Chunk
+from custos.assistant.index import AssistantIndex
+from custos.assistant.loader import Chunk
 
 logger = structlog.get_logger(logger_name="assistant.retriever")
 

@@ -21,8 +21,8 @@ from dataclasses import dataclass
 import numpy as np
 import structlog
 
-from custos.analytics.assistant.embeddings import Encoder, get_default_encoder
-from custos.analytics.assistant.loader import Chunk
+from custos.assistant.embeddings import Encoder, get_default_encoder
+from custos.assistant.loader import Chunk
 
 logger = structlog.get_logger(logger_name="assistant.index")
 

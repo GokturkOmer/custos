@@ -74,7 +74,7 @@ def test_assistant_smoke_passes_eight_of_ten() -> None:
     """
     # Lazy import — model + faiss bağımlılığı pytest collection sırasında
     # yüklenmesin. Hızlı testler için tipik fixture etkisi.
-    from custos.analytics.assistant.service import build_retriever
+    from custos.assistant.service import build_retriever
     from custos.shared.config import settings as default_settings
 
     questions = _load_smoke_questions()

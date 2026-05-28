@@ -17,9 +17,9 @@ from pathlib import Path
 
 import structlog
 
-from custos.analytics.assistant.index import AssistantIndex
-from custos.analytics.assistant.loader import load_knowledge_base_multi
-from custos.analytics.assistant.retriever import AssistantRetriever
+from custos.assistant.index import AssistantIndex
+from custos.assistant.loader import load_knowledge_base_multi
+from custos.assistant.retriever import AssistantRetriever
 from custos.shared.config import Settings
 from custos.shared.config import settings as default_settings
 

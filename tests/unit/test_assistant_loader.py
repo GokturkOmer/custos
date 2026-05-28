@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from custos.analytics.assistant.loader import (
+from custos.assistant.loader import (
     Chunk,
     DocumentSummary,
     load_knowledge_base,

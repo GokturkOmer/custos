@@ -12,8 +12,8 @@ from collections.abc import Sequence
 import numpy as np
 import pytest
 
-from custos.analytics.assistant.index import AssistantIndex, SearchResult
-from custos.analytics.assistant.loader import Chunk
+from custos.assistant.index import AssistantIndex, SearchResult
+from custos.assistant.loader import Chunk
 
 
 def _unit_vec(*xs: float) -> list[float]:
