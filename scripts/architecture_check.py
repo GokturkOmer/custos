@@ -49,7 +49,7 @@ class Violation:
     line_text: str
 
 
-# CLAUDE.md'deki 9 değişmez kural. Yeni kural eklerken: id UPPER_SNAKE,
+# CLAUDE.md'deki değişmez kurallar. Yeni kural eklerken: id UPPER_SNAKE,
 # description tek cümle, scope glob (REPO_ROOT göreli), gerekiyorsa exclude.
 RULES: Final[tuple[Rule, ...]] = (
     Rule(
@@ -143,7 +143,11 @@ RULES: Final[tuple[Rule, ...]] = (
             r"DELETE\s+FROM)\b"
         ),
         scope=("src/custos/**/*.py",),
-        scope_exclude=("src/custos/shared/database.py",),
+        scope_exclude=(
+            "src/custos/shared/database.py",
+            # Asistan AYRI süreç; SQL'i tek noktada (repository) toplar (karar B).
+            "src/custos/assistant/repository.py",
+        ),
     ),
     Rule(
         id="DEEP_LEARNING",
@@ -176,6 +180,40 @@ RULES: Final[tuple[Rule, ...]] = (
             r"\b"
         ),
         scope=("src/custos/**/*.py",),
+    ),
+    Rule(
+        id="CRITICAL_ANALYTICS_IMPORT_ASSISTANT",
+        description=(
+            "Critical/analytics kodu assistant servisini import edemez "
+            "(üç süreç bağımsızlığı — CLAUDE.md / karar 2)."
+        ),
+        pattern=re.compile(r"^\s*(?:from|import)\s+custos\.assistant\b"),
+        scope=(
+            "src/custos/critical/**/*.py",
+            "src/custos/analytics/**/*.py",
+        ),
+    ),
+    Rule(
+        id="ASSISTANT_IMPORTS_CRITICAL_ANALYTICS",
+        description=(
+            "Assistant servisi critical/analytics'i import edemez "
+            "(üç süreç bağımsızlığı — CLAUDE.md / karar 2)."
+        ),
+        pattern=re.compile(
+            r"^\s*(?:from|import)\s+custos\.(?:critical|analytics)\b"
+        ),
+        scope=("src/custos/assistant/**/*.py",),
+    ),
+    Rule(
+        id="ASSISTANT_IMPORTS_SHARED_DATABASE",
+        description=(
+            "Assistant servisi shared/database.py'yi import edemez; kendi "
+            "repository.py asyncpg pool'unu kullanır (karar B — DB izolasyonu)."
+        ),
+        pattern=re.compile(
+            r"^\s*(?:from|import)\s+custos\.shared\.database\b"
+        ),
+        scope=("src/custos/assistant/**/*.py",),
     ),
 )
 
