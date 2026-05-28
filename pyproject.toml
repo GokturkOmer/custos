@@ -40,6 +40,14 @@ dependencies = [
     # endurance_metrics.py zaten transitive olarak kullaniyordu, P-06 ile
     # explicit dependency'e cevrildi.
     "psutil>=5.9,<7.0",
+    # Asistan servisi (Faz 0+, 2026-05-28 onaylandi) — PDF ingest + OCR + sparse
+    # arama. SADECE custos/assistant/ kullanir; critical/analytics'e sizmaz
+    # (architecture_check sinir kurallari). torch backend embedding zaten
+    # sentence-transformers ile geliyor (CLAUDE.md asistan istisnasi).
+    "pymupdf",
+    "pytesseract",
+    "rank_bm25",
+    "pdfplumber",
 ]
 
 [project.optional-dependencies]
@@ -122,6 +130,29 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "psutil.*"
+ignore_missing_imports = true
+
+# Asistan servisi bağımlılıkları (Faz 0+). pymupdf hem `pymupdf` hem eski
+# `fitz` adıyla import edilebilir; ikisi de kapsanır. Hiçbiri type stub
+# sağlamadığı için mevcut sklearn/faiss deseniyle ignore.
+[[tool.mypy.overrides]]
+module = "pymupdf.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "fitz.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pytesseract.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "rank_bm25.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pdfplumber.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

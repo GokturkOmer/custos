@@ -117,6 +117,22 @@ class Settings(BaseSettings):
     custos_assistant_score_threshold: float = 0.60
     custos_assistant_top_k: int = 3
 
+    # Asistan AYRI SERVİS ayarları (Faz 0, 2026-05-29). Bu alanlar yalnızca
+    # asistan servisini (port 8001) ilgilendirir; critical/analytics kullanmaz.
+    # port: uvicorn 127.0.0.1:<port> (Caddy `/assistant/*` → bu port).
+    # data_dir: kalıcı sayfa PNG + FAISS index + kaynak PDF kökü
+    #   (setup.sh Bölüm 2'de chown custos + chmod 750 ile kurar).
+    # render_dpi: ekranda gösterilen sayfa PNG çözünürlüğü (karar F = 200).
+    # ocr_dpi: OCR fallback render çözünürlüğü (karar F = 300, tur+eng).
+    # ocr_min_chars: gömülü PDF text bu eşikten AZ ise sayfa "taranmış" sayılır
+    #   ve OCR devreye girer (karar F: gömülü text birincil, OCR yalnız az/yok
+    #   sayfada). Pilot sırasında manuel kalitesine göre ayarlanabilir.
+    custos_assistant_port: int = 8001
+    custos_assistant_data_dir: str = "/var/lib/custos/assistant"
+    custos_assistant_render_dpi: int = 200
+    custos_assistant_ocr_dpi: int = 300
+    custos_assistant_ocr_min_chars: int = 100
+
     @property
     def database_url(self) -> str:
         """PostgreSQL bağlantı URL'sini döndürür (client_encoding=utf8 dahil).
