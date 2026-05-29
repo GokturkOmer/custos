@@ -33,12 +33,15 @@ certifi==2026.4.22
 cffi==2.0.0
     # via cryptography
 charset-normalizer==3.4.7
-    # via requests
+    # via
+    #   pdfminer-six
+    #   requests
 click==8.3.3
     # via uvicorn
 cryptography==47.0.0
     # via
     #   http-ece
+    #   pdfminer-six
     #   py-vapid
     #   pywebpush
 faiss-cpu==1.13.2
@@ -104,6 +107,7 @@ numpy==2.4.4
     # via
     #   custos (pyproject.toml)
     #   faiss-cpu
+    #   rank-bm25
     #   scikit-learn
     #   scipy
     #   transformers
@@ -111,9 +115,17 @@ packaging==26.2
     # via
     #   faiss-cpu
     #   huggingface-hub
+    #   pytesseract
     #   transformers
+pdfminer-six==20251230
+    # via pdfplumber
+pdfplumber==0.11.9
+    # via custos (pyproject.toml)
 pillow==12.2.0
-    # via sentence-transformers
+    # via
+    #   pdfplumber
+    #   pytesseract
+    #   sentence-transformers
 propcache==0.4.1
     # via
     #   aiohttp
@@ -138,6 +150,12 @@ pydantic-settings==2.14.0
     # via custos (pyproject.toml)
 pymodbus==3.12.1
     # via custos (pyproject.toml)
+pymupdf==1.27.2.3
+    # via custos (pyproject.toml)
+pypdfium2==5.8.0
+    # via pdfplumber
+pytesseract==0.3.13
+    # via custos (pyproject.toml)
 python-dotenv==1.2.2
     # via
     #   pydantic-settings
@@ -152,6 +170,8 @@ pyyaml==6.0.3
     #   huggingface-hub
     #   transformers
     #   uvicorn
+rank-bm25==0.2.2
+    # via custos (pyproject.toml)
 regex==2026.4.4
     # via transformers
 requests==2.33.1
