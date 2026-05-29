@@ -195,7 +195,7 @@ sentence-transformers==3.4.1
     # via custos (pyproject.toml)
 sqlalchemy==2.0.49
     # via alembic
-starlette==1.0.0
+starlette==1.0.1
     # via fastapi
 structlog==25.5.0
     # via custos (pyproject.toml)
