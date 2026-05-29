@@ -46,13 +46,16 @@ Düşünülen ama seçilmeyen yollar ve neden seçilmedikleri.
 
 | # | Başlık | Durum |
 |---|---|---|
-| [ADR-001](001-two-process-architecture.md) | İki süreçli mimari (Kritik Döngü + Analitik Döngü) | Kabul |
+| [ADR-001](001-two-process-architecture.md) | İki süreçli mimari (Kritik Döngü + Analitik Döngü) | Kabul (genişletildi → ADR-008) |
 | [ADR-002](002-read-only-modbus.md) | Sadece-okuma Modbus mimarisi | Kabul |
 | [ADR-003](003-timescaledb-historian.md) | TimescaleDB tabanlı katmanlı historian | Kabul |
 | [ADR-004](004-isolation-forest-not-deep-learning.md) | Anomali tespitinde Isolation Forest, derin öğrenme yok | Kabul |
 | [ADR-005](005-htmx-not-spa.md) | Sunucu-merkezli arayüz (HTMX), SPA yok | Kabul |
 | [ADR-006](006-isa-18.2-alarm-management.md) | ISA-18.2 alarm yönetimi prensipleri | Kabul |
 | [ADR-007](007-protocol-expansion.md) | Protokol genişleme stratejisi (BACnet, OPC UA, Profinet) | Kabul (uygulama v1.1+) |
+| [ADR-008](008-assistant-separate-service.md) | Asistan ayrı servis (üçüncü bağımsız süreç) | Kabul |
+| [ADR-009](009-caddy-forward-auth.md) | Asistan yetkilendirmesi Caddy forward_auth ile | Kabul |
+| [ADR-010](010-assistant-schema-isolation.md) | Asistan veri izolasyonu (`assistant` şeması) | Kabul |
 
 ## Not
 

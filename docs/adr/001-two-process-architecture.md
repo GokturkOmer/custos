@@ -1,7 +1,17 @@
 # ADR-001: İki süreçli mimari (Kritik Döngü + Analitik Döngü)
 
 **Tarih:** 2026-05-22
-**Durum:** Kabul
+**Durum:** Kabul (genişletildi → üç süreç, bkz. [ADR-008](008-assistant-separate-service.md))
+
+> **Güncelleme (2026-05-29):** Bu ADR'nin kurduğu Kritik + Analitik iki-süreç
+> sınırı **aynen geçerlidir**. Asistan modülünün (PDF görsel retrieval)
+> genişlemesiyle sisteme **üçüncü** bir bağımsız süreç eklendi: Asistan
+> (`python -m custos.assistant`, port 8001, kendi systemd unit'i + kaynak
+> limiti). Gerekçe ve detaylar: [ADR-008](008-assistant-separate-service.md).
+> Aşağıdaki iki-süreç anlatısı bu üçüncü süreci kapsayacak şekilde okunmalıdır:
+> üç süreç de doğrudan import etmez, yalnızca paylaşılan PostgreSQL üzerinden
+> haberleşir; `architecture_check.py` artık asistan sınır kurallarını da içerir
+> (toplam 14 kural).
 
 ## Bağlam
 
