@@ -20,11 +20,36 @@
 ${CUSTOS_HOST_IP}:443 {
     tls /etc/custos/tls/cert.pem /etc/custos/tls/key.pem
 
-    # Reverse proxy → uvicorn localhost-only dinleyici
-    reverse_proxy 127.0.0.1:8000 {
-        # Web Push / SSE / uzun istekler için akış desteği — analytics loop
-        # background task'leri yanıt akışı kullanmıyor ama gelecekte bozmasın.
-        flush_interval -1
+    # --- Asistan servisi (port 8001) — path-preserving + forward_auth ---
+    # Eşleşen handle kazanır: asistan bloğu ÖNCE, dashboard catch-all SONRA.
+    # `handle` (handle_path DEĞİL) → prefix STRİP YOK: /assistant/health Caddy
+    # ardında da literal /assistant/health kalır (asistan app yolları literal
+    # /assistant/*; root_path yok → strip 404 yapardı).
+    @assistant path /assistant /assistant/*
+    handle @assistant {
+        # `route` YAZILI sırayı korur. Caddy default direktif sırasında
+        # `request_header` (strip) `forward_auth`tan SONRA koşar; bu da
+        # forward_auth'un enjekte ettiği header'ı silerdi. route ile sıra:
+        #   1) istemcinin gönderdiği (sahte) X-Custos-User'ı SİL (spoof savunması)
+        #   2) forward_auth → analytics require_operator; 200'de X-Custos-User üretir
+        #   3) asistan servisine geçir (yol korunur)
+        route {
+            request_header -X-Custos-User
+            forward_auth 127.0.0.1:8000 {
+                uri /auth/validate
+                copy_headers X-Custos-User
+            }
+            reverse_proxy 127.0.0.1:8001
+        }
+    }
+
+    # --- Dashboard (analytics, port 8000) — geri kalan her şey ---
+    handle {
+        reverse_proxy 127.0.0.1:8000 {
+            # Web Push / SSE / uzun istekler için akış desteği — analytics loop
+            # background task'leri yanıt akışı kullanmıyor ama gelecekte bozmasın.
+            flush_interval -1
+        }
     }
 
     # HSTS — 1 yıl. Pilot LAN'da preload'a girmiyor; yanlış sertifikayı

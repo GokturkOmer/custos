@@ -1,0 +1,27 @@
+[Unit]
+Description=Custos Asistan Servisi (PDF gorsel retrieval)
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+# Asistanda sd_notify/watchdog YOK (analytics'in aksine) -> Type=simple.
+# ExecStart: __main__.py port'u config'ten (custos_assistant_port=8001) okuyup
+# uvicorn'u 127.0.0.1'e baglar; disa acilim Caddy /assistant/* reverse proxy ile.
+Type=simple
+User=custos
+WorkingDirectory=/opt/custos
+EnvironmentFile=/opt/custos/.env
+ExecStart=/opt/custos/.venv/bin/python -m custos.assistant
+Restart=always
+RestartSec=10
+# Plan 2.1 kaynak limitleri — critical/analytics determinizmini koru: asistan
+# (embedding/PDF/OCR) bellek/CPU'da onlari ac birakmasin.
+MemoryMax=2G
+Nice=10
+CPUWeight=50
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

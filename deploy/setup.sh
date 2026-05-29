@@ -31,6 +31,8 @@ INSTALL_DIR="/opt/custos"
 ARCHIVE_DIR="/var/custos/archive"
 BACKUP_DIR="/var/custos/backup"
 LOG_DIR="/var/log/custos"
+# Asistan servisi veri dizini (config: custos_assistant_data_dir varsayilani).
+ASSISTANT_DATA_DIR="/var/lib/custos/assistant"
 PYTHON_VERSION="3.12"
 PG_VERSION="16"
 MIN_RAM_GB=2
@@ -277,7 +279,16 @@ mkdir -p /var/custos/knowledge/local
 chown "$CUSTOS_USER:$CUSTOS_USER" /var/custos/knowledge/local
 chmod 750 /var/custos/knowledge/local
 
-echo "  $INSTALL_DIR, $ARCHIVE_DIR, $BACKUP_DIR, $LOG_DIR, /var/custos/knowledge/local hazir."
+# Asistan servisi veri dizini (Faz 0 / plan 2.3) — Parquet arsiv deseniyle ayni
+# (chown custos + chmod 750; sadece custos user erisir). Alt dizinler:
+#   pages/      — sayfa PNG render'lari ({document_id}/{page_no}.png)
+#   highlights/ — sorgu-bazli highlight cache
+#   sources/    — orijinal yuklenen PDF'ler
+mkdir -p "$ASSISTANT_DATA_DIR"/{pages,highlights,sources}
+chown -R "$CUSTOS_USER:$CUSTOS_USER" "$ASSISTANT_DATA_DIR"
+chmod -R 750 "$ASSISTANT_DATA_DIR"
+
+echo "  $INSTALL_DIR, $ARCHIVE_DIR, $BACKUP_DIR, $LOG_DIR, /var/custos/knowledge/local, $ASSISTANT_DATA_DIR hazir."
 
 # --- 8. Python venv + bagimoliklar ---
 # PP-01 (29 Nis 2026): requirements.lock ile reprodusibility — tum transitif
@@ -662,18 +673,25 @@ EOF
 chmod 644 /etc/cron.d/custos-backup
 echo "  Cron entries kuruldu: /etc/cron.d/custos-backup (haftalik pg_dump + gunluk config JSON)."
 
-# --- 17. Systemd service'ler (analytics + critical) ---
+# --- 17. Systemd service'ler (analytics + critical + asistan) ---
 echo "[17/17] Systemd service'ler kuruluyor..."
 cp "$INSTALL_DIR/deploy/custos.service" /etc/systemd/system/custos.service
 if [[ -f "$INSTALL_DIR/deploy/custos-critical.service" ]]; then
     cp "$INSTALL_DIR/deploy/custos-critical.service" /etc/systemd/system/custos-critical.service
+fi
+# Asistan ucuncu surec (port 8001) — kendi unit'i (Type=simple, MemoryMax=2G).
+if [[ -f "$INSTALL_DIR/deploy/custos-assistant.service" ]]; then
+    cp "$INSTALL_DIR/deploy/custos-assistant.service" /etc/systemd/system/custos-assistant.service
 fi
 systemctl daemon-reload
 systemctl enable custos.service >/dev/null
 if [[ -f "$INSTALL_DIR/deploy/custos-critical.service" ]]; then
     systemctl enable custos-critical.service >/dev/null
 fi
-echo "  custos.service + custos-critical.service aktif edildi."
+if [[ -f "$INSTALL_DIR/deploy/custos-assistant.service" ]]; then
+    systemctl enable custos-assistant.service >/dev/null
+fi
+echo "  custos.service + custos-critical.service + custos-assistant.service aktif edildi."
 
 # --- 18. mDNS (avahi) ---
 AVAHI_SERVICE="/etc/avahi/services/custos.service"
@@ -706,8 +724,8 @@ if [[ -n "$BOOTSTRAP_DEV_PW" ]]; then
 fi
 echo "Siradaki adimlar:"
 echo "  1. .env dosyasini gozden gecir: $INSTALL_DIR/.env (VAPID, DB sifre, dev parola, host IP)"
-echo "  2. Servisleri baslat: sudo systemctl start custos.service custos-critical.service"
-echo "  3. Durum kontrolu: sudo systemctl status custos.service custos-critical.service caddy.service"
+echo "  2. Servisleri baslat: sudo systemctl start custos.service custos-critical.service custos-assistant.service"
+echo "  3. Durum kontrolu: sudo systemctl status custos.service custos-critical.service custos-assistant.service caddy.service"
 echo "  4. Healthcheck: sudo -u $CUSTOS_USER $INSTALL_DIR/.venv/bin/python $INSTALL_DIR/scripts/healthcheck.py --json"
 if [[ -n "${CUSTOS_HOST_IP:-}" ]]; then
     echo "  5. Tarayicida ac: https://${CUSTOS_HOST_IP}/login"
