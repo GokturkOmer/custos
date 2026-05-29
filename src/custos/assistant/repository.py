@@ -128,8 +128,12 @@ class AssistantRepository:
         return self._pool
 
     # ------------------------------------------------------------------ #
-    # Veri metotları — imzalar kanonik (plan §3). Gövdeler Faz 1'de
-    # (PDF ingest pipeline) doldurulacak. Şimdilik NotImplementedError.
+    # Veri metotları — imzalar kanonik (plan §3). Faz 1 (PDF ingest)
+    # metotları aşağıda dolu (insert_document / insert_chunks_batch /
+    # list_documents / delete_document). get_chunks_by_faiss_ids / log_query /
+    # mark_selected_chunk Faz 2/3'te doldurulacak (şimdilik NotImplementedError).
+    # uploaded_at / asked_at DB tarafında TIMESTAMPTZ DEFAULT NOW() (UTC,
+    # CLAUDE.md) — Python tarafında naive datetime üretilmez.
     # ------------------------------------------------------------------ #
 
     async def insert_document(
@@ -144,14 +148,78 @@ class AssistantRepository:
         source_pdf_path: str | None,
         uploaded_by: str | None,
     ) -> int:
-        """Yeni doküman kaydı ekler, `document_id` döner."""
-        raise NotImplementedError("Faz 1 — PDF ingest pipeline'da doldurulacak")
+        """Yeni doküman kaydı ekler, `document_id` döner.
+
+        `uploaded_at` DB default (`NOW()`, UTC) ile yazılır — burada zaman
+        damgası üretilmez (CLAUDE.md datetime kuralı).
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            document_id = await conn.fetchval(
+                """
+                INSERT INTO assistant.documents
+                    (filename, equipment_model, equipment_type, language,
+                     total_pages, ocr_used, source_pdf_path, uploaded_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING document_id
+                """,
+                filename,
+                equipment_model,
+                equipment_type,
+                language,
+                total_pages,
+                ocr_used,
+                source_pdf_path,
+                uploaded_by,
+            )
+        await logger.ainfo(
+            "assistant_document_eklendi",
+            document_id=document_id,
+            filename=filename,
+            total_pages=total_pages,
+        )
+        return int(document_id)
 
     async def insert_chunks_batch(
         self, document_id: int, chunks: list[ChunkInput]
     ) -> None:
-        """Bir dokümanın sayfa-bazlı chunk'larını toplu ekler."""
-        raise NotImplementedError("Faz 1 — PDF ingest pipeline'da doldurulacak")
+        """Bir dokümanın sayfa-bazlı chunk'larını toplu ekler.
+
+        Tek transaction içinde `executemany` — chunk'lar ya tümü ya hiçbiri.
+        `faiss_index_id` Faz 1'de NULL kalır (FAISS indeksleme Faz 2). Boş
+        liste no-op.
+        """
+        if not chunks:
+            return
+        pool = self._get_pool()
+        rows = [
+            (
+                document_id,
+                chunk.page_no,
+                chunk.text_content,
+                chunk.png_path,
+                chunk.section_title,
+                chunk.faiss_index_id,
+                chunk.has_table,
+                chunk.has_figure,
+            )
+            for chunk in chunks
+        ]
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.executemany(
+                """
+                INSERT INTO assistant.chunks
+                    (document_id, page_no, text_content, png_path,
+                     section_title, faiss_index_id, has_table, has_figure)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                rows,
+            )
+        await logger.ainfo(
+            "assistant_chunklar_eklendi",
+            document_id=document_id,
+            chunk_count=len(chunks),
+        )
 
     async def get_chunks_by_faiss_ids(
         self, faiss_ids: list[int]
@@ -160,12 +228,48 @@ class AssistantRepository:
         raise NotImplementedError("Faz 2 — retrieval'da doldurulacak")
 
     async def list_documents(self) -> list[DocumentRecord]:
-        """Yüklenmiş tüm dokümanların özetini döner (UI listesi)."""
-        raise NotImplementedError("Faz 1 — PDF ingest pipeline'da doldurulacak")
+        """Yüklenmiş tüm dokümanların özetini döner (UI listesi), en yeni önce."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT document_id, filename, equipment_model, equipment_type,
+                       language, total_pages, ocr_used, source_pdf_path,
+                       uploaded_at, uploaded_by
+                FROM assistant.documents
+                ORDER BY uploaded_at DESC
+                """
+            )
+        return [
+            DocumentRecord(
+                document_id=row["document_id"],
+                filename=row["filename"],
+                equipment_model=row["equipment_model"],
+                equipment_type=row["equipment_type"],
+                language=row["language"],
+                total_pages=row["total_pages"],
+                ocr_used=row["ocr_used"],
+                source_pdf_path=row["source_pdf_path"],
+                uploaded_at=row["uploaded_at"],
+                uploaded_by=row["uploaded_by"],
+            )
+            for row in rows
+        ]
 
     async def delete_document(self, document_id: int) -> None:
-        """Dokümanı + (CASCADE ile) chunk'larını siler."""
-        raise NotImplementedError("Faz 1 — PDF ingest pipeline'da doldurulacak")
+        """Dokümanı + (CASCADE ile) chunk'larını siler.
+
+        Disk dosya temizliği (PNG'ler / kaynak PDF) repository'nin işi DEĞİL —
+        orchestration katmanında ele alınır. Burada yalnız DB satırı düşer;
+        `assistant.chunks` FK `ON DELETE CASCADE` ile birlikte gider.
+        """
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM assistant.documents WHERE document_id = $1",
+                document_id,
+            )
+        await logger.ainfo("assistant_document_silindi", document_id=document_id)
 
     async def log_query(
         self,
