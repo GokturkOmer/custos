@@ -15,17 +15,20 @@ HTTP'de cookie set edilmesin diye Secure=True).
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from custos.analytics.dashboard.auth_dependencies import (
     _get_db,
+    require_operator,
     require_session_basic,
 )
 from custos.shared.auth import (
@@ -42,6 +45,8 @@ logger = structlog.get_logger(logger_name="auth_routes")
 # B008 yasağını çözmek için module-level singleton — app.py'daki
 # _ASSISTANT_RETRIEVER_DEP ile aynı pattern.
 _SESSION_BASIC_DEP: Any = Depends(require_session_basic)
+# forward_auth ucu (GET /auth/validate) için operator+ koruması.
+_OPERATOR_DEP: Any = Depends(require_operator)
 
 # Aynı template dizini app.py ile paylaşılır — tek Jinja2Templates örneği
 # yerine dashboard modülünün dizinini import etmek daha temiz olurdu, ama
@@ -67,6 +72,38 @@ LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 5
 # parolasını birkaç kez yanlış girebilir; saldırı imzası 10+ tek hesap.
 LOGIN_RATE_LIMIT_USERNAME_WINDOW_MINUTES = 30
 LOGIN_RATE_LIMIT_USERNAME_MAX_ATTEMPTS = 10
+
+# --- Asistan forward_auth sözleşmesi (karar A) ---
+# Caddy `/assistant/*` isteğini geçirmeden önce `GET /auth/validate`'i
+# forward_auth ile çağırır; 200 yanıtında bu header üretilir. Asistan servisi
+# (custos.assistant.middleware.parse_custos_user_header) bu header'ı çözer.
+# Header adı + base64url(JSON) şeması iki süreç arasındaki SÖZLEŞMEDİR — asistan
+# ayrı paket/süreç olduğu (import paylaşımı mimari kurala aykırı) için kod
+# paylaşılmaz, sözleşme paylaşılır. Değişirse İKİSİ birlikte güncellenmeli.
+CUSTOS_USER_HEADER = "X-Custos-User"
+
+
+def encode_custos_user_header(*, user_id: int, username: str, role: str) -> str:
+    """Oturum kullanıcısını `X-Custos-User` header değerine kodlar.
+
+    Şema: ``base64url(JSON {"id": int, "username": str, "role": str})``.
+    base64url ZORUNLU — Türkçe kullanıcı adları (ş/ğ/ı/ö/ü/ç) non-ASCII; HTTP
+    header değerleri pratikte ASCII/latin-1 ile sınırlı, base64url ham JSON'u
+    güvenle ASCII'ye taşır.
+
+    ``id`` alanı oturumun KULLANICI kimliğidir (``Session.user_id``), session
+    satır id'si (``Session.id``) DEĞİL — asistan ``queries_log.user_id`` bunu
+    metrik amaçlı saklar. Üretilen değeri
+    ``custos.assistant.middleware.parse_custos_user_header`` çözer (padding'li ve
+    padding'siz ikisini de tolere eder; biz standart ``urlsafe_b64encode`` ile
+    padding'i koruruz).
+    """
+    payload = json.dumps(
+        {"id": user_id, "username": username, "role": role},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii")
 
 
 def _set_session_cookie(response: RedirectResponse, token: str) -> None:
@@ -342,3 +379,36 @@ async def change_password_submit(
     )
 
     return RedirectResponse(url=_POST_LOGIN_TARGET, status_code=303)
+
+
+# --- forward_auth ucu (asistan servisi — karar A) ---
+
+
+@auth_router.get("/auth/validate")
+async def auth_validate(
+    response: Response,
+    session: Session = _OPERATOR_DEP,
+) -> dict[str, bool]:
+    """Caddy forward_auth doğrulama ucu — `/assistant/*` öncesi yetki kapısı.
+
+    Caddy `/assistant/*` isteğini asistan servisine (8001) geçirmeden ÖNCE bu
+    ucu `require_operator` ile çağırır. Davranış:
+
+    - Geçerli operator/developer session → **200 + `X-Custos-User` response
+      header** (``base64url(JSON {id,username,role})``). Caddy header'ı kopyalar
+      (``copy_headers``) ve asistan isteğine ekler; asistan middleware'i
+      ``request.state.user``'a çözer.
+    - Session yok/geçersiz → ``require_operator`` 303 ``/login`` fırlatır; Caddy
+      bunu istemciye iletir (yetkisiz → login'e yönlendirilir).
+    - operator/developer dışı rol → 403; Caddy iletir.
+
+    Yanıt gövdesi minimaldir: forward_auth yalnızca status'a bakar (2xx → geçir),
+    gövdeyi kullanmaz. ``id`` alanı ``Session.user_id``'dir (kullanıcı kimliği),
+    ``Session.id`` (session satırı) DEĞİL.
+    """
+    response.headers[CUSTOS_USER_HEADER] = encode_custos_user_header(
+        user_id=session.user_id,
+        username=session.username,
+        role=session.role,
+    )
+    return {"ok": True}
