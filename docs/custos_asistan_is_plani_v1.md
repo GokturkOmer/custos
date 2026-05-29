@@ -201,7 +201,7 @@ CREATE TABLE assistant.queries_log (
 - [ ] `pyproject.toml`: `pymupdf`, `pytesseract`, `rank_bm25`, `pdfplumber` ekle (+ mypy `ignore_missing_imports` override'ları). Onay alındı.
 - [ ] Paket taşıma: `analytics/assistant/*` (6 dosya) → `assistant/*` (top-level). Paket-içi import'lar relative kalır; `custos.analytics.assistant.*` → `custos.assistant.*`.
 - [ ] **F8b sil:** analytics dashboard'dan asistan + knowledge route'ları, import'lar, nav link'i ve eski sohbet/KB template'lerini DOĞRUDAN sil (production yok). `settings.html` KB kartı kaldırılır. `custos.analytics.assistant` referansı SIFIR.
-- [ ] `assistant/app.py`: bağımsız FastAPI app (`root_path` ile `/assistant` altında). `assistant/__main__.py`: uvicorn entry (127.0.0.1:8001, port config'ten). Analytics'in ~13 background task'inden HİÇBİRİ alınmaz.
+- [ ] `assistant/app.py`: bağımsız FastAPI app — yollar **literal `/assistant/*` prefix** ile tanımlanır (`root_path` KULLANILMAZ; Caddy path-preserving reverse_proxy yapar, strip yok → `/assistant/health` Caddy ardında ve doğrudan 8001'de aynı yol). `assistant/__main__.py`: uvicorn entry (127.0.0.1:8001, port config'ten). Analytics'in ~13 background task'inden HİÇBİRİ alınmaz.
 - [ ] **Auth (karar A):** Caddy forward_auth → `X-Custos-User` base64url(JSON) parse middleware → `request.state.user` (header yoksa `None`; dev'de Caddy'siz de test edilebilir). Asistanda başka auth kodu YOK.
 - [ ] `/assistant/health` (JSON 200, auth gerektirmez) + placeholder index ("Custos · Asistan" bar + "← Panele dön").
 - [ ] Migration `038_create_assistant_schema.py`: `assistant` şeması + `documents`/`chunks`/`queries_log` + `custos_app` GRANT'leri (rol varsa; `pg_roles` guard'lı — dev tek-user'da no-op). Rollback drill yeşil.
@@ -211,7 +211,7 @@ CREATE TABLE assistant.queries_log (
 - **Çıktı:** `python -m custos.assistant` → 8001'de ayağa kalkan placeholder servis; analytics 8000 etkilenmemiş; ruff+mypy+architecture_check+pytest yeşil.
 
 **Bölüm 2 — auth wiring + deploy + ADR (ayrı oturum):**
-- [ ] Caddy `/assistant/*` → 8001 + forward_auth → analytics `/auth/validate` (`X-Custos-User` üretimi analytics tarafında).
+- [ ] Caddy `/assistant/*` → 8001 + forward_auth → analytics `/auth/validate` (`X-Custos-User` üretimi analytics tarafında). ⚠️ **path-preserving `handle`** kullan (`handle_path` DEĞİL — app yolları literal `/assistant/*`, strip 404 yapar); gelen `X-Custos-User`'ı forward_auth'tan ÖNCE **strip** et (spoof savunması).
 - [ ] `deploy/custos-assistant.service` (cgroup `MemoryMax=2G`, `Nice=10`, `CPUWeight=50`) + setup.sh dizinleri (`/var/lib/custos/assistant/`) + `assistant` schema GRANT entegrasyonu.
 - [ ] ADR `008` (ayrı servis), `009` (forward_auth), `010` (assistant schema izolasyonu).
 
