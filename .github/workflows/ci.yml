@@ -32,5 +32,13 @@ jobs:
       - name: Mypy tip kontrolu
         run: mypy src/ --ignore-missing-imports
 
-      - name: Pytest
+      # H9 (31 May 2026 review): CI eskiden yalnız tests/dashboard/ koşuyordu;
+      # collector decode, threshold çekirdeği, KPI sandbox gibi pilot-kritik
+      # mantık CI'da hiç doğrulanmıyordu. tests/unit/ DB gerektirmez → sıfır
+      # altyapıyla eklenir. (Integration/load + TimescaleDB service ayrı bir
+      # adımda eklenebilir; bkz. review H9.)
+      - name: Pytest (unit — DB gerektirmez)
+        run: pytest tests/unit/ -v
+
+      - name: Pytest (dashboard)
         run: pytest tests/dashboard/ -v

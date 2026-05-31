@@ -1079,6 +1079,24 @@ class DatabaseInterface(abc.ABC):
     ) -> AlarmEvent | None:
         """Threshold için aktif (cleared olmayan) alarm döndürür."""
 
+    @abc.abstractmethod
+    async def list_pending_threshold_push_alarms(
+        self,
+        limit: int = 50,
+    ) -> list[AlarmEvent]:
+        """Henüz iletilmemiş (``pushed_at IS NULL``), test olmayan threshold
+        alarm'larını döndürür — Analytics push-dispatch loop'u için (H1 cutover).
+        Critical alarm'ı yazar; push'u Analytics bu liste üzerinden gönderir."""
+
+    @abc.abstractmethod
+    async def mark_alarms_pushed(
+        self,
+        alarm_ids: list[int],
+        pushed_at: datetime,
+    ) -> None:
+        """Verilen alarm'ları iletilmiş işaretler (``pushed_at`` set) — tek-sefer
+        push garantisi. Boş liste no-op."""
+
     # --- Alarm Event Labels (R-05 / V11-301) ---
 
     @abc.abstractmethod
@@ -2126,6 +2144,16 @@ def _row_to_cross_sensor_rule(row: asyncpg.Record) -> CrossSensorRule:
     )
 
 
+# H3 (31 May 2026 review): asyncpg havuzunda acquire/statement timeout'u yoktu;
+# havuz tükenince ya da bir sorgu asılınca kritik-yol metotları (özellikle alarm
+# ve reading yazımı) SÜRESİZ bloke olabiliyordu. Aşağıdaki üst sınırlar yalnızca
+# kritik yazım + threshold sorgularına uygulanır: aşılırsa asyncpg istisna
+# fırlatır (çağıran tarafta loglanır + tick devam eder), süreç asılmaz. Uzun
+# süren arşiv streaming jeneratörlerine BİLEREK dokunulmaz (dakikalarca koşabilir).
+_DB_STATEMENT_TIMEOUT: float = 15.0  # tekil sorgu yürütme üst sınırı (sn)
+_DB_ACQUIRE_TIMEOUT: float = 10.0  # havuzdan bağlantı bekleme üst sınırı (sn)
+
+
 class TimescaleDBDatabase(DatabaseInterface):
     """TimescaleDB (PostgreSQL) implementasyonu.
 
@@ -2199,11 +2227,12 @@ class TimescaleDBDatabase(DatabaseInterface):
         """Çoklu tag okumasını tek batch halinde veritabanına yazar."""
         pool = self._get_pool()
         args = [(r.timestamp, r.tag_id, r.value, r.quality_flag) for r in readings]
-        async with pool.acquire() as conn:
+        async with pool.acquire(timeout=_DB_ACQUIRE_TIMEOUT) as conn:
             await conn.executemany(
                 "INSERT INTO tag_readings (timestamp, tag_id, value, quality_flag) "
                 "VALUES ($1, $2, $3, $4)",
                 args,
+                timeout=_DB_STATEMENT_TIMEOUT,
             )
 
     async def query_tag_readings_downsampled(
@@ -3265,7 +3294,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         sql = f"SELECT * FROM thresholds{where_clause} ORDER BY id"
 
         async with pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
+            rows = await conn.fetch(sql, *params, timeout=_DB_STATEMENT_TIMEOUT)
         return [_row_to_threshold(row) for row in rows]
 
     # --- Alarm Event CRUD implementasyonları ---
@@ -3278,7 +3307,7 @@ class TimescaleDBDatabase(DatabaseInterface):
         ``update_alarm_event`` üzerinden yapılır (R-06).
         """
         pool = self._get_pool()
-        async with pool.acquire() as conn:
+        async with pool.acquire(timeout=_DB_ACQUIRE_TIMEOUT) as conn:
             row = await conn.fetchrow(
                 "INSERT INTO alarm_events "
                 "(threshold_id, tag_id, state, triggered_at, "
@@ -3300,6 +3329,7 @@ class TimescaleDBDatabase(DatabaseInterface):
                 event.source,
                 event.severity,
                 event.message,
+                timeout=_DB_STATEMENT_TIMEOUT,
             )
         assert row is not None
         return _row_to_alarm_event(row)
@@ -3331,7 +3361,7 @@ class TimescaleDBDatabase(DatabaseInterface):
 
         pool = self._get_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(sql, *values)
+            row = await conn.fetchrow(sql, *values, timeout=_DB_STATEMENT_TIMEOUT)
 
         if row is None:
             return None
@@ -3406,10 +3436,46 @@ class TimescaleDBDatabase(DatabaseInterface):
                 "WHERE a.threshold_id = $1 AND a.state != 'cleared' "
                 "ORDER BY a.triggered_at DESC LIMIT 1",
                 threshold_id,
+                timeout=_DB_STATEMENT_TIMEOUT,
             )
         if row is None:
             return None
         return _row_to_alarm_event_with_label(row)
+
+    async def list_pending_threshold_push_alarms(
+        self,
+        limit: int = 50,
+    ) -> list[AlarmEvent]:
+        """Push bekleyen threshold alarm'ları (pushed_at IS NULL, is_test=false)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM alarm_events "
+                "WHERE pushed_at IS NULL AND is_test = false "
+                "AND source = 'threshold' "
+                "ORDER BY triggered_at LIMIT $1",
+                limit,
+                timeout=_DB_STATEMENT_TIMEOUT,
+            )
+        return [_row_to_alarm_event(row) for row in rows]
+
+    async def mark_alarms_pushed(
+        self,
+        alarm_ids: list[int],
+        pushed_at: datetime,
+    ) -> None:
+        """Alarm'ları iletilmiş işaretle (pushed_at). Boş liste no-op."""
+        if not alarm_ids:
+            return
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE alarm_events SET pushed_at = $2 "
+                "WHERE id = ANY($1::bigint[])",
+                alarm_ids,
+                pushed_at,
+                timeout=_DB_STATEMENT_TIMEOUT,
+            )
 
     # --- Alarm Event Label implementasyonları (R-05 / V11-301) ---
 
