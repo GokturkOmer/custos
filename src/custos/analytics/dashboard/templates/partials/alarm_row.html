@@ -159,6 +159,19 @@
       {% else %}
         <span class="text-text-disabled text-small">Onaylandı</span>
       {% endif %}
+      {# Manuel temizleme (review H6) — auto-clear olmayan kaynaklar
+         (liveness/anomaly/spc/rate_of_change) için tek kapatma yolu; her aktif
+         alarmda gösterilir. #}
+      <form method="post" action="/dashboard/alarms/{{ alarm.id }}/clear" class="inline">
+        <button type="submit"
+                class="inline-flex items-center gap-1 px-2 py-1 text-small font-medium
+                       bg-bg-elevated text-text-secondary border border-border-weak rounded
+                       hover:text-text-primary hover:border-border-medium transition-colors"
+                title="Alarmı manuel temizle (cleared)">
+          {{ icon_inline('check-circle', class='w-3.5 h-3.5') }}
+          Temizle
+        </button>
+      </form>
       {% if alarm.threshold_id is not none and checklist_by_threshold and checklist_by_threshold.get(alarm.threshold_id) %}
       <form method="post" action="/dashboard/alarms/{{ alarm.id }}/start-checklist" class="inline">
         <button type="submit"

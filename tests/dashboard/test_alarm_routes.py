@@ -24,6 +24,15 @@ def test_alarms_acknowledge_nonexistent_returns_error() -> None:
     assert response.status_code in (404, 503)
 
 
+def test_alarms_clear_nonexistent_returns_error() -> None:
+    """Var olmayan alarm manuel clear 404 veya 503 döndürmeli (review H6)."""
+    response = client.post(
+        "/dashboard/alarms/999999/clear",
+        follow_redirects=False,
+    )
+    assert response.status_code in (404, 503)
+
+
 def test_thresholds_page_returns_503_or_200() -> None:
     """Thresholds sayfası DB yoksa 503, varsa 200 döndürmeli."""
     response = client.get("/dashboard/thresholds")

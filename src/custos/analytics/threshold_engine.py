@@ -92,6 +92,11 @@ class ThresholdEngine:
         # R-06: rate-of-change ve cross-sensor için ayrı cooldown haritaları.
         self._rate_cooldown: dict[str, datetime] = {}
         self._cross_cooldown: dict[int, datetime] = {}
+        # H6 (review): cross-sensor kuralı (rule.id) → o kural için açtığımız
+        # aktif (cleared olmayan, GERÇEK/non-test) alarm id'si. Koşul tekrar
+        # sağlanınca auto-clear için kullanılır + aynı kural için ikinci alarm
+        # açılmasını engeller (idempotent). Bakım test alarm'ları izlenmez.
+        self._cross_active_alarm: dict[int, int] = {}
 
     async def start(self) -> None:
         """Engine'i başlatır — arka plan task olarak çalışır."""
@@ -292,7 +297,17 @@ class ThresholdEngine:
                 continue
 
             if _cross_sensor_holds(reading_a.value, rule.operator, reading_b.value):
-                # Kural sağlanıyor — ihlal yok, atla.
+                # Kural sağlanıyor — ihlal yok. Bu kural için daha önce açtığımız
+                # aktif alarm varsa auto-clear et (review H6): çözülmüş bir
+                # cross_sensor koşulu latch'lenip 30 dk sonra zorunlu crit'e
+                # yükselmesin.
+                await self._auto_clear_cross_sensor(rule.id, reading_a.value, now)
+                continue
+
+            # İhlal var. Bu kural için zaten aktif (gerçek) bir alarm izleniyorsa
+            # tekrar açma (review H6): tek aktif alarm + spam önleme; koşul
+            # çözülünce _auto_clear_cross_sensor kapatır.
+            if rule.id in self._cross_active_alarm:
                 continue
 
             # Cooldown kontrolü.
@@ -309,7 +324,7 @@ class ThresholdEngine:
             # Alarm tag_id alanına Tag A'yı koyuyoruz — kural ekseni bu tag.
             # Kullanıcı alarm sayfasında "Tag A=value, Tag B=value" mesajını
             # görür, mesajda detay var.
-            await self._raise_layer1_alarm(
+            created = await self._raise_layer1_alarm(
                 tag_id=tag_a.tag_id,
                 source="cross_sensor",
                 severity=rule.severity,
@@ -320,6 +335,12 @@ class ThresholdEngine:
                 global_test=global_test,
             )
             self._cross_cooldown[rule.id] = now
+            # Yalnız gerçek (non-test) alarmı izle: bakım test alarmı bittiğinde
+            # süregelen ihlal için gerçek alarm üretilebilsin (idempotent guard
+            # test alarmını latch'lemesin). Orphan test alarm'ı manuel clear ile
+            # kapatılır.
+            if not created.is_test and created.id is not None:
+                self._cross_active_alarm[rule.id] = created.id
 
     async def _raise_layer1_alarm(
         self,
@@ -332,8 +353,11 @@ class ThresholdEngine:
         trigger_value: float,
         now: datetime,
         global_test: bool,
-    ) -> None:
+    ) -> AlarmEvent:
         """Rate-of-change ve cross-sensor için ortak alarm yazma yolu.
+
+        Oluşturulan ``AlarmEvent``'i döndürür (cross-sensor çağıranı non-test
+        alarmı ``_cross_active_alarm``'da izlemek için id'sine ihtiyaç duyar).
 
         Bakım modu (per-instance + global) saygı, audit log, push gönderimi
         — threshold breach yolundaki davranışla aynı. Threshold ID yok
@@ -408,6 +432,56 @@ class ThresholdEngine:
                 tag_id=tag_id,
                 exc_info=True,
             )
+
+        return created
+
+    async def _auto_clear_cross_sensor(
+        self,
+        rule_id: int,
+        clear_value: float,
+        now: datetime,
+    ) -> None:
+        """Cross-sensor kuralı tekrar sağlanınca aktif alarmı temizler (review H6).
+
+        Yalnız bu oturumda açıp ``_cross_active_alarm``'da izlediğimiz gerçek
+        alarm temizlenir; takip kaydı yoksa no-op. Cooldown'a DOKUNULMAZ — kısa
+        sürede tekrar ihlal olursa cooldown alarm spam'ini önler.
+
+        Kısıt (bellek-içi izleme): süreç yeniden başlarsa önceki oturumda
+        açılmış bir cross_sensor alarmı (koşul downtime'da çözülmüşse) otomatik
+        temizlenmez; operatör manuel ``clear`` ile kapatır.
+        """
+        alarm_id = self._cross_active_alarm.pop(rule_id, None)
+        if alarm_id is None:
+            return
+
+        updated = await self._db.update_alarm_event(
+            alarm_id,
+            {"state": "cleared", "cleared_at": now, "clear_value": clear_value},
+        )
+        if updated is None:
+            # Alarm bu arada başka yoldan kapanmış (manuel clear vb.) — sessiz geç.
+            return
+
+        await self._db.insert_audit_log(
+            AuditLogEntry(
+                category="alarm",
+                action="cross_sensor_auto_cleared",
+                entity_type="cross_sensor_rule",
+                entity_id=str(rule_id),
+                detail=(
+                    f"Cross-sensor kuralı (id={rule_id}) tekrar sağlandı; "
+                    f"alarm {alarm_id} otomatik temizlendi "
+                    f"(değer={clear_value:.2f})"
+                ),
+            ),
+        )
+        await logger.ainfo(
+            "Cross-sensor alarm otomatik temizlendi",
+            rule_id=rule_id,
+            alarm_id=alarm_id,
+            clear_value=clear_value,
+        )
 
 
 def _cross_sensor_holds(value_a: float, operator: str, value_b: float) -> bool:

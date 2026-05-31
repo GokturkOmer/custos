@@ -1097,6 +1097,49 @@ class DatabaseInterface(abc.ABC):
         """Verilen alarm'ları iletilmiş işaretler (``pushed_at`` set) — tek-sefer
         push garantisi. Boş liste no-op."""
 
+    @abc.abstractmethod
+    async def list_escalatable_alarms(
+        self,
+        *,
+        sources: list[str],
+        triggered_before: datetime,
+        limit: int = 200,
+    ) -> list[AlarmEvent]:
+        """Yükseltme adayı (warn → crit) alarm'ları döndürür — review M6/H6b.
+
+        Tüm filtreler DB tarafında uygulanır ki ``limit`` yalnız gerçek
+        adayları saysın (eski escalation kodu ``ORDER BY triggered_at DESC
+        LIMIT`` ile en yeni 200'ü çekip, eşiği çoktan aşmış en eskileri
+        pencere dışında bırakıyordu):
+
+        - ``state = 'triggered'`` — onaylanan (``acknowledged``) alarm artık
+          yükseltilmez; acknowledge escalation'ı durduran işarettir (H6b).
+        - ``severity = 'warn'`` — yalnız warn yükseltilir.
+        - ``escalated_from IS NULL`` — zaten yükseltilmiş atlanır.
+        - ``is_test = false`` — bakım modu alarm'ı yükseltilmez.
+        - ``source = ANY(sources)`` — yalnız kullanıcı tanımlı kaynaklar.
+        - ``triggered_at <= triggered_before`` — eşik yaşını aşmış olanlar.
+
+        Sıralama **ASC** (en eski önce) — en uzun bekleyen alarm öncelikli.
+        Boş ``sources`` → boş liste.
+        """
+
+    @abc.abstractmethod
+    async def escalate_alarm_to_crit(
+        self,
+        event_id: int,
+        *,
+        old_severity: str,
+        escalated_at: datetime,
+    ) -> AlarmEvent | None:
+        """Alarmı atomik olarak ``warn`` → ``crit`` yükseltir — review M5.
+
+        UPDATE yalnız alarm hâlâ ``state = 'triggered'`` VE henüz
+        yükseltilmemişse (``escalated_from IS NULL``) uygulanır. Eşzamanlı bir
+        clear/acknowledge ile yarışta durumu değişmiş alarma sahte crit
+        yazılmaz; güncellenen satır yoksa ``None`` döner ve çağıran push/audit'i
+        atlar."""
+
     # --- Alarm Event Labels (R-05 / V11-301) ---
 
     @abc.abstractmethod
@@ -3441,6 +3484,65 @@ class TimescaleDBDatabase(DatabaseInterface):
         if row is None:
             return None
         return _row_to_alarm_event_with_label(row)
+
+    async def list_escalatable_alarms(
+        self,
+        *,
+        sources: list[str],
+        triggered_before: datetime,
+        limit: int = 200,
+    ) -> list[AlarmEvent]:
+        """Yükseltme adayı warn alarm'ları (en eski önce) — review M6/H6b.
+
+        Filtreleme DB tarafında: triggered + warn + yükseltilmemiş + test değil
+        + kullanıcı kaynak + yaşı eşiği aşmış. ``ORDER BY ... ASC`` ile limit
+        yalnız gerçek adayları sayar."""
+        if not sources:
+            return []
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM alarm_events "
+                "WHERE state = 'triggered' AND severity = 'warn' "
+                "AND escalated_from IS NULL AND is_test = false "
+                "AND source = ANY($1::text[]) "
+                "AND triggered_at <= $2 "
+                "ORDER BY triggered_at ASC LIMIT $3",
+                sources,
+                triggered_before,
+                limit,
+                timeout=_DB_STATEMENT_TIMEOUT,
+            )
+        return [_row_to_alarm_event(row) for row in rows]
+
+    async def escalate_alarm_to_crit(
+        self,
+        event_id: int,
+        *,
+        old_severity: str,
+        escalated_at: datetime,
+    ) -> AlarmEvent | None:
+        """Alarmı atomik koşullu UPDATE ile crit'e yükseltir — review M5.
+
+        ``WHERE ... state = 'triggered' AND escalated_from IS NULL`` ile yarış
+        koruması: eşzamanlı clear/acknowledge olduysa satır güncellenmez ve
+        ``None`` döner (çağıran sahte crit push/audit yazmaz)."""
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE alarm_events "
+                "SET severity = 'crit', escalated_from = $2, escalated_at = $3 "
+                "WHERE id = $1 AND state = 'triggered' "
+                "AND escalated_from IS NULL "
+                "RETURNING *",
+                event_id,
+                old_severity,
+                escalated_at,
+                timeout=_DB_STATEMENT_TIMEOUT,
+            )
+        if row is None:
+            return None
+        return _row_to_alarm_event(row)
 
     async def list_pending_threshold_push_alarms(
         self,

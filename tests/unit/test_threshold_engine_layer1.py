@@ -9,13 +9,16 @@ unit test'ler — DB'siz, tick yok.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from custos.analytics.threshold_engine import (
     _CROSS_SENSOR_COOLDOWN,
     _RATE_OF_CHANGE_COOLDOWN,
+    ThresholdEngine,
     _cross_sensor_holds,
 )
+from custos.shared.database import AlarmEvent, AuditLogEntry
 
 
 def test_cross_sensor_holds_lt_true_when_a_less_than_b() -> None:
@@ -65,3 +68,60 @@ def test_layer1_cooldown_constants() -> None:
     """Paket dokümanı: rate-of-change cooldown 5 dk, cross-sensor 10 dk."""
     assert _RATE_OF_CHANGE_COOLDOWN == timedelta(minutes=5)
     assert _CROSS_SENSOR_COOLDOWN == timedelta(minutes=10)
+
+
+class _ClearStubDB:
+    """``_auto_clear_cross_sensor`` (review H6) için minimal DB yüzeyi."""
+
+    def __init__(self, *, update_returns: AlarmEvent | None) -> None:
+        self._update_returns = update_returns
+        self.update_calls: list[tuple[int, dict[str, Any]]] = []
+        self.audit_calls: list[AuditLogEntry] = []
+
+    async def update_alarm_event(
+        self,
+        event_id: int,
+        updates: dict[str, Any],
+    ) -> AlarmEvent | None:
+        self.update_calls.append((event_id, dict(updates)))
+        return self._update_returns
+
+    async def insert_audit_log(self, entry: AuditLogEntry) -> AuditLogEntry:
+        self.audit_calls.append(entry)
+        return entry
+
+
+async def test_auto_clear_cross_sensor_clears_tracked_alarm() -> None:
+    """H6: izlenen aktif alarm, kural tekrar sağlanınca 'cleared' yapılır +
+    audit yazılır + takip haritasından silinir."""
+    db = _ClearStubDB(
+        update_returns=AlarmEvent(id=5, tag_id="A", state="cleared"),
+    )
+    engine = ThresholdEngine(db=db)  # type: ignore[arg-type]
+    engine._cross_active_alarm[42] = 5
+    now = datetime.now(UTC)
+
+    await engine._auto_clear_cross_sensor(42, 7.5, now)
+
+    assert len(db.update_calls) == 1
+    event_id, updates = db.update_calls[0]
+    assert event_id == 5
+    assert updates["state"] == "cleared"
+    assert updates["cleared_at"] == now
+    assert updates["clear_value"] == 7.5
+    # Takip kaydı temizlendi — koşul tekrar ihlal edilirse yeni alarm açılabilir.
+    assert 42 not in engine._cross_active_alarm
+    assert len(db.audit_calls) == 1
+    assert db.audit_calls[0].action == "cross_sensor_auto_cleared"
+
+
+async def test_auto_clear_cross_sensor_noop_when_rule_not_tracked() -> None:
+    """Takip kaydı yoksa (ör. süreç restart sonrası) hiçbir DB çağrısı yok."""
+    db = _ClearStubDB(update_returns=None)
+    engine = ThresholdEngine(db=db)  # type: ignore[arg-type]
+    now = datetime.now(UTC)
+
+    await engine._auto_clear_cross_sensor(99, 1.0, now)
+
+    assert db.update_calls == []
+    assert db.audit_calls == []

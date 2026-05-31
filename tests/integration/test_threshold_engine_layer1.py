@@ -343,3 +343,54 @@ async def test_cross_sensor_cooldown_prevents_duplicate(
     )
     # 10 dk cooldown — tek alarm kalır.
     assert len(alarms) == 1
+
+
+@pytest.mark.usefixtures("_check_db_available")
+async def test_cross_sensor_auto_clears_when_condition_resolves(
+    db: TimescaleDBDatabase,
+) -> None:
+    """H6 (review): ihlal sonrası kural tekrar sağlanınca aktif cross_sensor
+    alarmı otomatik 'cleared' olur — latch'lenip 30 dk sonra zorunlu crit'e
+    yükselmesi engellenir."""
+    tag_a = await _insert_tag(db, "TEST_R06_AC_A", name="Supply Temp")
+    tag_b = await _insert_tag(db, "TEST_R06_AC_B", name="Return Temp")
+    assert tag_a.id is not None and tag_b.id is not None
+
+    rule = await db.insert_cross_sensor_rule(
+        CrossSensorRule(
+            name="TEST_R06_autoclear",
+            tag_a_id=tag_a.id,
+            tag_b_id=tag_b.id,
+            operator="lt",
+            severity="warn",
+        ),
+    )
+    assert rule.id is not None
+
+    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
+
+    now = datetime.now(UTC)
+    # İhlal: A=25 >= B=20 (A<B bekleniyor) → alarm açılır.
+    await _write_reading(db, tag_a.tag_id, 25.0, now - timedelta(seconds=2))
+    await _write_reading(db, tag_b.tag_id, 20.0, now - timedelta(seconds=2))
+    await engine._check_cycle()
+
+    triggered = await db.list_alarm_events(
+        tag_id=tag_a.tag_id, source="cross_sensor", state="triggered", limit=10,
+    )
+    assert len(triggered) == 1, "İhlalde cross_sensor alarmı açılmadı"
+
+    # Koşul çözülür: A=18 < B=22 → kural sağlanıyor → auto-clear devreye girer.
+    await _write_reading(db, tag_a.tag_id, 18.0, now + timedelta(seconds=1))
+    await _write_reading(db, tag_b.tag_id, 22.0, now + timedelta(seconds=1))
+    await engine._check_cycle()
+
+    triggered_after = await db.list_alarm_events(
+        tag_id=tag_a.tag_id, source="cross_sensor", state="triggered", limit=10,
+    )
+    cleared = await db.list_alarm_events(
+        tag_id=tag_a.tag_id, source="cross_sensor", state="cleared", limit=10,
+    )
+    assert len(triggered_after) == 0, "Çözülen koşulda alarm auto-clear olmadı"
+    assert len(cleared) == 1
+    assert cleared[0].clear_value == 18.0

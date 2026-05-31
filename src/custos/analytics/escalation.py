@@ -12,21 +12,25 @@ kendi tanımladığı kaynaklarda olur — yani ``source='threshold'`` veya
 spc, watchdog, rate_of_change) crit'e yükseltilmez; warn olarak kalır.
 Operatör manuel olarak kapatır.
 
-Algoritma — her tick'te:
+Algoritma — her tick'te (review M5/M6/H6b):
 
-1. Aktif (``cleared_at IS NULL``), ``warn`` severity, henüz yükseltilmemiş
-   (``escalated_from IS NULL``), ``source IN _ESCALATABLE_SOURCES`` alarm'ları çek.
-2. ``now - triggered_at >= threshold_minutes`` ise:
-   - ``severity='crit'``, ``escalated_from='warn'``, ``escalated_at=now``
-   - Push gönder (crit kanalı)
-   - Audit log (``category='alarm_escalation'``)
+1. ``list_escalatable_alarms`` ile adaylar **DB tarafında** filtrelenir:
+   ``state='triggered'`` (yalnız tetiklenmiş — acknowledge escalation'ı
+   durdurur, H6b), ``warn``, ``escalated_from IS NULL``, ``is_test=false``,
+   ``source IN _ESCALATABLE_SOURCES`` ve ``triggered_at <= now - eşik``.
+   Sıralama en ESKİ önce (ASC) → ``_MAX_ALARMS_PER_TICK`` limiti yalnız
+   gerçek adayları sayar (eski DESC LIMIT en eski alarm'ları pencere dışında
+   bırakıyordu, M6).
+2. Her aday ``escalate_alarm_to_crit`` ile **atomik** yükseltilir (M5):
+   yalnız hâlâ triggered + yükseltilmemişse ``severity='crit'``,
+   ``escalated_from='warn'``, ``escalated_at=now`` yazılır + push (crit kanalı)
+   + audit log (``category='alarm_escalation'``). Eşzamanlı clear ile yarışta
+   kapanmış alarma sahte crit/push gitmez (UPDATE 0 satır → push/audit atlanır).
 
-Bakım modu (``is_test=True``) alarm'ları yükseltilse bile push atlanır
-(``send_push_notifications`` zaten ``is_test`` flag'i ile early-return
-yapar). Test alarm'larını yükseltmemek de mantıklı bir karar olabilir;
-şu anki tercihimiz: ``is_test=True`` ise yükseltme yapmıyoruz (üretim
-bombardımanına girmesin diye, R-06 paket dokümanında "warn 30 dk → crit"
-sade kuralı kullanıcıya sözleniyor — bakım kalıcı dahil).
+Acknowledge artık escalation'ı durdurur (H6b): operatör onayladıysa alarm
+crit'e yükseltilmez. Operatör onaylamaz ve koşul da çözülmezse warn → crit
+eşiği dolunca yükseltilir. Bakım modu (``is_test=True``) alarm'ları hiç
+yükseltilmez (DB filtresi).
 
 Kanonik kaynaklar:
 - ``shared/database.py`` — AlarmEvent dataclass'ında escalated_from /
@@ -118,7 +122,7 @@ class EscalationLoop:
         self._running = False
 
     async def _tick(self) -> None:
-        """Tek tarama: warn alarm'larını yükseltme süresine göre kontrol eder."""
+        """Tek tarama: yükseltme süresini aşmış warn alarm'larını crit'e çıkarır."""
         now = datetime.now(UTC)
 
         # Eşik singleton retention_config'ten okunur — kullanıcı 5-240 dk
@@ -126,61 +130,37 @@ class EscalationLoop:
         # tick'te etkili olur.
         cfg = await self._db.get_retention_config()
         threshold_minutes = cfg.escalation_warn_to_crit_minutes
-        threshold_delta = timedelta(minutes=threshold_minutes)
+        triggered_before = now - timedelta(minutes=threshold_minutes)
 
-        # Aktif (cleared olmayan) warn alarmları — list_alarm_events helper'ı
-        # state filtresi alıyor; "triggered" + "acknowledged" iki çağrı.
-        # Acknowledged warn alarm da yükseltmeye dahil — operatör onayladıktan
-        # sonra kapatmazsa hâlâ açık demek, escalation devam eder.
-        triggered = await self._db.list_alarm_events(
-            state="triggered", limit=_MAX_ALARMS_PER_TICK,
+        # Adaylar DB tarafında filtrelenir (review M6/H6b): yalnız triggered +
+        # warn + yükseltilmemiş + test değil + kullanıcı kaynak + yaşı eşiği
+        # aşmış; en ESKİ önce. Böylece _MAX_ALARMS_PER_TICK limiti yalnız gerçek
+        # adayları sayar (eski DESC LIMIT en eski alarm'ları kaçırıyordu).
+        candidates = await self._db.list_escalatable_alarms(
+            sources=sorted(_ESCALATABLE_SOURCES),
+            triggered_before=triggered_before,
+            limit=_MAX_ALARMS_PER_TICK,
         )
-        acknowledged = await self._db.list_alarm_events(
-            state="acknowledged", limit=_MAX_ALARMS_PER_TICK,
-        )
-        candidates = triggered + acknowledged
 
         escalated_count = 0
-        skipped_non_user_source = 0
         for alarm in candidates:
-            if alarm.id is None:
+            if alarm.id is None or alarm.triggered_at is None:
                 continue
-            if alarm.severity != "warn":
-                continue
-            if alarm.escalated_from is not None:
-                # Zaten yükseltilmiş — dokunma.
-                continue
-            if alarm.is_test:
-                # Bakım modu alarm'ı — yükseltme yok (push gitmiyor zaten,
-                # operasyonel sinyal değil).
-                continue
-            if alarm.source not in _ESCALATABLE_SOURCES:
-                # Otomatik kaynak (liveness/anomaly/spc/watchdog/rate_of_change)
-                # — kullanıcı tanımlı değil, crit'e çıkmaz.
-                skipped_non_user_source += 1
-                continue
-            if alarm.triggered_at is None:
-                continue
-
-            age = now - alarm.triggered_at
-            if age < threshold_delta:
-                continue
-
-            await self._escalate_alarm(
+            age_seconds = (now - alarm.triggered_at).total_seconds()
+            if await self._escalate_alarm(
                 alarm_id=alarm.id,
                 tag_id=alarm.tag_id,
                 old_severity=alarm.severity,
                 threshold_minutes=threshold_minutes,
-                age_seconds=age.total_seconds(),
+                age_seconds=age_seconds,
                 now=now,
-            )
-            escalated_count += 1
+            ):
+                escalated_count += 1
 
-        if escalated_count > 0 or skipped_non_user_source > 0:
+        if escalated_count > 0:
             await logger.ainfo(
                 "Escalation tick tamamlandı",
                 escalated_count=escalated_count,
-                skipped_non_user_source=skipped_non_user_source,
                 threshold_minutes=threshold_minutes,
             )
 
@@ -193,25 +173,27 @@ class EscalationLoop:
         threshold_minutes: int,
         age_seconds: float,
         now: datetime,
-    ) -> None:
-        """Tek bir alarmı warn → crit yükseltir + push + audit log."""
-        # Update — severity, escalated_from, escalated_at tek round-trip.
-        # ``_ALLOWED_ALARM_EVENT_UPDATE_FIELDS`` bu üçlüyü içermek zorunda
-        # (R-06 / Migration 036); aksi ValueError fırlar.
-        updated = await self._db.update_alarm_event(
+    ) -> bool:
+        """Tek bir alarmı atomik olarak warn → crit yükseltir + push + audit log.
+
+        Atomik UPDATE (review M5) yalnız alarm hâlâ triggered + yükseltilmemişse
+        uygulanır; eşzamanlı clear/acknowledge ile yarışta durumu değiştiyse
+        ``None`` döner → push/audit atlanır ve ``False`` döndürülür. Yükseltme
+        gerçekten uygulandıysa ``True``.
+        """
+        updated = await self._db.escalate_alarm_to_crit(
             alarm_id,
-            {
-                "severity": "crit",
-                "escalated_from": old_severity,
-                "escalated_at": now,
-            },
+            old_severity=old_severity,
+            escalated_at=now,
         )
         if updated is None:
-            await logger.awarning(
-                "Escalation: alarm bulunamadı",
+            # Yarışta kapanmış/onaylanmış veya zaten yükseltilmiş — sahte crit
+            # + push yazma, sessizce atla (review M5).
+            await logger.ainfo(
+                "Escalation atlandı (alarm artık triggered değil veya yükseltilmiş)",
                 alarm_id=alarm_id,
             )
-            return
+            return False
 
         await self._db.insert_audit_log(
             AuditLogEntry(
@@ -238,7 +220,8 @@ class EscalationLoop:
         )
 
         # Push — crit kanalı; sessiz saat varsa atlanır (push_sender ele alır).
-        # is_test=False çünkü _tick zaten test alarm'larını filtreliyor.
+        # is_test=False çünkü DB filtresi (list_escalatable_alarms) zaten test
+        # alarm'larını eler.
         try:
             await send_push_notifications(
                 db=self._db,
@@ -256,3 +239,4 @@ class EscalationLoop:
                 alarm_id=alarm_id,
                 exc_info=True,
             )
+        return True

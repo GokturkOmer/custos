@@ -1,21 +1,30 @@
 """R-06 / V11-306: ``EscalationLoop._tick`` davranış birimi.
 
-Strateji: DB için ihtiyaç duyulan metodları stub'layan minimal sınıf
-(MagicMock yerine custom — async metodlar için spec uyumlu daha temiz).
-``send_push_notifications`` modül-level fonksiyon olduğu için
-``monkeypatch`` ile yerine mock konur.
+Strateji: DB için ihtiyaç duyulan metodları stub'layan minimal sınıf.
+``send_push_notifications`` modül-level fonksiyon olduğu için ``monkeypatch``
+ile yerine mock konur.
 
-Sınanan davranışlar:
+Sınanan davranışlar (review M5/M6/H6b sonrası):
 
 1. Eşik altındaki alarm yükseltilmez (threshold-1 dk yaş).
 2. Eşik üstündeki warn alarm crit'e yükseltilir + audit log + push.
-3. Zaten yükseltilmiş alarm tekrar dokunulmaz.
-4. ``is_test=True`` alarm yükseltme yapılmaz (bakım modu).
+3. Zaten yükseltilmiş alarm tekrar yükseltilmez (``escalated_from`` dolu).
+4. ``is_test=True`` alarm yükseltilmez (bakım modu).
 5. Severity ``warn`` dışı (ör. ``info``, ``crit``) alarm yükseltilmez.
-6. Otomatik kaynaklı (liveness/anomaly/spc/watchdog/rate_of_change)
-   warn alarm yükseltilmez — kullanıcı kuralı: crit sadece kullanıcı
-   tanımlı kaynaklarda (threshold/cross_sensor).
-7. ``cross_sensor`` kaynaklı warn alarm crit'e yükseltilir.
+6. **Acknowledge edilmiş warn alarm YÜKSELTİLMEZ** — acknowledge artık
+   escalation'ı durduran işarettir (review H6b; eski davranış tersiydi).
+7. Otomatik kaynaklı (liveness/anomaly/spc/watchdog/rate_of_change) warn
+   alarm yükseltilmez — kullanıcı kuralı: crit sadece kullanıcı tanımlı
+   kaynaklarda (threshold/cross_sensor).
+8. ``cross_sensor`` kaynaklı warn alarm crit'e yükseltilir.
+9. **M5 yarış koruması:** aday seçildikten sonra alarm kapanırsa atomik
+   ``escalate_alarm_to_crit`` ``None`` döner → audit/push yazılmaz (sahte crit
+   gönderilmez).
+
+Filtreleme artık DB tarafında (``list_escalatable_alarms``, review M6/H6b);
+``_StubDB`` bu sözleşmeyi birebir taklit eder, böylece 1/3/4/5/6/7 davranışları
+stub filtresinde doğrulanır. Gerçek SQL filtre/sıralaması integration testinde
+sınanır.
 """
 
 from __future__ import annotations
@@ -36,24 +45,26 @@ from custos.shared.database import (
 class _StubDB:
     """``EscalationLoop`` için yeterli minimum DB yüzeyi.
 
-    ``triggered`` listesi state='triggered' alarm'ları, ``acknowledged``
-    listesi de aynı şekilde döner. ``escalation_warn_to_crit_minutes``
-    constructor'da geçilir.
+    ``alarms`` tüm alarm'lardır; ``list_escalatable_alarms`` bunları gerçek SQL
+    sözleşmesiyle aynı şekilde filtreler (triggered + warn + escalated_from None
+    + not is_test + source in sources + triggered_at <= cutoff), en eski önce.
+    ``escalate_returns_none=True`` ise ``escalate_alarm_to_crit`` ``None`` döner
+    — eşzamanlı clear yarışı (review M5).
 
-    Kayıt edilen update'ler ve audit log'lar test sonunda iddia edilebilir.
+    Yapılan ``escalate_alarm_to_crit`` ve audit log çağrıları test sonunda
+    iddia edilebilir.
     """
 
     def __init__(
         self,
         *,
-        triggered: list[AlarmEvent] | None = None,
-        acknowledged: list[AlarmEvent] | None = None,
+        alarms: list[AlarmEvent] | None = None,
         escalation_minutes: int = 30,
+        escalate_returns_none: bool = False,
     ) -> None:
-        self._triggered = list(triggered or [])
-        self._acknowledged = list(acknowledged or [])
-        self._escalation_minutes = escalation_minutes
-        self.update_calls: list[tuple[int, dict[str, Any]]] = []
+        self._alarms = list(alarms or [])
+        self._escalate_returns_none = escalate_returns_none
+        self.escalate_calls: list[tuple[int, str, datetime]] = []
         self.audit_calls: list[AuditLogEntry] = []
         self.cfg = RetentionConfig(
             raw_retention_days=180,
@@ -66,35 +77,48 @@ class _StubDB:
     async def get_retention_config(self) -> RetentionConfig:
         return self.cfg
 
-    async def list_alarm_events(
+    async def list_escalatable_alarms(
         self,
         *,
-        state: str | None = None,
-        tag_id: str | None = None,
-        limit: int = 100,
-        is_test: bool | None = None,
-        source: str | None = None,
+        sources: list[str],
+        triggered_before: datetime,
+        limit: int = 200,
     ) -> list[AlarmEvent]:
-        if state == "triggered":
-            return list(self._triggered)
-        if state == "acknowledged":
-            return list(self._acknowledged)
-        return []
+        candidates = [
+            a
+            for a in self._alarms
+            if a.state == "triggered"
+            and a.severity == "warn"
+            and a.escalated_from is None
+            and not a.is_test
+            and a.source in sources
+            and a.triggered_at is not None
+            and a.triggered_at <= triggered_before
+        ]
+        # En eski önce (ASC) — production sıralamasıyla aynı (review M6).
+        candidates.sort(
+            key=lambda a: a.triggered_at or datetime.min.replace(tzinfo=UTC),
+        )
+        return candidates[:limit]
 
-    async def update_alarm_event(
+    async def escalate_alarm_to_crit(
         self,
         event_id: int,
-        updates: dict[str, Any],
+        *,
+        old_severity: str,
+        escalated_at: datetime,
     ) -> AlarmEvent | None:
-        self.update_calls.append((event_id, dict(updates)))
-        # Geri dönüş için sahte alarm: çağrı doğruluğu yeterli.
+        self.escalate_calls.append((event_id, old_severity, escalated_at))
+        if self._escalate_returns_none:
+            # Atomik UPDATE 0 satır etkiledi (yarışta kapanmış) — review M5.
+            return None
         return AlarmEvent(
             id=event_id,
             tag_id="TEST",
-            state="acknowledged",
+            state="triggered",
             severity="crit",
-            escalated_from="warn",
-            escalated_at=updates.get("escalated_at"),
+            escalated_from=old_severity,
+            escalated_at=escalated_at,
         )
 
     async def insert_audit_log(self, entry: AuditLogEntry) -> AuditLogEntry:
@@ -110,18 +134,19 @@ def _make_alarm(
     is_test: bool = False,
     escalated_from: str | None = None,
     source: str = "threshold",
+    state: str = "triggered",
 ) -> AlarmEvent:
     """Test alarm'ı üretir; ``age_minutes`` triggered_at'i geçmişe iter.
 
-    Default ``source='threshold'`` — kullanıcı tanımlı kaynak, escalate
-    edilebilir. Otomatik kaynak testleri için açıkça override edilir.
+    Default ``source='threshold'`` + ``state='triggered'`` — kullanıcı tanımlı,
+    escalate edilebilir aday. Diğer durumlar testlerde override edilir.
     """
     triggered = datetime.now(UTC) - timedelta(minutes=age_minutes)
     return AlarmEvent(
         id=alarm_id,
         tag_id=f"TAG_{alarm_id}",
         threshold_id=None,
-        state="triggered",
+        state=state,
         triggered_at=triggered,
         severity=severity,
         is_test=is_test,
@@ -153,12 +178,12 @@ async def test_alarm_below_threshold_is_not_escalated(
 ) -> None:
     """29 dk yaşındaki warn alarm, 30 dk eşik altı → yükseltme yok."""
     db = _StubDB(
-        triggered=[_make_alarm(alarm_id=1, age_minutes=29.0)],
+        alarms=[_make_alarm(alarm_id=1, age_minutes=29.0)],
         escalation_minutes=30,
     )
     loop = EscalationLoop(db=db)  # type: ignore[arg-type]
     await loop._tick()
-    assert db.update_calls == []
+    assert db.escalate_calls == []
     assert _stub_push == []
 
 
@@ -167,17 +192,15 @@ async def test_warn_alarm_above_threshold_is_escalated(
 ) -> None:
     """31 dk yaşındaki warn alarm, 30 dk eşik üstü → crit'e yükseltilir."""
     db = _StubDB(
-        triggered=[_make_alarm(alarm_id=42, age_minutes=31.0)],
+        alarms=[_make_alarm(alarm_id=42, age_minutes=31.0)],
         escalation_minutes=30,
     )
     loop = EscalationLoop(db=db)  # type: ignore[arg-type]
     await loop._tick()
-    assert len(db.update_calls) == 1
-    event_id, updates = db.update_calls[0]
+    assert len(db.escalate_calls) == 1
+    event_id, old_severity, _ = db.escalate_calls[0]
     assert event_id == 42
-    assert updates["severity"] == "crit"
-    assert updates["escalated_from"] == "warn"
-    assert updates["escalated_at"] is not None
+    assert old_severity == "warn"
     # Audit log + push çağrıldı.
     assert len(db.audit_calls) == 1
     audit = db.audit_calls[0]
@@ -191,20 +214,16 @@ async def test_warn_alarm_above_threshold_is_escalated(
 async def test_already_escalated_alarm_is_skipped(
     _stub_push: list[dict[str, Any]],
 ) -> None:
-    """``escalated_from`` doluysa tick atlar — tekrar yükseltme yok."""
+    """``escalated_from`` doluysa aday değil — tekrar yükseltme yok."""
     db = _StubDB(
-        triggered=[
-            _make_alarm(
-                alarm_id=7,
-                age_minutes=120.0,
-                escalated_from="warn",
-            ),
+        alarms=[
+            _make_alarm(alarm_id=7, age_minutes=120.0, escalated_from="warn"),
         ],
         escalation_minutes=30,
     )
     loop = EscalationLoop(db=db)  # type: ignore[arg-type]
     await loop._tick()
-    assert db.update_calls == []
+    assert db.escalate_calls == []
 
 
 async def test_test_alarm_is_not_escalated(
@@ -212,12 +231,12 @@ async def test_test_alarm_is_not_escalated(
 ) -> None:
     """is_test=True bakım modu alarm'ı eşik aşsa da yükseltilmez."""
     db = _StubDB(
-        triggered=[_make_alarm(alarm_id=9, age_minutes=120.0, is_test=True)],
+        alarms=[_make_alarm(alarm_id=9, age_minutes=120.0, is_test=True)],
         escalation_minutes=30,
     )
     loop = EscalationLoop(db=db)  # type: ignore[arg-type]
     await loop._tick()
-    assert db.update_calls == []
+    assert db.escalate_calls == []
 
 
 async def test_non_warn_severity_is_not_escalated(
@@ -225,7 +244,7 @@ async def test_non_warn_severity_is_not_escalated(
 ) -> None:
     """info / crit severity alarm yükseltme döngüsünün konusu değil."""
     db = _StubDB(
-        triggered=[
+        alarms=[
             _make_alarm(alarm_id=11, age_minutes=120.0, severity="info"),
             _make_alarm(alarm_id=12, age_minutes=120.0, severity="crit"),
         ],
@@ -233,23 +252,28 @@ async def test_non_warn_severity_is_not_escalated(
     )
     loop = EscalationLoop(db=db)  # type: ignore[arg-type]
     await loop._tick()
-    assert db.update_calls == []
+    assert db.escalate_calls == []
 
 
-async def test_acknowledged_warn_alarm_is_escalated(
+async def test_acknowledged_warn_alarm_is_not_escalated(
     _stub_push: list[dict[str, Any]],
 ) -> None:
-    """Operatör onaylasa bile alarm hâlâ açıksa yükseltme devam eder."""
+    """H6b: acknowledge escalation'ı durdurur — onaylanmış warn yükseltilmez.
+
+    Eski davranış tersiydi (acknowledged alarm da yükseltiliyordu); review H6
+    ile acknowledge artık operatörün sahiplendiğini gösteren, zorunlu crit'i
+    durduran işaret.
+    """
     db = _StubDB(
-        acknowledged=[_make_alarm(alarm_id=99, age_minutes=45.0)],
+        alarms=[
+            _make_alarm(alarm_id=99, age_minutes=45.0, state="acknowledged"),
+        ],
         escalation_minutes=30,
     )
     loop = EscalationLoop(db=db)  # type: ignore[arg-type]
     await loop._tick()
-    assert len(db.update_calls) == 1
-    event_id, updates = db.update_calls[0]
-    assert event_id == 99
-    assert updates["severity"] == "crit"
+    assert db.escalate_calls == []
+    assert _stub_push == []
 
 
 @pytest.mark.parametrize(
@@ -264,14 +288,14 @@ async def test_auto_source_alarm_is_not_escalated(
     eşik aşsa bile crit'e yükseltilmez. Kullanıcı kuralı: critical sadece
     kullanıcı tanımlı kaynaklarda (threshold/cross_sensor)."""
     db = _StubDB(
-        triggered=[
+        alarms=[
             _make_alarm(alarm_id=50, age_minutes=120.0, source=auto_source),
         ],
         escalation_minutes=30,
     )
     loop = EscalationLoop(db=db)  # type: ignore[arg-type]
     await loop._tick()
-    assert db.update_calls == []
+    assert db.escalate_calls == []
     assert db.audit_calls == []
     assert _stub_push == []
 
@@ -282,15 +306,34 @@ async def test_cross_sensor_alarm_is_escalated(
     """Cross-sensor alarmları kullanıcı tanımlı kuralla üretilir → crit'e
     yükseltilir."""
     db = _StubDB(
-        triggered=[
+        alarms=[
             _make_alarm(alarm_id=77, age_minutes=45.0, source="cross_sensor"),
         ],
         escalation_minutes=30,
     )
     loop = EscalationLoop(db=db)  # type: ignore[arg-type]
     await loop._tick()
-    assert len(db.update_calls) == 1
-    event_id, updates = db.update_calls[0]
+    assert len(db.escalate_calls) == 1
+    event_id, old_severity, _ = db.escalate_calls[0]
     assert event_id == 77
-    assert updates["severity"] == "crit"
-    assert updates["escalated_from"] == "warn"
+    assert old_severity == "warn"
+
+
+async def test_escalation_skips_audit_push_when_alarm_cleared_in_race(
+    _stub_push: list[dict[str, Any]],
+) -> None:
+    """M5: aday seçildikten sonra alarm kapanırsa atomik UPDATE 0 satır döner
+    (``escalate_alarm_to_crit`` → None) → audit/push yazılmaz, sahte crit yok.
+    """
+    db = _StubDB(
+        alarms=[_make_alarm(alarm_id=55, age_minutes=45.0)],
+        escalation_minutes=30,
+        escalate_returns_none=True,
+    )
+    loop = EscalationLoop(db=db)  # type: ignore[arg-type]
+    await loop._tick()
+    # Yükseltme denendi (atomik çağrı yapıldı) ama UPDATE boş döndü.
+    assert len(db.escalate_calls) == 1
+    # Sahte crit yan etkisi yok.
+    assert db.audit_calls == []
+    assert _stub_push == []

@@ -3100,6 +3100,55 @@ async def alarm_acknowledge(
     return RedirectResponse(url="/dashboard/alarms", status_code=303)
 
 
+@router.post(
+    "/alarms/{event_id:int}/clear", response_class=HTMLResponse, dependencies=[_OPERATOR_DEP]
+)
+async def alarm_clear(
+    request: Request,
+    event_id: int,
+) -> RedirectResponse:
+    """Alarm manuel temizleme — triggered/acknowledged → cleared (review H6).
+
+    Otomatik auto-clear yolu olmayan kaynakların (liveness/anomaly/spc/
+    rate_of_change/watchdog) warn alarm'ları aksi halde kalıcı birikir; bu
+    endpoint operatöre her aktif alarmı elle kapatma yolu verir. Threshold ve
+    cross_sensor zaten otomatik temizlenir ama operatör erken kapatmak isteyebilir.
+    Zaten ``cleared`` ise 400.
+    """
+    db = _get_db(request)
+    event = await db.get_alarm_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Alarm bulunamadı")
+
+    if event.state == "cleared":
+        raise HTTPException(
+            status_code=400,
+            detail="Alarm zaten temizlenmiş",
+        )
+
+    now = datetime.now(UTC)
+    await db.update_alarm_event(
+        event_id,
+        {"state": "cleared", "cleared_at": now},
+    )
+
+    # Audit log
+    await db.insert_audit_log(
+        AuditLogEntry(
+            category="alarm",
+            action="manually_cleared",
+            entity_type="alarm_event",
+            entity_id=str(event_id),
+            detail=(
+                f"Alarm operatör tarafından elle temizlendi: "
+                f"source={event.source}, tag={event.tag_id}"
+            ),
+        ),
+    )
+
+    return RedirectResponse(url="/dashboard/alarms", status_code=303)
+
+
 # --- Alarm Labeling (R-05 / V11-301) ---
 
 
