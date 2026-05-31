@@ -73,6 +73,14 @@ iletişim, paylaşılan TimescaleDB'dir — doğrudan import yoktur.
 - **Analitik Döngü** "best effort"tur; ağır işleri yapar, dashboard'u sunar.
 - Yeni eklenen tag'ler Kritik Döngü tarafından DB'den ~60 tick'te otomatik alınır
   (hot-reload); süreçler birbirini yeniden başlatmaz.
+- **Alarm üretimi Kritik Döngü'dedir** (review H1, 2026-05-31): kullanıcı-tanımlı
+  eşik alarmları `critical/threshold_watcher.py` ile Collector'ın yanında ayrı bir
+  task olarak üretilir — Collector'ın yayımladığı in-memory son değerleri okur (DB
+  round-trip'siz), breach + debounce/hysteresis değerlendirir, `alarm_events`'e
+  yazar. Critical **push göndermez**; pywebpush + VAPID Analitik'te kalır,
+  Analitik'teki push-dispatch loop'u `pushed_at IS NULL` eşik alarm'larını iletir.
+  Böylece alarm üretimi Analitik'in çökmesinden/ML yükünden gerçekten izole olur.
+  Layer-1 kuralları (rate-of-change + cross-sensor) Analitik'te kalır.
 
 ## 4. Modül haritası
 
@@ -82,10 +90,11 @@ src/custos/
 │   ├── collector.py          # Modbus okuma, per-tag polling, paralelleştirme
 │   ├── register_decoder.py   # uint16/uint32 → fiziksel değer (gain/offset/swap)
 │   ├── batch_grouper.py      # Komşu register'ları batch okuma için gruplama
+│   ├── threshold_watcher.py  # Eşik breach + debounce/hysteresis → alarm (push YOK)
 │   └── __main__.py           # `python -m custos.critical` giriş noktası
 │
 ├── analytics/                # ANALİTİK DÖNGÜ + DASHBOARD
-│   ├── threshold_engine.py   # Eşik + debounce + hysteresis (alarm üretimi)
+│   ├── threshold_engine.py   # Layer-1: rate-of-change + cross-sensor (eşik artık critical'da)
 │   ├── anomaly_detector.py   # Isolation Forest + mode-aware residual
 │   ├── spc_engine.py         # İstatistiksel proses kontrolü (EWMA/kontrol kartı)
 │   ├── liveness_engine.py    # Tag canlılık / stuck-at tespiti
@@ -93,7 +102,8 @@ src/custos/
 │   ├── escalation.py         # Alarm yükseltme (warn→crit)
 │   ├── heartbeat.py          # Servis kalp atışı
 │   ├── scanner.py            # Modbus auto-scan
-│   ├── push_sender.py        # Web Push bildirim
+│   ├── push_sender.py        # Web Push bildirim (to_thread + timeout)
+│   ├── push_dispatch.py      # Critical'ın yazdığı eşik alarm'larını push eder (pushed_at)
 │   ├── maintenance_mode.py   # Alarm shelving (bakım modu)
 │   ├── maintenance_scheduler.py  # Periyodik bakım takvimi
 │   ├── archiver.py           # Parquet aylık arşivleyici
@@ -112,6 +122,8 @@ src/custos/
 │   ├── query_guard.py        # Aşırı sorgu koruması
 │   ├── watchdog.py           # systemd watchdog entegrasyonu
 │   ├── vapid.py              # Web Push VAPID anahtarları
+│   ├── threshold_core.py     # Eşik karar çekirdeği (breach/hysteresis/debounce)
+│   ├── maintenance.py        # Bakım modu gerçek-zamanlı kontrolleri (paylaşılan)
 │   ├── maintenance_periods.py
 │   └── stuck_at_presets.py
 │

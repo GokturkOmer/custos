@@ -12,6 +12,19 @@
 > üç süreç de doğrudan import etmez, yalnızca paylaşılan PostgreSQL üzerinden
 > haberleşir; `architecture_check.py` artık asistan sınır kurallarını da içerir
 > (toplam 14 kural).
+>
+> **Güncelleme (2026-05-31, review H1):** Bu ADR baştan beri Threshold + Alarm'ı
+> Kritik Döngü'ye koyar; ancak kod zamanla kaymış ve `ThresholdEngine` Analitik
+> sürecinde (Isolation Forest / dashboard ile aynı event loop) çalışır olmuştu —
+> ADR'nin çekirdek vaadi ("analitik çökse bile alarm üretimi devam eder") fiilen
+> karşılanmıyordu. Bu kayma düzeltildi: kullanıcı-tanımlı eşik alarm üretimi
+> `critical/threshold_watcher.py`'a taşındı (Collector'ın yayımladığı in-memory
+> son değerleri okuyan ayrı task; **push göndermez** — Analitik'teki push-dispatch
+> loop'u `pushed_at IS NULL` eşik alarm'larını iletir). `ThresholdEngine` artık
+> yalnız Layer-1 (rate-of-change + cross-sensor) değerlendirir. Eşik karar mantığı
+> `shared/threshold_core.py`'da tek kaynaktır; bakım gerçek-zamanlı kontrolleri
+> `shared/maintenance.py`'ye taşındı (Critical Analitik'i import etmez). Uçtan uca
+> walking-skeleton ile doğrulandı.
 
 ## Bağlam
 
