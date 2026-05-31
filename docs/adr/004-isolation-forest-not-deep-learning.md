@@ -36,7 +36,7 @@ import'unu CI + pre-commit'te bloklar. Modeller `scripts/train_anomaly_models.py
 ile offline eğitilir, cihaza `joblib` ile gönderilir; cihazda yalnızca `predict`
 çalışır. Kritik Döngü'ye ML hiç girmez (`ML_IN_CRITICAL`, bkz. [ADR-001](001-two-process-architecture.md)).
 
-**Bilinçli istisna:** Teknik asistan modülü (`analytics/assistant`) semantik arama
+**Bilinçli istisna:** Teknik asistan modülü (`custos/assistant`) semantik arama
 için `sentence-transformers` + `faiss` kullanır. Bu, dolaylı olarak PyTorch
 çalıştıran yüksek seviye bir API'dir; doğrudan derin öğrenme framework'ü import'u
 değildir ve yalnızca Analitik tarafta, asistan özelliğiyle sınırlıdır. Kritik
