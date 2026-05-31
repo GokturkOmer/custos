@@ -227,9 +227,27 @@ v1.5'teki 24 feature aynen kalır, üstüne bakım modülü (F8a), chatbot (F8b)
 
 v1.5 §4.8 + v1.6 notları aynen geçerlidir. F8a 19 Nisan 2026'da tamamlandı (5 commit, dfb01e1 → a31de29).
 
-### 4.9. Teknik asistan chatbot (F8b — AVM'de de geçerli)
+### 4.9. Teknik asistan modülü (F8b → genişletildi, 2026-05-28)
 
-v1.5 §4.9 + v1.6 notları aynen geçerlidir. F11 paralel ilerlediği için F8b W2'den geriye sarktı; şu an iş planı sırasında bekliyor (sıradaki feature).
+> **Kapsam değişikliği (2026-05-28):** Aşağıdaki tanım, v1.5 §4.9'daki dar kapsamı (yalnızca dahili Markdown/YAML bilgi tabanı + sohbet UI) **supersede eder**. Asistan, pilot öncesi demo silahı olarak öne çekildi (AVM pilotu ≥2 ay ertelendi); önceliklendirme gerekçesi `docs/custos_asistan_is_plani_v1.md`. Mevcut F8b semantic altyapısı (embedding + FAISS + retriever) yeniden kullanılır; sohbet UI'ı görsel arama UI'ı ile **değiştirilir**.
+
+**Hedef:** İşletmenin kendi teknik ekipman **PDF manuellerini** yükleyip, vardiyadaki teknisyenin Türkçe/İngilizce soru yazıp **orijinal manuel sayfasını** saniyeler içinde görsel olarak bulabildiği, LLM'siz, %100 offline çalışan teknik asistan.
+
+**Deterministik felsefe (Custos ana ürün ilkesiyle aynı):** LLM yok, AI sentezi yok. Asistan cevap *üretmez*; ilgili **orijinal sayfayı** gösterir. Kullanıcı gördüğü bilginin manuelin hangi sayfasından geldiğini birebir doğrular. Semantic + sparse arama yalnızca *doğru sayfayı bulmak* için kullanılır.
+
+**Bileşenler:**
+- **PDF ingest:** `pymupdf` ile sayfa-bazlı text extraction + sayfa PNG render (200 DPI). Text yoksa (taranmış PDF) `pytesseract` OCR fallback (Türkçe + İngilizce dil paketleri). pymupdf çökerse `pdfplumber` fallback.
+- **Retrieval (hibrit):** dense (`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` — F8b'deki kilitli model) + sparse (`rank_bm25`, kod numarası araması için: "E102" gibi). Reciprocal Rank Fusion (RRF) ile birleştirme. Ekipman metadata filtresi (önce filtrele, sonra ara).
+- **Index:** FAISS, **diske kalıcı** (F8b'de v1.1'e ertelenen persist artık zorunlu — ölçek 10+ manuel × yüzlerce sayfa).
+- **Görsel UI:** arama kutusu + ekipman filtresi → sonuç sayfa thumbnail'ları → tıklayınca tam sayfa modal (zoom, sayfa no, kaynak PDF adı). Sorguya en yakın cümle(ler) sayfa üzerinde sarıyla **highlight** edilir (pymupdf native `draw_rect` + sidecar cache).
+
+**Mimari (ayrı servis):** Asistan, Critical ve Analytics'ten bağımsız **üçüncü süreç** olarak çalışır — kendi systemd unit'i, kendi portu (`127.0.0.1:8001`), Caddy `/assistant/*` → 8001 reverse proxy, cgroup limit (`MemoryMax=2G`, `Nice=10`). Embedding/PDF işleme yükü critical ve analytics loop'larından tam izole.
+
+**Persistence — `assistant` PostgreSQL şeması:** `documents` (filename, equipment_model/type, language, total_pages, ocr_used, source_pdf_path), `chunks` (document_id, page_no, text_content, png_path, faiss_index_id, has_table/figure), `queries_log` (query_text, result_chunk_ids, selected_chunk_id, query_time_ms — UX metriği). Erişim asistan servisinin kendi repository katmanından (ham SQL tek modülde, bkz. CLAUDE.md mimari istisnası). PNG'ler ve FAISS index diskte (`/var/lib/custos/assistant/`).
+
+**Donanım:** N100 + 16 GB RAM yeter (LLM yok). %100 offline, internet bağımsız.
+
+**Kapsam dışı (v1):** Custos veri entegrasyonu (asset/alarm/bakım sorguları), çok turlu diyalog, LLM cevap sentezi — pilot sonrası backlog.
 
 ### 4.10. AVM Asset Template Pack (F9 — v1.6, planlanıyor)
 
@@ -511,7 +529,7 @@ v1.5 + v1.6 §9'daki liste geçerlidir. F11 kapsamından çıkan / ertelenmiş y
 
 **Hemen yapılacak (21–22 Nisan):**
 1. **Bu briefin (v1.7) kullanıcı tarafından onaylanması.**
-2. **F8b: Teknik Asistan Chatbot** feature başlangıcı (W2, 23 Nisan). Scope dar: semantic arama + chunking ("yaparsak güzel olur" modu), kapsamlı değil.
+2. **F8b: Teknik Asistan Chatbot** feature başlangıcı (W2, 23 Nisan). Scope dar: semantic arama + chunking ("yaparsak güzel olur" modu), kapsamlı değil. *(2026-05-28: kapsam genişletildi — PDF görsel retrieval + ayrı servis; güncel tanım §4.9.)*
 3. **W6 regresyonu** — Pre-existing 6 test fail'i (overview_chart_tags FK fixture, walking_skeleton timing, scanner cleanup) F11 stack'i bittiği için artık F11-bağımsız teknik borç. Hedef: `pytest tests/` → 0 fail. Önceliğe sok (paralel iş).
 4. AVM template araştırması (paralel): müşteri ile teknik toplantı, ekipman listesi + approx tag sayısı + Regin map taslağı. §4.10 güncellenecek.
 5. AVM bilgi tabanı doküman iskeletinin yazılması (paralel, ortak ile).
