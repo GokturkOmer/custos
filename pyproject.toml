@@ -39,7 +39,7 @@ dependencies = [
     # CPU + RAM telemetri (V11-111 / P-06). Pure-Python, platform agnostic;
     # endurance_metrics.py zaten transitive olarak kullaniyordu, P-06 ile
     # explicit dependency'e cevrildi.
-    "psutil>=5.9,<7.0",
+    "psutil>=7.2.2,<8.0",
     # Asistan servisi (Faz 0+, 2026-05-28 onaylandi) — PDF ingest + OCR + sparse
     # arama. SADECE custos/assistant/ kullanir; critical/analytics'e sizmaz
     # (architecture_check sinir kurallari). torch backend embedding zaten
