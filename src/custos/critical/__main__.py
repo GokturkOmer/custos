@@ -20,6 +20,7 @@ import structlog
 
 from custos.analytics.heartbeat import write_heartbeat
 from custos.critical.collector import FastPollingBudgetError, ModbusCollector
+from custos.critical.threshold_watcher import ThresholdWatcher
 from custos.shared.config import settings
 from custos.shared.database import DatabaseInterface, create_database
 from custos.shared.logging import configure_logging
@@ -96,11 +97,18 @@ async def main() -> None:
     sd_task = asyncio.create_task(watchdog.heartbeat_loop())
     hb_task = asyncio.create_task(_heartbeat_loop(database, "custos-critical"))
 
+    # Threshold watcher (review H1) — eşik tabanlı alarm üretimi artık Critical
+    # loop'ta. Collector ile aynı event loop'ta ayrı task; son okumaları
+    # Collector'dan in-memory alır, alarm yazar (push YOK — Analytics dispatch eder).
+    watcher = ThresholdWatcher(db=database, reading_source=collector.latest_readings)
+    watcher_task = asyncio.create_task(watcher.start())
+
     try:
         await collector.start()
     finally:
         watchdog.notify_stopping()
-        for task in (sd_task, hb_task):
+        await watcher.stop()
+        for task in (sd_task, hb_task, watcher_task):
             task.cancel()
             try:
                 await task

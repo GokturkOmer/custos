@@ -6,6 +6,7 @@ Master switch + sessiz saat + severity filtresi uygular.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, time
 from urllib.parse import urlparse
@@ -19,6 +20,11 @@ from custos.shared.database import DatabaseInterface, PushSubscription
 from custos.shared.vapid import get_vapid_keys, get_vapid_mailto, is_push_enabled
 
 logger = structlog.get_logger(logger_name="push_sender")
+
+# H7 (31 May 2026 review): pywebpush senkron + bloklayıcı (requests tabanlı).
+# to_thread ile event loop'tan ayrılır + açık timeout ile asılı bir push
+# endpoint'i Analytics loop'unu (ve push-dispatch task'ını) dondurmaz.
+_PUSH_TIMEOUT_SECONDS: float = 10.0
 
 
 def _is_quiet_hour(sub: PushSubscription, now_time: time) -> bool:
@@ -115,7 +121,10 @@ async def _send_one_push(
     bir aboneliğin başarısızlığı diğerlerini etkilemesin.
     """
     try:
-        webpush(
+        # H7: bloklayıcı senkron webpush'u thread'e devret + timeout ver →
+        # asılı endpoint event loop'u dondurmaz.
+        await asyncio.to_thread(
+            webpush,
             subscription_info={
                 "endpoint": sub.endpoint,
                 "keys": {
@@ -129,6 +138,7 @@ async def _send_one_push(
                 "sub": mailto,
                 "aud": _extract_origin(sub.endpoint),
             },
+            timeout=_PUSH_TIMEOUT_SECONDS,
         )
         return True
     except WebPushException as exc:

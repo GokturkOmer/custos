@@ -35,6 +35,7 @@ from custos.analytics.kpi_engine import KpiEngine
 from custos.analytics.liveness_engine import LivenessEngine
 from custos.analytics.maintenance_mode import expire_check_loop as maintenance_expire_loop
 from custos.analytics.maintenance_scheduler import MaintenanceScheduler
+from custos.analytics.push_dispatch import push_dispatch_loop
 from custos.analytics.resource_telemetry import ResourceMonitor
 from custos.analytics.spc_engine import SPCEngine
 from custos.analytics.templates import (
@@ -202,6 +203,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     hb_check_task: asyncio.Task[None] | None = None
     # PP-06 Session GC — saatlik süresi dolmuş session temizliği.
     session_cleanup_task: asyncio.Task[None] | None = None
+    # Push-dispatch (review H1) — Critical'ın yazdığı threshold alarm'larını iletir.
+    push_dispatch_task: asyncio.Task[None] | None = None
     # P-04: Bakım modu süre-doldu otomatik kapama loop'u
     maint_expire_task: asyncio.Task[None] | None = None
     # P-05: Stuck-at + counter mode liveness engine
@@ -292,6 +295,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         # PP-06 Session GC — saatte bir cleanup_expired_sessions çağrısı.
         session_cleanup_task = asyncio.create_task(_session_cleanup_task(db))
 
+        # Push-dispatch loop (review H1) — Critical alarm'ı yazar, push'u burada
+        # iletir (pushed_at IS NULL threshold alarm'larını gönderip işaretler).
+        push_dispatch_task = asyncio.create_task(push_dispatch_loop(db))
+
         # P-04 Bakım modu expire check loop — süresi dolan per-instance ve
         # global bakımları her 60 sn otomatik kapatır.
         maint_expire_task = asyncio.create_task(maintenance_expire_loop(db))
@@ -321,7 +328,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     yield
     # Watchdog STOPPING + task'ları temizle
     watchdog.notify_stopping()
-    for task in (sd_task, hb_writer_task, hb_check_task, session_cleanup_task):
+    for task in (
+        sd_task,
+        hb_writer_task,
+        hb_check_task,
+        session_cleanup_task,
+        push_dispatch_task,
+    ):
         if task is not None and not task.done():
             task.cancel()
             try:

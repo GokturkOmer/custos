@@ -121,6 +121,11 @@ class ModbusCollector:
         self._base_tick_ms = _compute_base_tick_ms(self._tags)
         self._tick_count = 0
 
+        # Threshold watcher (review H1) için son okuma yayını: tag_id → en son
+        # TagReading. Her tick güncellenir; watcher kendi temposunda kopyasını
+        # okur (DB round-trip'siz) ve Collector'ın polling ritmini bloklamaz.
+        self._latest_readings: dict[str, TagReading] = {}
+
         # Tick metrikleri — yük testi ve gözlemlenebilirlik için
         self._total_tick_count = 0
         self._slow_tick_count = 0
@@ -159,6 +164,14 @@ class ModbusCollector:
     def tick_miss_ratio(self) -> float:
         """`slow_tick_ratio` için kanonik telemetri alias'ı (V11-000-B)."""
         return self.slow_tick_ratio
+
+    def latest_readings(self) -> dict[str, TagReading]:
+        """Son okunan değerlerin kopyasını döndürür (tag_id → TagReading).
+
+        ThresholdWatcher (review H1) bunu kendi cycle'ında çağırır; kopya
+        döndürmek watcher'ı Collector'ın eşzamanlı güncellemelerinden yalıtır.
+        """
+        return dict(self._latest_readings)
 
     def _count_fast_tags(self, tags: list[TagRecord] | None = None) -> int:
         """Fast polling (polling_interval_ms <= eşik) tag sayısını döndürür."""
@@ -493,6 +506,11 @@ class ModbusCollector:
         )
         readings: list[TagReading] = [r for host in host_results for r in host]
 
+        # Threshold watcher için son değerleri yayımla (in-memory, DB'siz).
+        # update() ile birleştir: bu tick yalnızca süresi gelen tag'leri okur,
+        # diğer tag'lerin son bilinen değeri korunur.
+        self._latest_readings.update({r.tag_id: r for r in readings})
+
         # Batch yazma
         try:
             await self._database.insert_tag_readings_batch(readings)
@@ -542,9 +560,10 @@ class ModbusCollector:
         # Listesini güncelle
         self._tags = fresh_tags
 
-        # Kaldırılan tag'lerin schedule'ını temizle
+        # Kaldırılan tag'lerin schedule'ını + son okumasını temizle
         for tag_id in removed:
             self._next_due.pop(tag_id, None)
+            self._latest_readings.pop(tag_id, None)
 
         # Yeni tag'lerin schedule'ını oluştur
         now = asyncio.get_event_loop().time()

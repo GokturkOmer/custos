@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from custos.analytics import maintenance_mode
-from custos.analytics.threshold_engine import ThresholdEngine
+from custos.critical.threshold_watcher import ThresholdWatcher
 from custos.shared.config import Settings
 from custos.shared.database import (
     AssetInstance,
@@ -210,10 +210,17 @@ async def test_global_maintenance_suppresses_alarms_to_is_test(
         user_id=1,
     )
 
-    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
-    # debounce=0 + iki cycle (mevcut pattern)
-    await engine._check_cycle()
-    await engine._check_cycle()
+    # Eşik alarm üretimi artık Critical loop'ta (ThresholdWatcher). Watcher
+    # okumayı in-memory reading_source'tan alır; breach değeri burada taklit edilir.
+    readings = {
+        "TEST_MM_TAG_GLOBAL": TagReading(
+            timestamp=datetime.now(UTC), tag_id="TEST_MM_TAG_GLOBAL", value=95.0,
+        ),
+    }
+    watcher = ThresholdWatcher(db=db, reading_source=lambda: readings)
+    await watcher._refresh_definitions()
+    await watcher._evaluate_cycle()
+    await watcher._evaluate_cycle()
 
     active = await db.get_active_alarm_for_threshold(threshold.id)
     assert active is not None
@@ -245,9 +252,15 @@ async def test_instance_maintenance_suppresses_only_that_instance(
         user_id=1,
     )
 
-    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
-    await engine._check_cycle()
-    await engine._check_cycle()
+    readings = {
+        "TEST_MM_TAG_A": TagReading(
+            timestamp=datetime.now(UTC), tag_id="TEST_MM_TAG_A", value=95.0,
+        ),
+    }
+    watcher = ThresholdWatcher(db=db, reading_source=lambda: readings)
+    await watcher._refresh_definitions()
+    await watcher._evaluate_cycle()
+    await watcher._evaluate_cycle()
 
     active_a = await db.get_active_alarm_for_threshold(threshold_a.id)
     assert active_a is not None
@@ -288,9 +301,18 @@ async def test_other_instances_alarm_normally_during_per_instance_maintenance(
         user_id=1,
     )
 
-    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
-    await engine._check_cycle()
-    await engine._check_cycle()
+    readings = {
+        "TEST_MM_TAG_OA": TagReading(
+            timestamp=datetime.now(UTC), tag_id="TEST_MM_TAG_OA", value=95.0,
+        ),
+        "TEST_MM_TAG_OB": TagReading(
+            timestamp=datetime.now(UTC), tag_id="TEST_MM_TAG_OB", value=95.0,
+        ),
+    }
+    watcher = ThresholdWatcher(db=db, reading_source=lambda: readings)
+    await watcher._refresh_definitions()
+    await watcher._evaluate_cycle()
+    await watcher._evaluate_cycle()
 
     alarm_a = await db.get_active_alarm_for_threshold(threshold_a.id)
     alarm_b = await db.get_active_alarm_for_threshold(threshold_b.id)
@@ -406,9 +428,15 @@ async def test_anomaly_detector_excludes_is_test_alarms_from_training(
         user_id=1,
     )
 
-    engine = ThresholdEngine(db=db, check_interval_seconds=1.0)
-    await engine._check_cycle()
-    await engine._check_cycle()
+    readings = {
+        "TEST_MM_TAG_FILT": TagReading(
+            timestamp=datetime.now(UTC), tag_id="TEST_MM_TAG_FILT", value=95.0,
+        ),
+    }
+    watcher = ThresholdWatcher(db=db, reading_source=lambda: readings)
+    await watcher._refresh_definitions()
+    await watcher._evaluate_cycle()
+    await watcher._evaluate_cycle()
 
     # is_test=True alarm yazıldı
     test_alarms = await db.list_alarm_events(

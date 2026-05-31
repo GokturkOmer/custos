@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 
 import structlog
 
@@ -30,6 +30,15 @@ from custos.shared.database import (
     AuditLogEntry,
     DatabaseInterface,
     RetentionConfig,
+)
+from custos.shared.maintenance import (
+    is_global_maintenance as is_global_maintenance,
+)
+from custos.shared.maintenance import (
+    is_instance_in_maintenance as is_instance_in_maintenance,
+)
+from custos.shared.maintenance import (
+    now_or as _now_or,
 )
 
 logger = structlog.get_logger(logger_name="maintenance_mode")
@@ -43,61 +52,13 @@ AUDIT_CATEGORY: str = "maintenance_mode"
 DEFAULT_EXPIRE_CHECK_INTERVAL: float = 60.0
 
 
-def _now_or(now: datetime | None) -> datetime:
-    """``now`` parametresi opsiyonel; verilmediyse UTC şimdiki zamanı döner."""
-    return now if now is not None else datetime.now(UTC)
-
-
-def _is_window_active(
-    until: datetime | None,
-    started_at: datetime | None,
-    now: datetime,
-) -> bool:
-    """Bakım penceresi aktif mi? (P-04 ortak kontrolü).
-
-    Aktif: ``started_at`` set EDİLMİŞ ve (``until`` None — sınırsız manuel
-    kapatma — VEYA ``until > now``).
-    """
-    if started_at is None:
-        return False
-    if until is None:
-        # Manuel/sınırsız bakım — kullanıcı kapatana kadar açık
-        return True
-    return until > now
-
-
 # ---------------------------------------------------------------------------
 # Sorgular (read-only)
 # ---------------------------------------------------------------------------
-
-
-async def is_instance_in_maintenance(
-    db: DatabaseInterface,
-    instance_id: int,
-    now: datetime | None = None,
-) -> bool:
-    """Verilen instance bakım modunda mı?"""
-    instance = await db.get_asset_instance(instance_id)
-    if instance is None:
-        return False
-    return _is_window_active(
-        instance.maintenance_mode_until,
-        instance.maintenance_started_at,
-        _now_or(now),
-    )
-
-
-async def is_global_maintenance(
-    db: DatabaseInterface,
-    now: datetime | None = None,
-) -> bool:
-    """Sistem-geneli bakım modunda mı?"""
-    cfg = await db.get_retention_config()
-    return _is_window_active(
-        cfg.global_maintenance_until,
-        cfg.global_maintenance_started_at,
-        _now_or(now),
-    )
+# ``now_or`` + ``is_instance_in_maintenance`` + ``is_global_maintenance`` artık
+# ``shared/maintenance.py``'de (Critical loop ile paylaşılır — review H1 cutover).
+# Yukarıda geriye-uyumlu import edildiler: ``maintenance_mode.is_global_maintenance``
+# gibi mevcut çağrılar bozulmaz. State *değiştiren* işlemler bu modülde kalır.
 
 
 async def get_active_maintenance_instances(

@@ -42,7 +42,6 @@ from custos.shared.database import (
     DatabaseInterface,
     TagReading,
     TagRecord,
-    Threshold,
 )
 
 logger = structlog.get_logger(logger_name="threshold_engine")
@@ -62,12 +61,14 @@ _RATE_MIN_DT_SECONDS: Final[float] = 1.0
 
 
 class ThresholdEngine:
-    """ISA-18.2 alarm state machine + R-06 Layer 1 ek kuralları.
+    """R-06 Layer-1 ek kuralları: rate-of-change + cross-sensor.
 
-    Periyodik olarak aktif tag'lerin son değerlerini kontrol eder,
-    threshold tanımlarıyla karşılaştırır, alarm event'leri oluşturur/günceller.
-    Aynı tick içinde rate-of-change ve cross-sensor kuralları da
-    değerlendirilir.
+    NOT (review H1 / ADR-001): Kullanıcı-tanımlı alt/üst limit (threshold) alarm
+    üretimi Critical loop'a taşındı (``critical/threshold_watcher.py``). Bu motor
+    artık YALNIZCA rate-of-change ve cross-sensor Layer-1 kurallarını
+    değerlendirir (ikisi de Analytics'te kalır: cross-sensor iki tag'in senkron
+    okumasını, rate delta-zaman state'ini gerektirir). Sınıf adı geriye-uyum
+    için korunuyor.
     """
 
     def __init__(
@@ -79,8 +80,6 @@ class ThresholdEngine:
         self._check_interval = check_interval_seconds
         self._task: asyncio.Task[None] | None = None
         self._running = False
-        # Debounce izleyici: threshold_id → ilk eşik aşım zamanı
-        self._debounce_tracker: dict[int, datetime] = {}
         # P-04: tag_id → instance_id cache, her cycle başında doldurulur.
         # Threshold'un tag'i bir instance'a binding'li ise per-instance bakım
         # kontrolü yapılabilir; binding yoksa ``None``.
@@ -127,240 +126,29 @@ class ThresholdEngine:
         await logger.ainfo("Threshold engine durduruldu")
 
     async def _check_cycle(self) -> None:
-        """Tek bir kontrol döngüsü — threshold + rate-of-change + cross-sensor."""
-        # 1. Aktif threshold'ları çek
-        thresholds = await self._db.list_thresholds(enabled=True)
+        """Tek bir kontrol döngüsü — rate-of-change + cross-sensor (Layer-1).
 
-        # P-04: Bakım modu kontrolü için tag→instance haritası — hem
-        # threshold hem rate-of-change hem cross-sensor aynı haritayı
-        # paylaşır (tek query).
+        Threshold breach üretimi Critical loop'a taşındı (review H1); burada
+        yalnız Layer-1 kuralları değerlendirilir.
+        """
+        # Bakım modu kontrolü için tag→instance haritası — rate-of-change ve
+        # cross-sensor aynı haritayı paylaşır (tek query).
         bindings = await self._db.list_tag_bindings_all()
         self._tag_instance_map = {b.tag_id: b.instance_id for b in bindings}
 
         now = datetime.now(UTC)
 
-        # Global bakım modu — tek sorgu, üç dalda kullanılır.
+        # Global bakım modu — tek sorgu, iki dalda kullanılır.
         global_test = await maintenance_mode.is_global_maintenance(
             self._db, now,
         )
 
-        # 2. Threshold'lar varsa son değerleri çek + değerlendir.
-        if thresholds:
-            tag_ids = list({t.tag_id for t in thresholds})
-            readings = await self._db.get_latest_tag_readings(tag_ids)
-
-            for threshold in thresholds:
-                assert threshold.id is not None
-                reading = readings.get(threshold.tag_id)
-                if reading is None:
-                    self._debounce_tracker.pop(threshold.id, None)
-                    continue
-
-                value = reading.value
-                breach = _is_breach(threshold, value)
-
-                active_alarm = await self._db.get_active_alarm_for_threshold(
-                    threshold.id,
-                )
-
-                if breach and active_alarm is None:
-                    await self._handle_breach_no_alarm(
-                        threshold, value, now, global_test,
-                    )
-                elif breach and active_alarm is not None:
-                    pass
-                elif not breach and active_alarm is not None:
-                    await self._handle_no_breach_with_alarm(
-                        threshold, active_alarm, value, now,
-                    )
-                else:
-                    self._debounce_tracker.pop(threshold.id, None)
-
-        # 3. R-06: Rate-of-change kontrolü — rate_of_change_threshold doldurulmuş
-        #    aktif tag'ler için. Threshold motorundan ayrı tag listesi: tag'in
-        #    threshold'u olmasa bile rate_of_change kontrolü yapılır.
+        # R-06: Rate-of-change kontrolü — rate_of_change_threshold doldurulmuş
+        # aktif tag'ler için.
         await self._check_rate_of_change(now, global_test)
 
-        # 4. R-06: Cross-sensor kontrolü — aktif kuralları tara, ihlali alarmla.
+        # R-06: Cross-sensor kontrolü — aktif kuralları tara, ihlali alarmla.
         await self._check_cross_sensor_rules(now, global_test)
-
-    async def _handle_breach_no_alarm(
-        self,
-        threshold: Threshold,
-        value: float,
-        now: datetime,
-        global_test: bool,
-    ) -> None:
-        """Eşik aşılmış ama aktif alarm yok — debounce kontrolü yap."""
-        assert threshold.id is not None
-        tid = threshold.id
-
-        if tid not in self._debounce_tracker:
-            # İlk aşım — tracker'a kaydet
-            self._debounce_tracker[tid] = now
-            return
-
-        first_breach = self._debounce_tracker[tid]
-        elapsed = (now - first_breach).total_seconds()
-
-        # Emergency severity debounce override — V11-107/K10. Kritik alarmda
-        # yapılandırılmış debounce ne olursa olsun, en fazla 1 sn beklenir.
-        debounce_required = (
-            min(1, threshold.debounce_seconds)
-            if threshold.severity == "emergency"
-            else threshold.debounce_seconds
-        )
-
-        if elapsed < debounce_required:
-            # Debounce süresi dolmamış
-            return
-
-        # P-04: Bakım modu kontrolü. Önce ucuz olan global'i sor, ardından
-        # threshold'un instance'ını bul (binding cache) ve per-instance kontrol.
-        is_test = global_test
-        if not is_test:
-            instance_id = self._tag_instance_map.get(threshold.tag_id)
-            if instance_id is not None:
-                is_test = await maintenance_mode.is_instance_in_maintenance(
-                    self._db, instance_id, now,
-                )
-
-        # Debounce süresi doldu → alarm tetikle. P-05: source='threshold'
-        # default ama severity threshold'dan denormalize ediliyor — threshold
-        # silinse bile alarm geçmişi severity'yi taşır.
-        event = AlarmEvent(
-            threshold_id=tid,
-            tag_id=threshold.tag_id,
-            state="triggered",
-            triggered_at=now,
-            trigger_value=value,
-            is_test=is_test,
-            source="threshold",
-            severity=threshold.severity,
-        )
-        created = await self._db.insert_alarm_event(event)
-
-        # Audit log kategorisi:
-        #   - is_test=True   → "maintenance_test_alarm" (operasyonel alarm
-        #     kanalından ayrı; raporlamada filtrelenebilir)
-        #   - emergency      → "alarm_emergency"
-        #   - aksi           → "alarm"
-        if is_test:
-            audit_category = "maintenance_test_alarm"
-            audit_action = "test_triggered"
-        elif threshold.severity == "emergency":
-            audit_category = "alarm_emergency"
-            audit_action = "emergency_alarm_triggered"
-        else:
-            audit_category = "alarm"
-            audit_action = "triggered"
-
-        await self._db.insert_audit_log(
-            AuditLogEntry(
-                category=audit_category,
-                action=audit_action,
-                entity_type="threshold",
-                entity_id=str(tid),
-                detail=(
-                    f"Alarm tetiklendi: {threshold.name} "
-                    f"(tag={threshold.tag_id}, değer={value:.2f}, "
-                    f"eşik={threshold.set_point:.2f}, yön={threshold.direction}, "
-                    f"severity={threshold.severity}, is_test={is_test})"
-                ),
-            ),
-        )
-
-        # Tracker'dan temizle (alarm oluştu)
-        self._debounce_tracker.pop(tid, None)
-
-        await logger.ainfo(
-            "Alarm tetiklendi",
-            threshold_id=tid,
-            threshold_name=threshold.name,
-            tag_id=threshold.tag_id,
-            value=value,
-            set_point=threshold.set_point,
-            alarm_event_id=created.id,
-            is_test=is_test,
-        )
-
-        # Push bildirim — bakım modu alarm'larında atlanır (is_test=True).
-        # alarm_id geçilirse notification tag custos-{id} (her alarm ayrı
-        # satır olarak browser bildirim merkezinde birikir).
-        try:
-            await send_push_notifications(
-                db=self._db,
-                title=f"Custos Alarm: {threshold.name}",
-                body=(
-                    f"Tag {threshold.tag_id} = {value:.2f} "
-                    f"(eşik: {threshold.set_point:.2f}, yön: {threshold.direction})"
-                ),
-                severity=threshold.severity,
-                is_test=is_test,
-                alarm_id=created.id,
-            )
-        except Exception:
-            await logger.awarning(
-                "Push bildirim gönderilemedi",
-                threshold_id=tid,
-                exc_info=True,
-            )
-
-    async def _handle_no_breach_with_alarm(
-        self,
-        threshold: Threshold,
-        alarm: AlarmEvent,
-        value: float,
-        now: datetime,
-    ) -> None:
-        """Eşik aşılmamış ama aktif alarm var — hysteresis kontrolü yap."""
-        assert threshold.id is not None
-        assert alarm.id is not None
-
-        # Emergency severity auto-clear bypass — V11-107/K10. Yanlışlıkla
-        # tetiklenen emergency'nin sessizce temizlenmesi hayati riski
-        # gizleyebilir; operatörün manuel onaylaması zorunlu (alarms sayfası).
-        if threshold.severity == "emergency":
-            return
-
-        can_clear = _can_clear_with_hysteresis(threshold, value)
-
-        if not can_clear:
-            # Hysteresis bandı içinde — temizleme yok
-            return
-
-        # Alarm temizle
-        await self._db.update_alarm_event(
-            alarm.id,
-            {
-                "state": "cleared",
-                "cleared_at": now,
-                "clear_value": value,
-            },
-        )
-
-        # Audit log
-        await self._db.insert_audit_log(
-            AuditLogEntry(
-                category="alarm",
-                action="cleared",
-                entity_type="threshold",
-                entity_id=str(threshold.id),
-                detail=(
-                    f"Alarm temizlendi: {threshold.name} "
-                    f"(tag={threshold.tag_id}, temiz değer={value:.2f})"
-                ),
-            ),
-        )
-
-        await logger.ainfo(
-            "Alarm temizlendi",
-            threshold_id=threshold.id,
-            threshold_name=threshold.name,
-            tag_id=threshold.tag_id,
-            clear_value=value,
-            alarm_event_id=alarm.id,
-        )
 
     # --- R-06 Layer 1 ek kuralları ---
 
@@ -620,22 +408,6 @@ class ThresholdEngine:
                 tag_id=tag_id,
                 exc_info=True,
             )
-
-
-def _is_breach(threshold: Threshold, value: float) -> bool:
-    """Değerin eşiği aşıp aşmadığını kontrol eder."""
-    if threshold.direction == "high":
-        return value >= threshold.set_point
-    # direction == 'low'
-    return value <= threshold.set_point
-
-
-def _can_clear_with_hysteresis(threshold: Threshold, value: float) -> bool:
-    """Hysteresis bandını geçip geçmediğini kontrol eder."""
-    if threshold.direction == "high":
-        return value < threshold.set_point - threshold.hysteresis
-    # direction == 'low'
-    return value > threshold.set_point + threshold.hysteresis
 
 
 def _cross_sensor_holds(value_a: float, operator: str, value_b: float) -> bool:
