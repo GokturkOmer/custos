@@ -237,7 +237,9 @@ class ModbusCollector:
     async def _read_tag(self, tag: TagRecord) -> TagReading:
         """Tek bir tag'i okur ve TagReading döndürür.
 
-        Okuma hatası durumunda quality_flag=1 ile değer 0.0 döndürür.
+        register_type'a göre 1 (uint16/int16) veya 2 (uint32/int32/float32)
+        register okunup ``decode_register`` ile fiziksel değere çevrilir — batch
+        yoluyla AYNI decoder. Okuma/decode hatasında quality_flag=1, değer 0.0.
         """
         now = datetime.now(UTC)
         client = await self._get_or_create_client(tag.modbus_host, tag.modbus_port)
@@ -255,9 +257,14 @@ class ModbusCollector:
             )
 
         try:
+            # review H2: çok-register tipleri (uint32/int32/float32) için span
+            # kadar register oku + decode_register ile çöz. Eski tek-register yolu
+            # bu tipleri sessizce yanlış hesaplıyordu (yüksek word + word-order
+            # kaybı, quality_flag=0 ile "sağlıklı" işaretli).
+            span = expected_word_count(tag.register_type)
             response: Any = await client.read_holding_registers(
                 tag.register_address,
-                count=1,
+                count=span,
                 device_id=tag.unit_id,
             )
             if response.isError():
@@ -273,16 +280,42 @@ class ModbusCollector:
                     quality_flag=1,
                 )
 
-            raw_value: int = response.registers[0]
-            scaled_value = raw_value * tag.gain + tag.offset
+            registers = list(response.registers)
+            if len(registers) < span:
+                await logger.awarning(
+                    "Tag okuma: eksik register",
+                    tag_id=tag.tag_id,
+                    alınan=len(registers),
+                    beklenen=span,
+                )
+                return TagReading(
+                    timestamp=now,
+                    tag_id=tag.tag_id,
+                    value=0.0,
+                    quality_flag=1,
+                )
+
+            value = decode_register(tuple(registers[:span]), tag)
 
             return TagReading(
                 timestamp=now,
                 tag_id=tag.tag_id,
-                value=scaled_value,
+                value=value,
                 quality_flag=0,
             )
 
+        except RegisterDecodeError as e:
+            await logger.awarning(
+                "Tag decode hatası",
+                tag_id=tag.tag_id,
+                hata=str(e),
+            )
+            return TagReading(
+                timestamp=now,
+                tag_id=tag.tag_id,
+                value=0.0,
+                quality_flag=1,
+            )
         except Exception:
             await logger.aerror(
                 "Tag okuma exception",

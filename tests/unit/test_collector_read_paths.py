@@ -149,6 +149,72 @@ async def test_read_tag_applies_gain_and_offset_on_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_tag_decodes_uint32_multi_register() -> None:
+    """uint32 tag 2 register okunup decode_register ile doğru hesaplanmalı
+    (review H2: eski tek-register fallback çok-word tag'leri sessizce bozuyordu)."""
+    tag = TagRecord(
+        tag_id="T_U32",
+        name="uint32 counter",
+        modbus_host="127.0.0.1",
+        modbus_port=5099,
+        register_address=10,
+        register_type="uint32",
+        byte_order="big",
+        gain=1.0,
+        offset=0.0,
+        polling_interval_ms=1000,
+    )
+    collector = _make_collector(tag)
+
+    good_response: Any = MagicMock()
+    good_response.isError = MagicMock(return_value=False)
+    # big word order (hi, lo): 0x0001, 0x86A0 → 0x000186A0 = 100000
+    good_response.registers = [0x0001, 0x86A0]
+
+    client = MagicMock()
+    client.connected = True
+    client.read_holding_registers = AsyncMock(return_value=good_response)
+    _install_mock_client(collector, client)
+
+    reading = await collector._read_tag(tag)
+
+    assert reading.quality_flag == 0
+    assert reading.value == pytest.approx(100000.0)
+    # 2 register okundu (tek-register değil) — H2 düzeltmesinin çekirdeği
+    assert client.read_holding_registers.await_args.kwargs["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_read_tag_uint32_short_response_marks_quality_flag() -> None:
+    """uint32 için yalnız 1 register dönerse sessiz yanlış değer yerine
+    quality_flag=1 (eksik register guard'ı)."""
+    tag = TagRecord(
+        tag_id="T_U32_SHORT",
+        name="uint32 short",
+        modbus_host="127.0.0.1",
+        modbus_port=5099,
+        register_address=10,
+        register_type="uint32",
+        polling_interval_ms=1000,
+    )
+    collector = _make_collector(tag)
+
+    short_response: Any = MagicMock()
+    short_response.isError = MagicMock(return_value=False)
+    short_response.registers = [0x0001]  # span 2 beklenirken 1
+
+    client = MagicMock()
+    client.connected = True
+    client.read_holding_registers = AsyncMock(return_value=short_response)
+    _install_mock_client(collector, client)
+
+    reading = await collector._read_tag(tag)
+
+    assert reading.quality_flag == 1
+    assert reading.value == 0.0
+
+
+@pytest.mark.asyncio
 async def test_refresh_tags_updates_schedule_for_added_and_removed() -> None:
     """list_tags yeni/silinen tag dönerse _next_due ve _tags güncellenmeli."""
     tag_old = _make_tag("T_REFRESH_OLD")
